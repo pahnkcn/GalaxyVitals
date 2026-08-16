@@ -39,6 +39,13 @@ fun SettingsScreen(
                 "apps share application id app.healthtrack and the same signing key.",
         )
         Section(
+            "Galaxy Watch",
+            "Sideload the HealthTrack watch APK on a paired Galaxy Watch. Demo traces always " +
+                "sync. Hardware ECG_ON_DEMAND needs Samsung’s official sensor AAR and a partner " +
+                "whitelist for app.healthtrack. A different vendor companion cannot talk to this " +
+                "phone app.",
+        )
+        Section(
             "Install the watch app",
             "Sideload the :wear debug APK onto a paired Wear OS watch. Home → Sync asks the " +
                 "watch to re-push any leftover inbox files.",

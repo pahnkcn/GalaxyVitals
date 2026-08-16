@@ -19,7 +19,8 @@ class WatchEcgStore(context: Context) {
     }
 
     fun delete(sessionId: String): Boolean {
-        val file = fileFor(sessionId)
+        val id = EcgWearContract.sessionIdFromFileName(sessionId)
+        val file = fileFor(id)
         return file.exists() && file.delete()
     }
 

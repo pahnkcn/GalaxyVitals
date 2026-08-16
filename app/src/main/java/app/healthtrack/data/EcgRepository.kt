@@ -64,6 +64,24 @@ class EcgRepository(
         }
     }
 
+    suspend fun ingestPendingInbox(): List<String> = withContext(Dispatchers.IO) {
+        val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR)
+        val files = inbox.listFiles { f ->
+            f.isFile && f.name.endsWith(EcgWearContract.FILE_SUFFIX)
+        } ?: return@withContext emptyList()
+        val ingested = ArrayList<String>(files.size)
+        files.sortedBy { it.lastModified() }.forEach { file ->
+            val sessionId = EcgWearContract.sessionIdFromFileName(file.name)
+            if (sessionId.isBlank()) return@forEach
+            if (dao.get(sessionId) != null) return@forEach
+            runCatching {
+                ingestGzipFile(file, sessionId, EcgSource.WEAR)
+                ingested += sessionId
+            }
+        }
+        ingested
+    }
+
     suspend fun delete(sessionId: String) {
         val entity = dao.get(sessionId)
         dao.delete(sessionId)

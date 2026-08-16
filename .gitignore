@@ -12,3 +12,4 @@ captures/
 *.aab
 _analysis/
 .kotlin/
+.decompile/

@@ -117,6 +117,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private var leadOff = true
     private var hrOk = false
     private var lastEcgAt = 0L
+    private var lastGoodHrAt = 0L
+    private var ecgStarted = false
     private var tickJob: Job? = null
     private val live = ArrayList<Float>(1000)
     private val offBody = OffBodyMonitor(application) { blocked ->
@@ -157,6 +159,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         leadOff = target.kind != SensorKind.DEMO
         hrOk = false
         lastEcgAt = 0L
+        lastGoodHrAt = 0L
+        ecgStarted = false
         offBody.start()
         _state.value = MeasureUiState(
             phase = MeasurePhase.Warmup,
@@ -166,11 +170,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         target.startHr { bpm, status ->
             hrOk = status == EcgWearContract.HR_STATUS_OK && bpm > 0
             val current = _state.value
+            if (hrOk) lastGoodHrAt = SystemClock.elapsedRealtime()
             if (current.phase == MeasurePhase.Recording && hrOk) {
                 app.container.recorder.addHr(System.currentTimeMillis(), bpm)
             }
             _state.value = current.copy(hrBpm = bpm.coerceAtLeast(0))
             if (hrOk && current.phase == MeasurePhase.Warmup) {
+                startEcgIfNeeded(target)
                 _state.value = _state.value.copy(
                     phase = if (leadOff) MeasurePhase.LeadOff else MeasurePhase.Ready,
                     status = if (leadOff) "Touch the button" else readyLabel,
@@ -178,6 +184,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 if (!leadOff && autoStartOnContact) beginRecording()
             }
         }
+        if (target.kind == SensorKind.DEMO) {
+            startEcgIfNeeded(target)
+        }
+    }
+
+    private fun startEcgIfNeeded(target: EcgSensor) {
+        if (ecgStarted) return
+        ecgStarted = true
         target.startEcg { mv, off ->
             lastEcgAt = SystemClock.elapsedRealtime()
             leadOff = off
@@ -225,6 +239,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             wrist = wrist,
             signFactor = EcgWearContract.signFactorFor(wrist),
         )
+        lastGoodHrAt = SystemClock.elapsedRealtime()
         MeasureForegroundService.start(getApplication())
         synchronized(live) { live.clear() }
         _state.value = _state.value.copy(
@@ -240,10 +255,15 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             while (true) {
                 val elapsed = SystemClock.elapsedRealtime() - started
                 val left = ((EcgWearContract.MEASURE_DURATION_MS - elapsed) / 1000L).toInt().coerceAtLeast(0)
-                val stalled = lastEcgAt > 0 &&
-                    SystemClock.elapsedRealtime() - lastEcgAt > EcgWearContract.ECG_STALL_MS
-                if (stalled && autoStartOnContact) {
+                val now = SystemClock.elapsedRealtime()
+                val stalled = lastEcgAt > 0 && now - lastEcgAt > EcgWearContract.ECG_STALL_MS
+                val hrLost = lastGoodHrAt > 0 && now - lastGoodHrAt > EcgWearContract.HR_LOST_ABORT_MS
+                if (autoStartOnContact && stalled) {
                     abortToLeadOff("Lost contact")
+                    return@launch
+                }
+                if (autoStartOnContact && hrLost) {
+                    abortToLeadOff("No clear heart-rate signal")
                     return@launch
                 }
                 _state.value = _state.value.copy(remainingSec = left)
@@ -304,6 +324,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         app.container.recorder.cancel()
         MeasureForegroundService.stop(getApplication())
         offBody.stop()
+        lastGoodHrAt = 0L
+        lastEcgAt = 0L
+        ecgStarted = false
         synchronized(live) { live.clear() }
     }
 

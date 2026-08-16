@@ -71,10 +71,24 @@ class PhoneWatchBridgeTest {
         val watchDir = tmp.newFolder(EcgWearContract.WATCH_DIR)
         val file = File(watchDir, EcgWearContract.inboxFileName(sessionId))
         file.writeBytes(byteArrayOf(1, 2, 3))
-        val cleanupId = "/ecg/cleanup/42".removePrefix(EcgWearContract.CLEANUP_PREFIX)
+        val cleanupId = EcgWearContract.sessionIdFromFileName(
+            "/ecg/cleanup/42".removePrefix(EcgWearContract.CLEANUP_PREFIX),
+        )
         assertThat(cleanupId).isEqualTo(sessionId)
         val deleted = File(watchDir, EcgWearContract.inboxFileName(cleanupId)).delete()
         assertThat(deleted).isTrue()
+        assertThat(file.exists()).isFalse()
+    }
+
+    @Test
+    fun cleanupPathWithEcgPrefixStillDeletesWatchFile() {
+        val sessionId = "42"
+        val watchDir = tmp.newFolder("prefixed")
+        val file = File(watchDir, EcgWearContract.inboxFileName(sessionId))
+        file.writeBytes(byteArrayOf(1, 2, 3))
+        val fromCompanionStyle = EcgWearContract.sessionIdFromFileName("ecg_42")
+        assertThat(fromCompanionStyle).isEqualTo(sessionId)
+        assertThat(File(watchDir, EcgWearContract.inboxFileName(fromCompanionStyle)).delete()).isTrue()
         assertThat(file.exists()).isFalse()
     }
 

@@ -1,5 +1,6 @@
 package app.healthtrack.wear.sensors
 
+import android.app.Activity
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -11,12 +12,18 @@ import com.samsung.android.service.health.tracking.HealthTrackingService
 import com.samsung.android.service.health.tracking.data.DataPoint
 import com.samsung.android.service.health.tracking.data.HealthTrackerType
 import com.samsung.android.service.health.tracking.data.ValueKey
+import java.lang.ref.WeakReference
 
 class SamsungEcgSensor(context: Context) : EcgSensor {
     override val kind: SensorKind = SensorKind.SAMSUNG
 
     private val app = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
+    private var host = WeakReference<Activity>(null)
+
+    fun attach(activity: Activity) {
+        host = WeakReference(activity)
+    }
     private var service: HealthTrackingService? = null
     private var hrTracker: HealthTracker? = null
     private var ecgTracker: HealthTracker? = null
@@ -56,6 +63,10 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             override fun onConnectionEnded() = Unit
 
             override fun onConnectionFailed(exception: HealthTrackerException) {
+                val activity = host.get()
+                if (exception.hasResolution() && activity != null && !activity.isFinishing) {
+                    runCatching { exception.resolve(activity) }
+                }
                 onResult(
                     SensorAvailability(
                         kind = SensorKind.SAMSUNG,

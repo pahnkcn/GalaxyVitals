@@ -15,11 +15,8 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 import java.io.File
@@ -31,8 +28,6 @@ import java.util.concurrent.TimeUnit
  * Same contract as the original companion listener.
  */
 class EcgWearListenerService : WearableListenerService() {
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onDataChanged(dataEvents: DataEventBuffer) {
         // DataEvent / DataItem are only valid while the buffer is open.
@@ -53,25 +48,32 @@ class EcgWearListenerService : WearableListenerService() {
             dataEvents.release()
         }
         if (pending.isEmpty()) return
-        scope.launch {
-            pending.forEach { (sessionId, asset) -> ingest(sessionId, asset) }
+        val app = application as HealthTrackApp
+        pending.forEach { (sessionId, asset) ->
+            val dest = runCatching { writeAsset(sessionId, asset) }.getOrNull() ?: return@forEach
+            app.appScope.launch {
+                runCatching {
+                    app.container.ecgRepository.ingestGzipFile(dest, sessionId, EcgSource.WEAR)
+                    notifyReceived(sessionId)
+                    app.container.wearSyncClient.sendCleanup(sessionId)
+                }
+            }
         }
     }
 
-    private suspend fun ingest(sessionId: String, asset: Asset) {
+    private fun writeAsset(sessionId: String, asset: Asset): File {
         val dataClient = Wearable.getDataClient(this)
-        val fd = withTimeout(TimeUnit.SECONDS.toMillis(EcgWearContract.ASSET_TIMEOUT_SEC)) {
-            dataClient.getFdForAsset(asset).await()
+        val fd = runBlocking {
+            withTimeout(TimeUnit.SECONDS.toMillis(EcgWearContract.ASSET_TIMEOUT_SEC)) {
+                dataClient.getFdForAsset(asset).await()
+            }
         }
         val inbox = File(filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
         val dest = File(inbox, EcgWearContract.inboxFileName(sessionId))
         fd.inputStream.use { input ->
             FileOutputStream(dest).use { output -> input.copyTo(output) }
         }
-        val app = application as HealthTrackApp
-        app.container.ecgRepository.ingestGzipFile(dest, sessionId, EcgSource.WEAR)
-        notifyReceived(sessionId)
-        runCatching { app.container.wearSyncClient.sendCleanup(sessionId) }
+        return dest
     }
 
     private fun notifyReceived(sessionId: String) {
@@ -93,10 +95,5 @@ class EcgWearListenerService : WearableListenerService() {
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(this).notify(sessionId.hashCode(), notification)
-    }
-
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
     }
 }

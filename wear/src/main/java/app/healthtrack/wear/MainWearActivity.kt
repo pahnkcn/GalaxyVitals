@@ -21,11 +21,13 @@ class MainWearActivity : ComponentActivity() {
         val needed = buildList {
             add(Manifest.permission.BODY_SENSORS)
             add(Manifest.permission.POST_NOTIFICATIONS)
+            add("com.samsung.android.hardware.sensormanager.permission.READ_ADDITIONAL_HEALTH_DATA")
             if (Build.VERSION.SDK_INT >= 33) {
                 add("android.permission.health.READ_HEART_RATE")
             }
         }.toTypedArray()
         permissionLauncher.launch(needed)
+        (application as WearApplication).container.samsungSensor.attach(this)
         setContent {
             HealthTrackWearTheme {
                 WearRoot()

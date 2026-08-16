@@ -12,7 +12,9 @@ class WatchWearListenerService : WearableListenerService() {
         val path = messageEvent.path
         when {
             path.startsWith(EcgWearContract.CLEANUP_PREFIX) -> {
-                val sessionId = path.removePrefix(EcgWearContract.CLEANUP_PREFIX)
+                val sessionId = EcgWearContract.sessionIdFromFileName(
+                    path.removePrefix(EcgWearContract.CLEANUP_PREFIX),
+                )
                 WatchEcgStore(this).delete(sessionId)
             }
             isSyncNow(path) -> {
