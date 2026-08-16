@@ -15,6 +15,7 @@ unwell, seek professional care.
 - Wear Data Layer listener on `/ecg/session/{id}` (same app id + signing key)
 - `:wear` HealthTrack watch app (`applicationId app.healthtrack`) that records and pushes that contract
 - Waveform viewer, HR stats, history
+- On-device **ECGFounder 1-lead** rhythm screen (N / A / O) after each import or watch sync
 - Architecture stub so blood pressure can be added later
 
 ## Live watch sync
@@ -45,6 +46,20 @@ A differently signed vendor watch app still cannot talk to this phone app.
 ```
 
 Requires Android SDK 35. `local.properties` should set `sdk.dir`.
+
+## Rhythm model
+
+The phone app runs [ECGFounder 1-lead](https://github.com/PKUDigitalHealth/ECGFounder) (MIT)
+locally through ONNX Runtime. Convert the Hugging Face checkpoint once:
+
+```bash
+py -3.12 tools/ecgfounder/export_ecgfounder.py --pth 1_lead_ECGFounder.pth
+```
+
+Watch traces stay at 500 Hz. The analyser cuts 10 s windows, applies the official
+band-pass / notch / z-score pipeline, then maps the 150 outputs to N / A / O.
+
+**Not a medical device.** Treat AF flags as a prompt to see a clinician.
 
 ## License
 

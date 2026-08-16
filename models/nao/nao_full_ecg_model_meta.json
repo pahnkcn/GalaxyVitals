@@ -1,0 +1,33 @@
+{
+  "schema": "gm.ecg.model_meta",
+  "schema_version": 2,
+  "model_name": "nao_full_v2",
+  "version": "2.0.0",
+  "labels": [
+    "N",
+    "A",
+    "O"
+  ],
+  "num_classes": 3,
+  "target_fs_hz": 256,
+  "window_sec": 30,
+  "input_len": 7680,
+  "norm": "zscore_per_record",
+  "compat": {
+    "fs": 256,
+    "input_length": 7680,
+    "classes": [
+      "N",
+      "A",
+      "O"
+    ]
+  },
+  "ip_markers": {
+    "owner": "GeminiMan",
+    "signature": "GM::ECG::256Hz::2026"
+  },
+  "hash": {
+    "algo": "sha256",
+    "payload_sha256": "ccae8b2d27e5729162d4aece56c382b406983c01b78c0c2e9037ce5e3a7ce019"
+  }
+}

@@ -26,6 +26,10 @@ this file + Data Layer contract.
 GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. The watch
 deletes `ecg_{sessionId}.csv.gz` on cleanup (not `{sessionId}.csv.gz`).
 
+The phone then runs ECGFounder 1-lead locally on 10 s windows at 500 Hz and
+stores an N / A / O screen with the top model findings. That step is analysis,
+not part of the on-the-wire contract.
+
 ## File format (`format = csv+gz`)
 
 UTF-8 text, then gzip.

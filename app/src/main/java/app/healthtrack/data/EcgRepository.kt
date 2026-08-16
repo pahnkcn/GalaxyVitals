@@ -2,12 +2,15 @@ package app.healthtrack.data
 
 import android.content.Context
 import android.net.Uri
+import app.healthtrack.analysis.EcgFounderEngine
 import app.healthtrack.data.local.AppDatabase
 import app.healthtrack.data.local.EcgSessionEntity
 import app.healthtrack.data.protocol.EcgCsvParser
 import app.healthtrack.data.protocol.EcgCsvWriter
+import app.healthtrack.data.protocol.EcgFounderLabels
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.data.protocol.ParsedEcgFile
+import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSample
 import app.healthtrack.domain.EcgSession
 import app.healthtrack.domain.EcgSource
@@ -21,6 +24,7 @@ import java.io.FileOutputStream
 class EcgRepository(
     private val context: Context,
     db: AppDatabase,
+    private val engine: EcgFounderEngine,
 ) {
     private val dao = db.ecgSessionDao()
 
@@ -110,7 +114,29 @@ class EcgRepository(
             now = System.currentTimeMillis(),
         )
         dao.upsert(entity)
-        return entity.toDomain()
+        val analysed = runCatching { analyze(entity, parsed) }.getOrElse { err ->
+            entity.withAnalysis(
+                status = AnalysisStatus.FAILED,
+                naoLabel = null,
+                naoConfidence = null,
+                findings = "",
+                note = err.message ?: "Analysis failed",
+            )
+        }
+        dao.upsert(analysed)
+        return analysed.toDomain()
+    }
+
+    private fun analyze(entity: EcgSessionEntity, parsed: ParsedEcgFile): EcgSessionEntity {
+        val result = engine.analyze(parsed)
+        val decision = result.decision
+        return entity.withAnalysis(
+            status = result.status,
+            naoLabel = decision?.label?.name,
+            naoConfidence = decision?.confidence,
+            findings = decision?.let { EcgFounderLabels.encodeFindings(it.topFindings) }.orEmpty(),
+            note = result.note,
+        )
     }
 
     private fun writeCanonical(dest: File, parsed: ParsedEcgFile) {

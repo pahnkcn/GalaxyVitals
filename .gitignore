@@ -13,3 +13,15 @@ captures/
 _analysis/
 .kotlin/
 .decompile/
+*.pth
+*.onnx
+*.pyc
+**/__pycache__/
+protocol/bin/
+models/*.pth
+models/*.onnx
+models/nao/*.tflite
+models/eval/**
+!models/README.md
+!models/nao/ecg_filters_256hz.json
+!models/nao/nao_full_ecg_model_meta.json

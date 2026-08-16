@@ -29,12 +29,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.healthtrack.analysis.shortHelp
+import app.healthtrack.data.protocol.NaoLabel
+import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSample
 import app.healthtrack.domain.EcgSession
 import app.healthtrack.ui.components.EcgWaveform
 import app.healthtrack.ui.durationLabel
+import app.healthtrack.ui.findingRows
 import app.healthtrack.ui.hrLabel
+import app.healthtrack.ui.naoConfidenceLabel
+import app.healthtrack.ui.naoTitle
 import app.healthtrack.ui.stampLabel
+import app.healthtrack.ui.theme.Amber
+import app.healthtrack.ui.theme.Danger
 import app.healthtrack.ui.theme.Mint
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +89,8 @@ fun EcgDetailScreen(
             Text("median bpm", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(session.stampLabel(), modifier = Modifier.padding(top = 8.dp))
             Spacer(Modifier.height(16.dp))
+            AnalysisCard(session)
+            Spacer(Modifier.height(16.dp))
             EcgWaveform(
                 samples = samples,
                 interactive = true,
@@ -108,11 +118,66 @@ fun EcgDetailScreen(
             }
             Spacer(Modifier.height(20.dp))
             Text(
-                "These numbers are derived from the file. They are not a diagnosis.",
+                "Screening only. ECGFounder is an open model, not a medical device. " +
+                    "A single-lead watch strip cannot replace a 12-lead ECG or a clinician.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun AnalysisCard(session: EcgSession) {
+    val nao = session.naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
+    val tint = when (nao) {
+        NaoLabel.A -> Danger
+        NaoLabel.O -> Amber
+        else -> Mint
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Rhythm screen", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                session.naoTitle(),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = tint,
+            )
+            if (session.naoConfidence != null) {
+                Text(
+                    session.naoConfidenceLabel(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        val body = when (session.analysisStatus) {
+            AnalysisStatus.PENDING -> "Running ECGFounder on this recording…"
+            AnalysisStatus.FAILED -> session.analysisNote.ifBlank { "Analysis failed." }
+            AnalysisStatus.LOW_QUALITY ->
+                (nao?.shortHelp() ?: "Low-quality strip.") + " ${session.analysisNote}"
+            AnalysisStatus.OK -> nao?.shortHelp() ?: "Analysis complete."
+            AnalysisStatus.NONE -> "No analysis yet."
+        }
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        session.findingRows().forEach { (name, score) ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                Text(score, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (session.analysisNote.isNotBlank() && session.analysisStatus == AnalysisStatus.OK) {
+            Text(session.analysisNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

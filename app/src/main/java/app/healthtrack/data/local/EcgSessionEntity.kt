@@ -2,6 +2,7 @@ package app.healthtrack.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSession
 import app.healthtrack.domain.EcgSource
 import app.healthtrack.domain.Wrist
@@ -26,6 +27,11 @@ data class EcgSessionEntity(
     val watchInfo: String,
     val source: String,
     val createdAtMs: Long,
+    val analysisStatus: String = AnalysisStatus.NONE.name,
+    val naoLabel: String? = null,
+    val naoConfidence: Float? = null,
+    val findings: String = "",
+    val analysisNote: String = "",
 ) {
     fun toDomain(): EcgSession = EcgSession(
         sessionId = sessionId,
@@ -46,6 +52,12 @@ data class EcgSessionEntity(
         watchInfo = watchInfo,
         source = runCatching { EcgSource.valueOf(source) }.getOrDefault(EcgSource.IMPORT),
         createdAtMs = createdAtMs,
+        analysisStatus = runCatching { AnalysisStatus.valueOf(analysisStatus) }
+            .getOrDefault(AnalysisStatus.NONE),
+        naoLabel = naoLabel,
+        naoConfidence = naoConfidence,
+        findings = findings,
+        analysisNote = analysisNote,
     )
 
     companion object {
@@ -69,7 +81,22 @@ data class EcgSessionEntity(
                 watchInfo = parsed.watchInfo,
                 source = source.name,
                 createdAtMs = now,
+                analysisStatus = AnalysisStatus.PENDING.name,
             )
         }
     }
+
+    fun withAnalysis(
+        status: AnalysisStatus,
+        naoLabel: String?,
+        naoConfidence: Float?,
+        findings: String,
+        note: String,
+    ): EcgSessionEntity = copy(
+        analysisStatus = status.name,
+        naoLabel = naoLabel,
+        naoConfidence = naoConfidence,
+        findings = findings,
+        analysisNote = note,
+    )
 }

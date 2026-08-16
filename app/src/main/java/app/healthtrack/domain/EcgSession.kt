@@ -5,6 +5,14 @@ enum class EcgSource {
     IMPORT,
 }
 
+enum class AnalysisStatus {
+    NONE,
+    PENDING,
+    OK,
+    LOW_QUALITY,
+    FAILED,
+}
+
 data class EcgSession(
     val sessionId: String,
     val filePath: String,
@@ -24,6 +32,11 @@ data class EcgSession(
     val watchInfo: String,
     val source: EcgSource,
     val createdAtMs: Long,
+    val analysisStatus: AnalysisStatus = AnalysisStatus.NONE,
+    val naoLabel: String? = null,
+    val naoConfidence: Float? = null,
+    val findings: String = "",
+    val analysisNote: String = "",
 )
 
 data class BloodPressureReading(

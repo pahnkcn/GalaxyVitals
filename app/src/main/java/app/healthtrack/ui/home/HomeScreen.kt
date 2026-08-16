@@ -41,6 +41,7 @@ import app.healthtrack.domain.Wrist
 import app.healthtrack.ui.HomeUiState
 import app.healthtrack.ui.durationLabel
 import app.healthtrack.ui.hrLabel
+import app.healthtrack.ui.naoTitle
 import app.healthtrack.ui.stampLabel
 import app.healthtrack.ui.theme.HealthTrackTheme
 import app.healthtrack.ui.theme.InkHigh
@@ -180,7 +181,7 @@ private fun EcgHeroCard(
                 )
             }
             Text(
-                "${session.stampLabel()}  ·  ${session.durationLabel()}  ·  ${session.nSamples} samples",
+                "${session.naoTitle()}  ·  ${session.stampLabel()}  ·  ${session.durationLabel()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

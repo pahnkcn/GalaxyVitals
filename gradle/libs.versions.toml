@@ -14,6 +14,7 @@ coroutines = "1.10.2"
 junit = "4.13.2"
 truth = "1.4.4"
 work = "2.10.3"
+onnxruntime = "1.23.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -44,6 +45,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 truth = { group = "com.google.truth", name = "truth", version.ref = "truth" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

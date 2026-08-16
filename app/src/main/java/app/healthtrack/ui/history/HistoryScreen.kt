@@ -28,6 +28,7 @@ import app.healthtrack.domain.Wrist
 import app.healthtrack.ui.dayLabel
 import app.healthtrack.ui.durationLabel
 import app.healthtrack.ui.hrLabel
+import app.healthtrack.ui.naoTitle
 import app.healthtrack.ui.theme.HealthTrackTheme
 import app.healthtrack.ui.theme.Mint
 import app.healthtrack.ui.timeLabel
@@ -77,7 +78,7 @@ private fun HistoryRow(session: EcgSession, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(session.dayLabel(), fontWeight = FontWeight.Medium)
             Text(
-                "${session.timeLabel()}  ·  ${session.durationLabel()}  ·  ${session.source.name.lowercase()}",
+                "${session.timeLabel()}  ·  ${session.durationLabel()}  ·  ${session.naoTitle()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

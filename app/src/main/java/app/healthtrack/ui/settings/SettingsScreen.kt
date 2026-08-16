@@ -55,11 +55,18 @@ fun SettingsScreen(
             "You can still import ecg_*.csv.gz from another source on Home.",
         )
         Section(
+            "Rhythm model",
+            "After each recording the phone runs ECGFounder 1-lead (MIT, 2025) locally. " +
+                "It maps 150 findings to N / A / O: normal, atrial fibrillation, or other. " +
+                "Galaxy Watch strips are 500 Hz lead-I-like, which matches the model. " +
+                "This is a screen, not a diagnosis.",
+        )
+        Section(
             "Disclaimer",
             "GalaxyBridge is not a medical device and does not diagnose conditions. " +
                 "If you feel unwell, seek professional care.",
         )
-        Section("License", "Apache License 2.0 · application id app.healthtrack")
+        Section("License", "Apache License 2.0 · ECGFounder MIT · application id app.healthtrack")
     }
 }
 
