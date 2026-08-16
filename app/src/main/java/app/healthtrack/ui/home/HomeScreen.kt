@@ -166,7 +166,7 @@ private fun EcgHeroCard(
         if (session == null) {
             Text("No recordings yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Import a watch csv.gz, or wait for a same-package Wear node.",
+                "Record on the HealthTrack watch app, or import a csv.gz.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

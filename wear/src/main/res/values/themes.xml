@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HealthTrack.Wear" parent="@android:style/Theme.DeviceDefault">
+        <item name="android:windowSwipeToDismiss">true</item>
+        <item name="android:windowBackground">#071016</item>
+    </style>
+</resources>

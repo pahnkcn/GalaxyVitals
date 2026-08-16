@@ -5,6 +5,7 @@ import android.net.Uri
 import app.healthtrack.data.local.AppDatabase
 import app.healthtrack.data.local.EcgSessionEntity
 import app.healthtrack.data.protocol.EcgCsvParser
+import app.healthtrack.data.protocol.EcgCsvWriter
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.data.protocol.ParsedEcgFile
 import app.healthtrack.domain.EcgSample
@@ -98,28 +99,8 @@ class EcgRepository(
         // Keep the original bytes when possible. For stream imports we already consumed
         // the stream, so persist a readable gzip of the parsed rows.
         dest.parentFile?.mkdirs()
-        java.util.zip.GZIPOutputStream(FileOutputStream(dest)).bufferedWriter(Charsets.UTF_8).use { out ->
-            val watchEscaped = parsed.watchInfo.replace("\\", "\\\\").replace("\"", "\\\"")
-            val meta = buildString {
-                append('{')
-                append("\"sr_hz\":").append(parsed.srHz).append(',')
-                append("\"unit\":\"").append(parsed.unit).append("\",")
-                append("\"ts_start\":").append(parsed.tsStartMs).append(',')
-                append("\"format\":\"csv_mv\",")
-                append("\"wrist\":\"").append(parsed.wrist.name).append("\",")
-                append("\"signFactor\":").append(parsed.signFactor).append(',')
-                append("\"polarityNormalized\":").append(parsed.polarityNormalized).append(',')
-                append("\"watch_info\":\"").append(watchEscaped).append('"')
-                append('}')
-            }
-            out.append("#meta=").append(meta).append('\n')
-            out.append("rel_ms,value_mv,hr_bpm\n")
-            parsed.samples.forEach { sample ->
-                out.append(sample.relMs.toString()).append(',')
-                    .append(sample.valueMv.toString()).append(',')
-                    .append(sample.hrBpm?.toString() ?: "")
-                    .append('\n')
-            }
+        FileOutputStream(dest).use { out ->
+            out.write(EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeParsed(parsed)))
         }
     }
 

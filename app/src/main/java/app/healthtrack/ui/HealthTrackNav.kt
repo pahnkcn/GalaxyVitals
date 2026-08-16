@@ -95,7 +95,10 @@ fun HealthTrackRoot(
                 when (key) {
                     Route.Home -> NavEntry(key) {
                         HomeScreen(
-                            state = home,
+                            state = home.copy(
+                                latest = sessions.firstOrNull(),
+                                count = sessions.size,
+                            ),
                             onOpenEcg = { id -> backStack.add(Route.EcgDetail(id)) },
                             onOpenHistory = {
                                 backStack.clear()

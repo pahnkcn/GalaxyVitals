@@ -6,15 +6,25 @@ companions that push a gzip CSV over the Play Services Wearable Data Layer.
 This document describes the **on-the-wire format** only. GalaxyBridge does not
 include vendor UI, assets, or classification models.
 
-## Capture (watch side, not shipped here)
+## Capture (watch module `:wear`)
 
-A Wear OS app with Samsung Health Tracking Service records:
+The HealthTrack watch app records:
 
 - `HealthTrackerType.ECG_ON_DEMAND` → `ValueKey.EcgSet.ECG_MV` (millivolts)
 - `HealthTrackerType.HEART_RATE_CONTINUOUS` → bpm, aligned by timestamp
 - Lead-off via `ValueKey.EcgSet.LEAD_OFF` (`5` = no contact)
+- 30s session, `sessionId = currentTimeMillis`
+- Wrist `LEFT` → `signFactor +1`, `RIGHT` → `-1`
+- Sample clock `rel_ms = i * 1000 / 500`; rows before first HR dropped
 
 Samples are written as gzip CSV under `filesDir/ecg/ecg_{sessionId}.csv.gz`.
+
+Samsung ECG is a privileged tracker. Without a partner-whitelisted package (and
+the official client AAR), the watch falls back to a demo trace that still uses
+this file + Data Layer contract.
+
+GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. The watch
+deletes `ecg_{sessionId}.csv.gz` on cleanup (not `{sessionId}.csv.gz`).
 
 ## File format (`format = csv+gz`)
 
@@ -94,4 +104,5 @@ DataItems.
 | `/ecg/delete_all` | either | wipe |
 | `/ecg/restore/` / `/ecg/restore-batch/` | phone → watch | restore |
 
-GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`.
+The phone implements session receive, `syncNow`, and `cleanup`. The `:wear` app
+implements session push, `syncNow`, and `cleanup`.

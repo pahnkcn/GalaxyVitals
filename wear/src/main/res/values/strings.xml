@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HealthTrack</string>
+    <string name="measure_channel">ECG measurement</string>
+    <string name="measure_notification">Recording ECG</string>
+</resources>

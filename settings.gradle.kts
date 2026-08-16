@@ -15,4 +15,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "GalaxyBridge"
+include(":protocol")
+include(":samsung-health-api")
 include(":app")
+include(":wear")

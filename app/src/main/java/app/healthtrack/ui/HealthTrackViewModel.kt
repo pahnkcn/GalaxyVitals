@@ -29,7 +29,7 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
     private val wear = app.container.wearSyncClient
 
     val sessions: StateFlow<List<EcgSession>> = repo.observeSessions()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _home = MutableStateFlow(HomeUiState())
     val home: StateFlow<HomeUiState> = _home.asStateFlow()
@@ -38,14 +38,15 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
     val samples: StateFlow<List<EcgSample>> = _samples.asStateFlow()
 
     init {
+        // Drive Home from the same list History uses. Separate LIMIT 1 / COUNT
+        // flows were not emitting an initial row after process death, so Home
+        // stayed empty while History already showed imported / Wear sessions.
         viewModelScope.launch {
-            repo.observeLatest().collect { latest ->
-                _home.value = _home.value.copy(latest = latest)
-            }
-        }
-        viewModelScope.launch {
-            repo.observeCount().collect { count ->
-                _home.value = _home.value.copy(count = count)
+            sessions.collect { list ->
+                _home.value = _home.value.copy(
+                    latest = list.firstOrNull(),
+                    count = list.size,
+                )
             }
         }
         refreshWear()
@@ -95,7 +96,7 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
                 _home.value = _home.value.copy(
                     busy = false,
                     message = if (n == 0) {
-                        "No same-package watch node. Import a csv.gz instead."
+                        "No HealthTrack watch node. Install the watch app, or import a csv.gz."
                     } else {
                         "Asked $n watch node(s) to sync."
                     },

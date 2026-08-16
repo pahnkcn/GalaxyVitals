@@ -5,18 +5,6 @@ enum class EcgSource {
     IMPORT,
 }
 
-enum class Wrist {
-    LEFT,
-    RIGHT,
-    UNKNOWN,
-}
-
-data class EcgSample(
-    val relMs: Long,
-    val valueMv: Float,
-    val hrBpm: Int?,
-)
-
 data class EcgSession(
     val sessionId: String,
     val filePath: String,

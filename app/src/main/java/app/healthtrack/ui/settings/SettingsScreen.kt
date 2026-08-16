@@ -34,14 +34,18 @@ fun SettingsScreen(
         }
         Section(
             "How ECG arrives",
-            "The watch writes gzip CSV and pushes DataItem /ecg/session/{id} with an Asset. " +
-                "This phone listens on that path. Google only delivers those items to an app " +
-                "with the same application id and signing key as the watch app.",
+            "The HealthTrack watch app writes gzip CSV and pushes DataItem /ecg/session/{id}. " +
+                "This phone listens on that path. Google only delivers those items when both " +
+                "apps share application id app.healthtrack and the same signing key.",
+        )
+        Section(
+            "Install the watch app",
+            "Sideload the :wear debug APK onto a paired Wear OS watch. Home → Sync asks the " +
+                "watch to re-push any leftover inbox files.",
         )
         Section(
             "Import",
-            "If the watch app is a different package, copy ecg_*.csv.gz off the watch " +
-                "(or from another companion) and use Import on Home.",
+            "You can still import ecg_*.csv.gz from another source on Home.",
         )
         Section(
             "Disclaimer",

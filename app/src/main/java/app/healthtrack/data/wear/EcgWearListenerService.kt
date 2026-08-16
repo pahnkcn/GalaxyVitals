@@ -35,18 +35,26 @@ class EcgWearListenerService : WearableListenerService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onDataChanged(dataEvents: DataEventBuffer) {
-        val events = dataEvents.map { it }
-        dataEvents.release()
-        scope.launch {
-            events.forEach { event ->
-                if (event.type != DataEvent.TYPE_CHANGED) return@forEach
-                val path = event.dataItem.uri.path ?: return@forEach
-                if (!path.startsWith(EcgWearContract.SESSION_PREFIX)) return@forEach
+        // DataEvent / DataItem are only valid while the buffer is open.
+        val pending = ArrayList<Pair<String, Asset>>(dataEvents.count)
+        try {
+            for (event in dataEvents) {
+                if (event.type != DataEvent.TYPE_CHANGED) continue
+                val path = event.dataItem.uri.path ?: continue
+                if (!path.startsWith(EcgWearContract.SESSION_PREFIX)) continue
                 val sessionId = path.removePrefix(EcgWearContract.SESSION_PREFIX)
-                val map = DataMapItem.fromDataItem(event.dataItem).dataMap
-                val asset = map.getAsset(EcgWearContract.KEY_ECG_FILE) ?: return@forEach
-                ingest(sessionId, asset)
+                val asset = DataMapItem.fromDataItem(event.dataItem)
+                    .dataMap
+                    .getAsset(EcgWearContract.KEY_ECG_FILE)
+                    ?: continue
+                pending += sessionId to asset
             }
+        } finally {
+            dataEvents.release()
+        }
+        if (pending.isEmpty()) return
+        scope.launch {
+            pending.forEach { (sessionId, asset) -> ingest(sessionId, asset) }
         }
     }
 

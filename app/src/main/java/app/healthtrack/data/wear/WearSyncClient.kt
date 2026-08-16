@@ -24,7 +24,7 @@ class WearSyncClient(context: Context) {
                 available = nodes.isNotEmpty(),
                 nodes = nodes.map(Node::getDisplayName),
                 note = if (nodes.isEmpty()) {
-                    "No Wear OS node for this package. Live GeminiMan sync is not possible from app.healthtrack."
+                    "No Wear OS node for app.healthtrack. Install the HealthTrack watch app and keep the watch nearby."
                 } else {
                     "Connected to ${nodes.size} node(s) with the same application id."
                 },
