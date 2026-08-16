@@ -1,8 +1,8 @@
-# HealthTrack
+# GalaxyBridge
 
 Open-source Android companion for Galaxy Watch ECG recordings.
 
-HealthTrack implements the wearable **Data Layer + gzip CSV** contract used to
+GalaxyBridge implements the wearable **Data Layer + gzip CSV** contract used to
 move ECG traces from a watch to a phone. The UI is original. It does not
 redistribute another vendor’s layouts, icons, or classification models.
 
@@ -19,7 +19,7 @@ unwell, seek professional care.
 ## What cannot work
 
 Google Wear Data Layer only syncs between apps that share **package name and
-signing certificate**. HealthTrack uses `app.healthtrack`. It cannot receive
+signing certificate**. GalaxyBridge uses `app.healthtrack`. It cannot receive
 live sessions from a differently signed watch app (including GeminiMan Wellness
 Companion). Use **Import recording** for those files.
 

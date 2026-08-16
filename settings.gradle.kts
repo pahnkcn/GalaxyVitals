@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HealthTrack"
+rootProject.name = "GalaxyBridge"
 include(":app")

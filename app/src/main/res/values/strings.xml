@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">HealthTrack</string>
+    <string name="app_name">GalaxyBridge</string>
     <string name="ecg_received_title">ECG received</string>
     <string name="ecg_received_body">Recording %1$s is ready</string>
 </resources>

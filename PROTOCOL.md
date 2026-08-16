@@ -1,9 +1,9 @@
 # ECG retrieval protocol
 
-HealthTrack implements the wearable ECG file contract used by Galaxy Watch
+GalaxyBridge implements the wearable ECG file contract used by Galaxy Watch
 companions that push a gzip CSV over the Play Services Wearable Data Layer.
 
-This document describes the **on-the-wire format** only. HealthTrack does not
+This document describes the **on-the-wire format** only. GalaxyBridge does not
 include vendor UI, assets, or classification models.
 
 ## Capture (watch side, not shipped here)
@@ -44,7 +44,7 @@ rel_ms,value_mv,hr_bpm
 | `polarityNormalized` / `polarity_normalized` | boolean | Watch already flipped lead polarity. |
 
 Writer keys from the original watch firmware use camelCase; some phone parsers
-also accept snake_case. HealthTrack accepts both.
+also accept snake_case. GalaxyBridge accepts both.
 
 ### Rows
 
@@ -94,4 +94,4 @@ DataItems.
 | `/ecg/delete_all` | either | wipe |
 | `/ecg/restore/` / `/ecg/restore-batch/` | phone → watch | restore |
 
-HealthTrack v1 implements session receive, `syncNow`, and `cleanup`.
+GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`.

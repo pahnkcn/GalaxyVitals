@@ -45,7 +45,7 @@ fun SettingsScreen(
         )
         Section(
             "Disclaimer",
-            "HealthTrack is not a medical device and does not diagnose conditions. " +
+            "GalaxyBridge is not a medical device and does not diagnose conditions. " +
                 "If you feel unwell, seek professional care.",
         )
         Section("License", "Apache License 2.0 · application id app.healthtrack")
