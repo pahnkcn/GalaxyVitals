@@ -229,6 +229,49 @@ object EcgFounderLabels {
         return NaoDecision(label, confidence, pN, pAf, pO, top)
     }
 
+    /**
+     * Linear probe trained on frozen ECGFounder 150-d outputs.
+     * [coef] is 3 x 150 for labels N, A, O.
+     */
+    fun decideLogistic(
+        probs: FloatArray,
+        coef: Array<FloatArray>,
+        intercept: FloatArray,
+        topK: Int = 5,
+    ): NaoDecision {
+        require(probs.size == ALL.size)
+        require(coef.size == 3 && intercept.size == 3)
+        val logits = FloatArray(3)
+        for (k in 0..2) {
+            var s = intercept[k]
+            val row = coef[k]
+            require(row.size == probs.size)
+            for (i in probs.indices) s += row[i] * probs[i]
+            logits[k] = s
+        }
+        val maxLogit = logits.max()
+        var sum = 0f
+        val soft = FloatArray(3)
+        for (k in 0..2) {
+            soft[k] = kotlin.math.exp((logits[k] - maxLogit).toDouble()).toFloat()
+            sum += soft[k]
+        }
+        for (k in 0..2) soft[k] /= sum
+        val best = soft.indices.maxBy { soft[it] }
+        val ranked = ALL.indices
+            .map { LabeledScore(ALL[it], probs[it]) }
+            .sortedByDescending { it.score }
+            .take(topK)
+        return NaoDecision(
+            label = NaoLabel.entries[best],
+            confidence = soft[best],
+            pNormal = soft[0],
+            pAf = soft[1],
+            pOther = soft[2],
+            topFindings = ranked,
+        )
+    }
+
     fun encodeFindings(items: List<LabeledScore>): String =
         items.joinToString("|") { "${it.name}:${"%.3f".format(it.score)}" }
 

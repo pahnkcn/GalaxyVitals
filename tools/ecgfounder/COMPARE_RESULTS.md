@@ -36,8 +36,26 @@ EMG, dropouts, and random polarity. Both models read that same degraded file.
   2017 as an external set. The watch-like column is the fairer one for
   GalaxyBridge.
 
-Reproduce:
+## After training a frozen N/A/O head
+
+The 90M ECGFounder backbone stayed frozen. A logistic layer was trained on
+480 other 2017 records (plus watch-style copies) and tested on the **same
+held-out 600** as above.
+
+| Condition | Mapping | Accuracy | Macro-F1 | AF AUROC | O recall |
+|---|---|---:|---:|---:|---:|
+| Clean | old rules | 0.620 | 0.522 | 0.974 | 0.015 |
+| Clean | **calibrated head** | **0.805** | **0.804** | 0.960 | **0.705** |
+| Watch-like | old rules | 0.608 | 0.509 | 0.966 | 0.010 |
+| Watch-like | **calibrated head** | **0.792** | **0.789** | **0.966** | **0.650** |
+| Watch-like | nao_full (reference) | 0.827 | 0.822 | 0.969 | 0.640 |
+
+Most of the 3-class gap is gone. AF detection stays in the same band as nao.
+The phone app now loads `assets/ecg/nao_calibrator.json`.
+
+Reproduce the head:
 
 ```bash
 py -3.12 tools/ecgfounder/compare_nao_founder.py --per-class 200
+py -3.12 tools/ecgfounder/train_nao_head.py --train-per-class 160
 ```

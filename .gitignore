@@ -25,3 +25,4 @@ models/eval/**
 !models/README.md
 !models/nao/ecg_filters_256hz.json
 !models/nao/nao_full_ecg_model_meta.json
+# Ship only the tiny calibrated head. The 32MB+ ONNX/PTH stay local.

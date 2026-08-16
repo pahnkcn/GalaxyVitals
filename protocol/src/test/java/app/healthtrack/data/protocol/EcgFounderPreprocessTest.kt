@@ -61,6 +61,19 @@ class EcgFounderPreprocessTest {
     }
 
     @Test
+    fun logisticHeadPrefersAfWhenWeightIsOnAf() {
+        val probs = FloatArray(EcgFounderLabels.ALL.size)
+        val af = EcgFounderLabels.ALL.indexOf("ATRIAL FIBRILLATION")
+        probs[af] = 0.9f
+        val coef = Array(3) { FloatArray(EcgFounderLabels.ALL.size) }
+        coef[1][af] = 8f
+        val intercept = floatArrayOf(0f, 0f, 0f)
+        val decided = EcgFounderLabels.decideLogistic(probs, coef, intercept)
+        assertThat(decided.label).isEqualTo(NaoLabel.A)
+        assertThat(decided.pAf).isGreaterThan(decided.pNormal)
+    }
+
+    @Test
     fun findingsRoundTrip() {
         val items = listOf(LabeledScore("ATRIAL FIBRILLATION", 0.812f))
         val encoded = EcgFounderLabels.encodeFindings(items)

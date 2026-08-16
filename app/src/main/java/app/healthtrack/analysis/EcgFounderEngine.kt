@@ -25,6 +25,7 @@ data class AnalysisResult(
 class EcgFounderEngine(private val context: Context) {
     private val env = OrtEnvironment.getEnvironment()
     private val sessionRef = AtomicReference<OrtSession?>()
+    private val head: NaoLinearHead? = NaoCalibrator.load(context)
 
     fun analyze(parsed: ParsedEcgFile): AnalysisResult {
         val windows = EcgFounderPreprocess.windows(parsed.samples, parsed.srHz)
@@ -44,7 +45,11 @@ class EcgFounderEngine(private val context: Context) {
         }
         val n = windows.size.toFloat()
         for (i in acc.indices) acc[i] /= n
-        val decision = EcgFounderLabels.decide(acc)
+        val decision = if (head != null) {
+            EcgFounderLabels.decideLogistic(acc, head.coef, head.intercept)
+        } else {
+            EcgFounderLabels.decide(acc)
+        }
         if (!quality.usable) {
             return AnalysisResult(
                 status = AnalysisStatus.LOW_QUALITY,
@@ -60,7 +65,8 @@ class EcgFounderEngine(private val context: Context) {
     }
 
     private fun qualityNote(quality: SignalQuality, windowCount: Int): String {
-        return "ECGFounder 1-lead · $windowCount window(s) · RMS ${"%.3f".format(quality.rms)} mV"
+        val headNote = if (head != null) "calibrated N/A/O" else "rule N/A/O"
+        return "ECGFounder 1-lead · $headNote · $windowCount window(s) · RMS ${"%.3f".format(quality.rms)} mV"
     }
 
     @Synchronized

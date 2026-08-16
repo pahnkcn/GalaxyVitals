@@ -57,8 +57,8 @@ fun SettingsScreen(
         Section(
             "Rhythm model",
             "After each recording the phone runs ECGFounder 1-lead (MIT, 2025) locally. " +
-                "It maps 150 findings to N / A / O: normal, atrial fibrillation, or other. " +
-                "Galaxy Watch strips are 500 Hz lead-I-like, which matches the model. " +
+                "A small calibrated head reads its 150 findings as N / A / O: normal, " +
+                "atrial fibrillation, or other. Galaxy Watch strips are 500 Hz lead-I-like. " +
                 "This is a screen, not a diagnosis.",
         )
         Section(
