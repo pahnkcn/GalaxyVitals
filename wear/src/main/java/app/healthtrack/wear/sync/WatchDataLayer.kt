@@ -2,9 +2,11 @@ package app.healthtrack.wear.sync
 
 import android.content.Context
 import app.healthtrack.data.protocol.EcgWearContract
+import app.healthtrack.wear.store.WatchEcgStore
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
 
 class WatchDataLayer(context: Context) {
@@ -13,8 +15,13 @@ class WatchDataLayer(context: Context) {
     private val nodeClient = Wearable.getNodeClient(app)
 
     suspend fun connectedPhoneNames(): List<String> {
-        return runCatching { nodeClient.connectedNodes.await().map { it.displayName } }
-            .getOrDefault(emptyList())
+        return try {
+            nodeClient.connectedNodes.await().map { it.displayName }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     suspend fun putSession(sessionId: String, gzip: ByteArray) {
@@ -29,11 +36,19 @@ class WatchDataLayer(context: Context) {
         dataClient.putDataItem(request).await()
     }
 
-    suspend fun putAllInbox(store: app.healthtrack.wear.store.WatchEcgStore): Int {
-        val files = store.listGzipFiles()
+    suspend fun putAllInbox(store: WatchEcgStore): Int {
+        val files = store.listPendingGzipFiles()
+        var uploaded = 0
         files.forEach { file ->
-            putSession(EcgWearContract.sessionIdFromFileName(file.name), file.readBytes())
+            val length = file.length()
+            if (length !in 1L..WatchEcgStore.MAX_GZIP_BYTES.toLong()) {
+                return@forEach
+            }
+            val gzip = file.readBytes()
+            if (gzip.size > WatchEcgStore.MAX_GZIP_BYTES) return@forEach
+            putSession(EcgWearContract.sessionIdFromFileName(file.name), gzip)
+            uploaded += 1
         }
-        return files.size
+        return uploaded
     }
 }

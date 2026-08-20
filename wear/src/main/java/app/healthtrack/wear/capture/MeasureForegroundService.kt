@@ -31,13 +31,15 @@ class MeasureForegroundService : Service() {
             .setContentTitle(getString(R.string.app_name))
             .setContentText(getString(R.string.measure_notification))
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(42, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
         } else {
             startForeground(42, notification)
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     companion object {
@@ -48,9 +50,7 @@ class MeasureForegroundService : Service() {
         }
 
         fun stop(context: Context) {
-            context.startService(
-                Intent(context, MeasureForegroundService::class.java).setAction(ACTION_STOP),
-            )
+            context.stopService(Intent(context, MeasureForegroundService::class.java))
         }
     }
 }

@@ -5,6 +5,8 @@ package app.healthtrack.data.protocol
  * Paths and keys match the watch writer / phone receiver contract.
  */
 object EcgWearContract {
+    const val MAX_SESSION_ID_LENGTH = 80
+
     const val SESSION_PREFIX = "/ecg/session/"
     const val CLEANUP_PREFIX = "/ecg/cleanup/"
     const val ACK_PREFIX = "/ecg/ack/"
@@ -37,21 +39,62 @@ object EcgWearContract {
     const val ECG_STALL_MS = 900L
     const val HR_LOST_ABORT_MS = 10_000L
 
-    fun sessionPath(sessionId: String): String = SESSION_PREFIX + sessionId
+    private val SESSION_ID_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
 
-    fun cleanupPath(sessionId: String): String = CLEANUP_PREFIX + sessionId
+    fun requireSessionId(raw: String): String {
+        require(SESSION_ID_PATTERN.matches(raw)) {
+            "Invalid ECG session id"
+        }
+        return raw
+    }
+
+    fun sanitizeSessionId(raw: String, fallback: String): String {
+        val safeFallback = requireSessionId(fallback)
+        val leaf = raw
+            .trim()
+            .replace('\\', '/')
+            .substringAfterLast('/')
+        val unwrapped = stripFileEnvelope(leaf)
+        val sanitized = buildString(unwrapped.length) {
+            unwrapped.forEach { char ->
+                append(
+                    when {
+                        char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' -> char
+                        char == '.' || char == '_' || char == '-' -> char
+                        else -> '_'
+                    },
+                )
+            }
+        }
+            .trim { it == '.' || it == '_' || it == '-' }
+            .take(MAX_SESSION_ID_LENGTH)
+        return sanitized.takeIf(SESSION_ID_PATTERN::matches) ?: safeFallback
+    }
+
+    fun sessionPath(sessionId: String): String = SESSION_PREFIX + requireSessionId(sessionId)
+
+    fun cleanupPath(sessionId: String): String = CLEANUP_PREFIX + requireSessionId(sessionId)
 
     fun syncNowPath(nodeId: String): String = "${RPC_REQ_PREFIX}$nodeId/syncNow"
 
-    fun inboxFileName(sessionId: String): String = FILE_PREFIX + sessionId + FILE_SUFFIX
+    fun inboxFileName(sessionId: String): String =
+        FILE_PREFIX + requireSessionId(sessionId) + FILE_SUFFIX
 
     fun sessionIdFromFileName(name: String): String {
+        require('/' !in name && '\\' !in name) { "Invalid ECG file name" }
+        return requireSessionId(stripFileEnvelope(name))
+    }
+
+    private fun stripFileEnvelope(name: String): String {
         var id = name
-        if (id.startsWith(FILE_PREFIX)) id = id.removePrefix(FILE_PREFIX)
-        when {
-            id.endsWith(FILE_SUFFIX) -> id = id.removeSuffix(FILE_SUFFIX)
-            id.endsWith(".gz") -> id = id.removeSuffix(".gz")
-            id.endsWith(".csv") -> id = id.removeSuffix(".csv")
+        if (id.startsWith(FILE_PREFIX, ignoreCase = true)) {
+            id = id.substring(FILE_PREFIX.length)
+        }
+        id = when {
+            id.endsWith(FILE_SUFFIX, ignoreCase = true) -> id.dropLast(FILE_SUFFIX.length)
+            id.endsWith(".gz", ignoreCase = true) -> id.dropLast(3)
+            id.endsWith(".csv", ignoreCase = true) -> id.dropLast(4)
+            else -> id
         }
         return id
     }

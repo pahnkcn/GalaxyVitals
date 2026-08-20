@@ -1,5 +1,7 @@
 package app.healthtrack.data.protocol
 
+import java.util.Locale
+
 enum class NaoLabel {
     N,
     A,
@@ -21,6 +23,8 @@ data class LabeledScore(
 )
 
 object EcgFounderLabels {
+    private const val MAX_TOP_FINDINGS = 20
+
     val ALL: List<String> = listOf(
         "ABNORMAL ECG",
         "NORMAL SINUS RHYTHM",
@@ -199,6 +203,9 @@ object EcgFounderLabels {
 
     fun decide(probs: FloatArray, topK: Int = 5): NaoDecision {
         require(probs.size == ALL.size) { "expected ${ALL.size} scores, got ${probs.size}" }
+        require(probs.all { it.isFinite() && it in 0f..1f }) {
+            "scores must be finite probabilities"
+        }
         var pAf = 0f
         var pN = 0f
         var pO = 0f
@@ -215,7 +222,7 @@ object EcgFounderLabels {
             }
         }
         ranked.sortByDescending { it.score }
-        val top = ranked.take(topK)
+        val top = ranked.take(topK.coerceIn(0, MAX_TOP_FINDINGS))
         val label = when {
             pAf >= 0.45f && pAf >= pN -> NaoLabel.A
             pN >= 0.40f && pN >= pAf && pN >= pO * 0.85f -> NaoLabel.N
@@ -241,12 +248,16 @@ object EcgFounderLabels {
     ): NaoDecision {
         require(probs.size == ALL.size)
         require(coef.size == 3 && intercept.size == 3)
+        require(probs.all { it.isFinite() && it in 0f..1f })
+        require(intercept.all { it.isFinite() })
         val logits = FloatArray(3)
         for (k in 0..2) {
             var s = intercept[k]
             val row = coef[k]
             require(row.size == probs.size)
+            require(row.all { it.isFinite() })
             for (i in probs.indices) s += row[i] * probs[i]
+            require(s.isFinite()) { "calibrator produced a non-finite logit" }
             logits[k] = s
         }
         val maxLogit = logits.max()
@@ -256,12 +267,13 @@ object EcgFounderLabels {
             soft[k] = kotlin.math.exp((logits[k] - maxLogit).toDouble()).toFloat()
             sum += soft[k]
         }
+        require(sum.isFinite() && sum > 0f) { "calibrator produced invalid probabilities" }
         for (k in 0..2) soft[k] /= sum
         val best = soft.indices.maxBy { soft[it] }
         val ranked = ALL.indices
             .map { LabeledScore(ALL[it], probs[it]) }
             .sortedByDescending { it.score }
-            .take(topK)
+            .take(topK.coerceIn(0, MAX_TOP_FINDINGS))
         return NaoDecision(
             label = NaoLabel.entries[best],
             confidence = soft[best],
@@ -273,15 +285,23 @@ object EcgFounderLabels {
     }
 
     fun encodeFindings(items: List<LabeledScore>): String =
-        items.joinToString("|") { "${it.name}:${"%.3f".format(it.score)}" }
+        items.asSequence()
+            .filter { it.score.isFinite() }
+            .take(MAX_TOP_FINDINGS)
+            .joinToString("|") { "${it.name}:${String.format(Locale.US, "%.3f", it.score)}" }
 
     fun decodeFindings(raw: String): List<LabeledScore> {
         if (raw.isBlank()) return emptyList()
-        return raw.split('|').mapNotNull { token ->
-            val idx = token.lastIndexOf(':')
-            if (idx <= 0) return@mapNotNull null
-            val score = token.substring(idx + 1).toFloatOrNull() ?: return@mapNotNull null
-            LabeledScore(token.substring(0, idx), score)
-        }
+        return raw.splitToSequence('|')
+            .mapNotNull { token ->
+                val idx = token.lastIndexOf(':')
+                if (idx <= 0) return@mapNotNull null
+                val score = token.substring(idx + 1).toFloatOrNull()
+                    ?.takeIf(Float::isFinite)
+                    ?: return@mapNotNull null
+                LabeledScore(token.substring(0, idx), score)
+            }
+            .take(MAX_TOP_FINDINGS)
+            .toList()
     }
 }

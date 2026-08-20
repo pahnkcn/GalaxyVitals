@@ -8,18 +8,21 @@ import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.data.protocol.ParsedEcgFile
 import app.healthtrack.domain.Wrist
 import app.healthtrack.wear.WearApplication
-import app.healthtrack.wear.capture.MeasureForegroundService
+import app.healthtrack.wear.capture.MeasureForegroundLeaseManager
 import app.healthtrack.wear.sensors.EcgSensor
 import app.healthtrack.wear.sensors.OffBodyMonitor
 import app.healthtrack.wear.sensors.SensorAvailability
 import app.healthtrack.wear.sensors.SensorKind
 import app.healthtrack.wear.store.watchInfoJson
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class HomeUiState(
     val latest: ParsedEcgFile?,
@@ -35,6 +38,7 @@ enum class MeasurePhase {
     Ready,
     LeadOff,
     Recording,
+    Saving,
     Success,
     Failed,
 }
@@ -57,7 +61,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refresh() {
         viewModelScope.launch {
-            val parsed = app.container.store.parseAll()
+            val parsed = withContext(Dispatchers.IO) { app.container.store.parseAll() }
             val phones = app.container.dataLayer.connectedPhoneNames()
             _state.value = HomeUiState(
                 latest = parsed.firstOrNull(),
@@ -79,7 +83,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     val sessions: StateFlow<List<ParsedEcgFile>> = _sessions.asStateFlow()
 
     fun refresh() {
-        _sessions.value = app.container.store.parseAll()
+        viewModelScope.launch {
+            _sessions.value = withContext(Dispatchers.IO) { app.container.store.parseAll() }
+        }
     }
 }
 
@@ -120,6 +126,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private var lastGoodHrAt = 0L
     private var ecgStarted = false
     private var tickJob: Job? = null
+    private var delayedStartJob: Job? = null
+    private var connectTimeoutJob: Job? = null
+    private var sessionGeneration = 0L
+    private var foregroundLease: MeasureForegroundLeaseManager.Lease? = null
     private val live = ArrayList<Float>(1000)
     private val offBody = OffBodyMonitor(application) { blocked ->
         if (blocked && _state.value.phase == MeasurePhase.Recording) {
@@ -129,45 +139,86 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     fun startSamsung() {
         resetSession()
+        val generation = sessionGeneration
         _state.value = MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
-        app.container.samsungSensor.connect { avail ->
-            if (!avail.ready) {
-                _state.value = MeasureUiState(
-                    phase = MeasurePhase.Unavailable,
-                    status = "ECG sensor not available",
-                    error = avail.reason ?: "This package is not allowed to use ECG_ON_DEMAND.",
-                    samsungReady = false,
-                )
-                return@connect
+        connectTimeoutJob = viewModelScope.launch {
+            delay(3_500)
+            if (generation == sessionGeneration && _state.value.phase == MeasurePhase.Connecting) {
+                failSamsung("No Samsung ECG tracker on this watch. Use Record demo.")
             }
-            bind(app.container.samsungSensor, autoStart = true, readyLabel = "Touch the button")
         }
+        try {
+            app.container.samsungSensor.connect { avail ->
+                if (generation != sessionGeneration) {
+                    return@connect
+                }
+                connectTimeoutJob?.cancel()
+                connectTimeoutJob = null
+                if (!avail.ready) {
+                    failSamsung(
+                        avail.reason ?: "This package is not allowed to use ECG_ON_DEMAND.",
+                    )
+                    return@connect
+                }
+                if (_state.value.phase != MeasurePhase.Connecting) {
+                    app.container.samsungSensor.disconnect()
+                    return@connect
+                }
+                try {
+                    bind(app.container.samsungSensor, autoStart = true, readyLabel = "Touch the button")
+                } catch (error: RuntimeException) {
+                    failSamsung(error.message ?: "Samsung ECG could not be started.")
+                }
+            }
+        } catch (error: RuntimeException) {
+            failSamsung(error.message ?: "Samsung ECG permission or service start failed.")
+        }
+    }
+
+    fun cancelRecording() {
+        resetSession()
+        _state.value = MeasureUiState(
+            phase = MeasurePhase.Unavailable,
+            status = "Recording cancelled",
+            error = "Start again when ready.",
+            samsungReady = false,
+        )
     }
 
     fun startDemo() {
         resetSession()
         bind(app.container.demoSensor, autoStart = false, readyLabel = "Recording demo")
-        viewModelScope.launch {
+        val generation = sessionGeneration
+        delayedStartJob = viewModelScope.launch {
             delay(200)
-            beginRecording()
+            if (generation == sessionGeneration &&
+                sensor?.kind == SensorKind.DEMO &&
+                _state.value.phase in setOf(MeasurePhase.Warmup, MeasurePhase.Ready)
+            ) {
+                beginRecording()
+            }
         }
     }
 
     private fun bind(target: EcgSensor, autoStart: Boolean, readyLabel: String) {
         sensor = target
+        val generation = sessionGeneration
         autoStartOnContact = autoStart
         leadOff = target.kind != SensorKind.DEMO
         hrOk = false
         lastEcgAt = 0L
         lastGoodHrAt = 0L
         ecgStarted = false
-        offBody.start()
+        if (target.kind == SensorKind.SAMSUNG) offBody.start()
         _state.value = MeasureUiState(
             phase = MeasurePhase.Warmup,
             status = "Warming up heart rate…",
             samsungReady = target.kind == SensorKind.SAMSUNG,
         )
         target.startHr { bpm, status ->
+            if (generation != sessionGeneration || sensor !== target) {
+                return@startHr
+            }
             hrOk = status == EcgWearContract.HR_STATUS_OK && bpm > 0
             val current = _state.value
             if (hrOk) lastGoodHrAt = SystemClock.elapsedRealtime()
@@ -192,7 +243,11 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private fun startEcgIfNeeded(target: EcgSensor) {
         if (ecgStarted) return
         ecgStarted = true
+        val generation = sessionGeneration
         target.startEcg { mv, off ->
+            if (generation != sessionGeneration || sensor !== target) {
+                return@startEcg
+            }
             lastEcgAt = SystemClock.elapsedRealtime()
             leadOff = off
             val phase = _state.value.phase
@@ -207,6 +262,12 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 }
                 return@startEcg
             }
+            if (mv.any { !it.isFinite() }) {
+                if (phase == MeasurePhase.Recording) {
+                    abortToLeadOff("Invalid ECG signal")
+                }
+                return@startEcg
+            }
             if (phase == MeasurePhase.Recording) {
                 app.container.recorder.addEcg(mv)
                 synchronized(live) {
@@ -217,7 +278,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                     }
                     _state.value = _state.value.copy(liveMv = live.toList())
                 }
-            } else if (hrOk && autoStartOnContact) {
+            } else if (autoStartOnContact && hasRecentHeartRate()) {
                 beginRecording()
             }
         }
@@ -225,10 +286,19 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     private fun beginRecording() {
         if (_state.value.phase == MeasurePhase.Recording) return
-        if (offBody.isBlocked()) {
+        val activeSensor = sensor ?: return
+        if (activeSensor.kind == SensorKind.SAMSUNG && offBody.isBlocked()) {
             _state.value = _state.value.copy(
                 phase = MeasurePhase.LeadOff,
                 status = "Watch not worn properly",
+            )
+            return
+        }
+        if (activeSensor.kind == SensorKind.SAMSUNG && !hasRecentHeartRate()) {
+            hrOk = false
+            _state.value = _state.value.copy(
+                phase = MeasurePhase.Warmup,
+                status = "Waiting for a clear heart-rate signal…",
             )
             return
         }
@@ -239,8 +309,18 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             wrist = wrist,
             signFactor = EcgWearContract.signFactorFor(wrist),
         )
-        lastGoodHrAt = SystemClock.elapsedRealtime()
-        MeasureForegroundService.start(getApplication())
+        if (activeSensor.kind == SensorKind.SAMSUNG) {
+            try {
+                foregroundLease = app.container.measureForegroundLeases.acquire()
+            } catch (error: RuntimeException) {
+                failSamsung(
+                    error.message ?: "Health foreground service could not start. Check permissions.",
+                )
+                return
+            }
+        }
+        delayedStartJob?.cancel()
+        delayedStartJob = null
         synchronized(live) { live.clear() }
         _state.value = _state.value.copy(
             phase = MeasurePhase.Recording,
@@ -263,6 +343,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
                 if (autoStartOnContact && hrLost) {
+                    hrOk = false
                     abortToLeadOff("No clear heart-rate signal")
                     return@launch
                 }
@@ -278,35 +359,105 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     private fun complete() {
         tickJob?.cancel()
-        sensor?.stop()
-        offBody.stop()
-        MeasureForegroundService.stop(getApplication())
-        viewModelScope.launch {
+        tickJob = null
+        delayedStartJob?.cancel()
+        delayedStartJob = null
+        val snapshot = try {
+            app.container.recorder.takeSnapshot()
+        } catch (_: Exception) {
+            resetSession()
+            _state.value = MeasureUiState(
+                phase = MeasurePhase.Failed,
+                status = "Save failed",
+                error = "Could not save this recording. Please try again.",
+            )
+            return
+        }
+        sessionGeneration += 1
+        val completionGeneration = sessionGeneration
+        val completedSensor = sensor
+        sensor = null
+        val persistenceForegroundLease = foregroundLease
+        foregroundLease = null
+        val watchInfo = watchInfoJson(getApplication())
+        val lastHr = _state.value.hrBpm
+        _state.value = _state.value.copy(
+            phase = MeasurePhase.Saving,
+            status = "Saving…",
+            remainingSec = 0,
+        )
+        app.container.persistenceScope.launch {
             try {
-                val recorded = app.container.recorder.finish(watchInfoJson(getApplication()))
-                app.container.store.save(recorded.sessionId, recorded.gzip)
-                runCatching { app.container.dataLayer.putSession(recorded.sessionId, recorded.gzip) }
-                _state.value = MeasureUiState(
-                    phase = MeasurePhase.Success,
-                    status = "Sent to phone",
-                    sessionId = recorded.sessionId,
-                    hrBpm = _state.value.hrBpm,
-                    remainingSec = 0,
-                )
-            } catch (t: Throwable) {
-                _state.value = MeasureUiState(
-                    phase = MeasurePhase.Failed,
-                    status = "Save failed",
-                    error = t.message,
-                )
+                val recorded = withContext(Dispatchers.Default) {
+                    app.container.recorder.finish(snapshot, watchInfo)
+                }
+                try {
+                    app.container.store.save(recorded.sessionId, recorded.gzip)
+                } finally {
+                    persistenceForegroundLease?.close()
+                }
+                val pushed = try {
+                    app.container.dataLayer.putSession(recorded.sessionId, recorded.gzip)
+                    true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (completionGeneration == sessionGeneration) {
+                        _state.value = MeasureUiState(
+                            phase = MeasurePhase.Success,
+                            status = if (pushed) "Sent to phone" else "Saved on watch",
+                            sessionId = recorded.sessionId,
+                            hrBpm = lastHr,
+                            remainingSec = 0,
+                            error = if (pushed) {
+                                null
+                            } else {
+                                "Phone not linked. Keep HealthTrack open nearby, then Sync."
+                            },
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main.immediate) {
+                    if (completionGeneration == sessionGeneration) {
+                        _state.value = MeasureUiState(
+                            phase = MeasurePhase.Failed,
+                            status = "Save failed",
+                            error = "Could not save this recording. Please try again.",
+                        )
+                    }
+                }
+            } finally {
+                persistenceForegroundLease?.close()
             }
+        }
+        try {
+            completedSensor?.stop()
+        } catch (_: Exception) {
+            // The immutable snapshot is already queued for persistence.
+        }
+        try {
+            completedSensor?.disconnect()
+        } catch (_: Exception) {
+            // The immutable snapshot is already queued for persistence.
+        }
+        try {
+            offBody.stop()
+        } catch (_: Exception) {
+            // The immutable snapshot is already queued for persistence.
         }
     }
 
     private fun abortToLeadOff(message: String) {
         tickJob?.cancel()
+        tickJob = null
         app.container.recorder.cancel()
-        MeasureForegroundService.stop(getApplication())
+        releaseForegroundLease()
         synchronized(live) { live.clear() }
         _state.value = _state.value.copy(
             phase = MeasurePhase.LeadOff,
@@ -317,18 +468,46 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun resetSession() {
+        sessionGeneration += 1
         tickJob?.cancel()
-        sensor?.stop()
-        sensor?.disconnect()
+        tickJob = null
+        delayedStartJob?.cancel()
+        delayedStartJob = null
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
+        val activeSensor = sensor
         sensor = null
+        activeSensor?.stop()
+        activeSensor?.disconnect()
+        if (activeSensor !== app.container.samsungSensor) {
+            app.container.samsungSensor.disconnect()
+        }
         app.container.recorder.cancel()
-        MeasureForegroundService.stop(getApplication())
+        releaseForegroundLease()
         offBody.stop()
         lastGoodHrAt = 0L
         lastEcgAt = 0L
         ecgStarted = false
         synchronized(live) { live.clear() }
     }
+
+    private fun failSamsung(message: String) {
+        resetSession()
+        _state.value = MeasureUiState(
+            phase = MeasurePhase.Unavailable,
+            status = "ECG sensor not available",
+            error = message,
+            samsungReady = false,
+        )
+    }
+
+    private fun releaseForegroundLease() {
+        foregroundLease?.close()
+        foregroundLease = null
+    }
+
+    private fun hasRecentHeartRate(now: Long = SystemClock.elapsedRealtime()): Boolean =
+        isRecentHeartRate(hrOk, lastGoodHrAt, now)
 
     override fun onCleared() {
         resetSession()

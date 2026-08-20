@@ -76,7 +76,17 @@ object EcgFounderPreprocess {
 
     fun quality(windows: List<PreparedWindow>, usablePct: Double): SignalQuality {
         if (windows.isEmpty()) return SignalQuality(false, "No ECG windows", 0f)
+        if (!usablePct.isFinite()) {
+            return SignalQuality(false, "Signal quality is not finite", 0f)
+        }
+        if (windows.any { window ->
+                !window.rms.isFinite() || window.samples.any { sample -> !sample.isFinite() }
+            }
+        ) {
+            return SignalQuality(false, "Signal contains non-finite values", 0f)
+        }
         val rms = windows.map { it.rms }.average().toFloat()
+        if (!rms.isFinite()) return SignalQuality(false, "Signal RMS is not finite", 0f)
         if (usablePct < 40.0) return SignalQuality(false, "Too much lead-off / flat signal", rms)
         if (rms < 0.01f) return SignalQuality(false, "Amplitude too small after filtering", rms)
         if (rms > 8f) return SignalQuality(false, "Amplitude looks clipped or saturated", rms)
@@ -182,16 +192,26 @@ object EcgFounderPreprocess {
     }
 
     private fun biquad(s: DoubleArray, x: DoubleArray): DoubleArray {
+        if (x.isEmpty()) return DoubleArray(0)
         val b0 = s[0]
         val b1 = s[1]
         val b2 = s[2]
         val a1 = s[4]
         val a2 = s[5]
         val y = DoubleArray(x.size)
-        var x1 = 0.0
-        var x2 = 0.0
-        var y1 = 0.0
-        var y2 = 0.0
+        // Start each section at its constant-input steady state. Zero initial
+        // conditions create a false edge transient large enough to make a flat
+        // ECG look usable after forward/backward filtering.
+        val denominator = 1.0 + a1 + a2
+        val dcGain = if (abs(denominator) > 1e-12) {
+            (b0 + b1 + b2) / denominator
+        } else {
+            0.0
+        }
+        var x1 = x[0]
+        var x2 = x[0]
+        var y1 = x[0] * dcGain
+        var y2 = y1
         for (i in x.indices) {
             val xi = x[i]
             val yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2

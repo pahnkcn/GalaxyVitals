@@ -5,6 +5,7 @@ import app.healthtrack.data.protocol.EcgCsvParser
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.domain.Wrist
 import app.healthtrack.wear.capture.EcgSessionRecorder
+import app.healthtrack.wear.store.WatchEcgStore
 import com.google.common.truth.Truth.assertThat
 import org.junit.Rule
 import org.junit.Test
@@ -34,8 +35,7 @@ class PhoneWatchBridgeTest {
         val recorded = recorder.finish("""{"model":"WatchTest","appVersionName":"0.1.0"}""")
 
         val watchDir = tmp.newFolder(EcgWearContract.WATCH_DIR)
-        val watchFile = File(watchDir, EcgWearContract.inboxFileName(sessionId))
-        watchFile.writeBytes(recorded.gzip)
+        val watchFile = WatchEcgStore(watchDir).save(sessionId, recorded.gzip)
 
         val phoneInbox = tmp.newFolder(EcgWearContract.INBOX_DIR)
         val phoneFile = File(phoneInbox, EcgWearContract.inboxFileName(sessionId))
@@ -69,27 +69,28 @@ class PhoneWatchBridgeTest {
         assertThat(parts[4]).isEqualTo("syncNow")
 
         val watchDir = tmp.newFolder(EcgWearContract.WATCH_DIR)
-        val file = File(watchDir, EcgWearContract.inboxFileName(sessionId))
-        file.writeBytes(byteArrayOf(1, 2, 3))
+        val store = WatchEcgStore(watchDir)
+        val file = store.save(sessionId, byteArrayOf(1, 2, 3))
         val cleanupId = EcgWearContract.sessionIdFromFileName(
             "/ecg/cleanup/42".removePrefix(EcgWearContract.CLEANUP_PREFIX),
         )
         assertThat(cleanupId).isEqualTo(sessionId)
-        val deleted = File(watchDir, EcgWearContract.inboxFileName(cleanupId)).delete()
-        assertThat(deleted).isTrue()
-        assertThat(file.exists()).isFalse()
+        assertThat(store.markSynced(cleanupId)).isTrue()
+        assertThat(file.exists()).isTrue()
+        assertThat(store.listPendingGzipFiles()).isEmpty()
     }
 
     @Test
-    fun cleanupPathWithEcgPrefixStillDeletesWatchFile() {
+    fun cleanupPathWithEcgPrefixMarksExactWatchFileSynced() {
         val sessionId = "42"
         val watchDir = tmp.newFolder("prefixed")
-        val file = File(watchDir, EcgWearContract.inboxFileName(sessionId))
-        file.writeBytes(byteArrayOf(1, 2, 3))
+        val store = WatchEcgStore(watchDir)
+        val file = store.save(sessionId, byteArrayOf(1, 2, 3))
         val fromCompanionStyle = EcgWearContract.sessionIdFromFileName("ecg_42")
         assertThat(fromCompanionStyle).isEqualTo(sessionId)
-        assertThat(File(watchDir, EcgWearContract.inboxFileName(fromCompanionStyle)).delete()).isTrue()
-        assertThat(file.exists()).isFalse()
+        assertThat(store.markSynced(fromCompanionStyle)).isTrue()
+        assertThat(file.exists()).isTrue()
+        assertThat(store.listPendingGzipFiles()).isEmpty()
     }
 
     @Test

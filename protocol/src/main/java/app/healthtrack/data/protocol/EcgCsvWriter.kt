@@ -17,7 +17,7 @@ data class HrStamp(
  *
  * Sample clock is `i * 1000 / srHz`. Heart-rate stamps are absolute epoch millis.
  * Rows before the first HR are dropped; remaining rows are shifted so the first
- * kept sample is `rel_ms = 0` and `ts_start` is the first HR timestamp.
+ * kept sample is `rel_ms = 0` and `ts_start` is that sample's actual timestamp.
  */
 object EcgCsvWriter {
 
@@ -58,36 +58,43 @@ object EcgCsvWriter {
         srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
     ): ByteArray {
         val rate = max(1, srHz)
-        val sortedHr = hrStamps.sortedBy { it.epochMs }
+        val sortedHr = normalizeHrStamps(hrStamps)
         val hrEmpty = sortedHr.isEmpty()
-        val firstHrEpoch = if (hrEmpty) sessionStartMs else sortedHr[0].epochMs
-        val dropBeforeRel = if (hrEmpty) 0L else max(0L, firstHrEpoch - sessionStartMs)
+        val alignmentEpoch = if (hrEmpty) {
+            sessionStartMs
+        } else {
+            max(sessionStartMs, sortedHr[0].epochMs)
+        }
+        val dropBeforeRel = alignmentEpoch - sessionStartMs
         val hrEpochs = LongArray(sortedHr.size) { sortedHr[it].epochMs }
         val hrBpms = IntArray(sortedHr.size) { sortedHr[it].bpm }
 
         var dropped = 0
         var withHr = 0
         val kept = ArrayList<EcgSample>(valuesMv.size)
+        var firstKeptRelMs: Long? = null
         for (i in valuesMv.indices) {
             val relMs = i.toLong() * 1000L / rate
             if (relMs < dropBeforeRel) {
                 dropped++
                 continue
             }
+            val origin = firstKeptRelMs ?: relMs.also { firstKeptRelMs = it }
             val hr = lookupHr(hrEpochs, hrBpms, sessionStartMs + relMs)
             if (hr != null) withHr++
-            kept.add(EcgSample(relMs - dropBeforeRel, valuesMv[i], hr))
+            kept.add(EcgSample(relMs - origin, valuesMv[i], hr))
         }
         if (kept.isEmpty()) {
             throw EcgParseException("No ECG samples after HR alignment")
         }
-        val coverage = if (kept.isEmpty()) 0.0 else withHr * 100.0 / kept.size
+        val actualStartMs = sessionStartMs + checkNotNull(firstKeptRelMs)
+        val coverage = withHr * 100.0 / kept.size
         val body = buildString {
             append(metaLine(
                 srHz = rate,
                 unit = "mV",
-                tsStartMs = firstHrEpoch,
-                hrStartRelMs = if (hrEmpty) dropBeforeRel else 0L,
+                tsStartMs = actualStartMs,
+                hrStartRelMs = 0L,
                 droppedBeforeHr = dropped,
                 rowsWithHrPct = coverage,
                 watchInfo = watchInfo,
@@ -117,6 +124,19 @@ object EcgCsvWriter {
         var idx = Arrays.binarySearch(epochs, atEpoch)
         if (idx < 0) idx = -idx - 2
         return if (idx >= 0) bpms[idx] else null
+    }
+
+    /** Sorts stamps and makes duplicate timestamps deterministic: the latest value wins. */
+    private fun normalizeHrStamps(stamps: List<HrStamp>): List<HrStamp> {
+        val normalized = ArrayList<HrStamp>(stamps.size)
+        stamps.sortedBy(HrStamp::epochMs).forEach { stamp ->
+            if (normalized.lastOrNull()?.epochMs == stamp.epochMs) {
+                normalized[normalized.lastIndex] = stamp
+            } else {
+                normalized.add(stamp)
+            }
+        }
+        return normalized
     }
 
     private fun appendRow(out: StringBuilder, sample: EcgSample) {
@@ -155,6 +175,23 @@ object EcgCsvWriter {
         }
     }
 
-    internal fun escape(raw: String): String =
-        raw.replace("\\", "\\\\").replace("\"", "\\\"")
+    internal fun escape(raw: String): String = buildString(raw.length) {
+        raw.forEach { char ->
+            when (char) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\b' -> append("\\b")
+                '\u000c' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (char.code < 0x20) {
+                    append("\\u")
+                    append(char.code.toString(16).padStart(4, '0'))
+                } else {
+                    append(char)
+                }
+            }
+        }
+    }
 }

@@ -8,15 +8,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val dayFormat = SimpleDateFormat("EEE d MMM", Locale.getDefault())
-private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-private val stampFormat = SimpleDateFormat("d MMM yyyy · HH:mm", Locale.getDefault())
+private fun formatDate(pattern: String, epochMs: Long): String =
+    SimpleDateFormat(pattern, Locale.getDefault()).format(Date(epochMs))
 
-fun EcgSession.dayLabel(): String = dayFormat.format(Date(tsStartMs))
+fun EcgSession.dayLabel(): String = formatDate("EEE d MMM", tsStartMs)
 
-fun EcgSession.timeLabel(): String = timeFormat.format(Date(tsStartMs))
+fun EcgSession.timeLabel(): String = formatDate("HH:mm", tsStartMs)
 
-fun EcgSession.stampLabel(): String = stampFormat.format(Date(tsStartMs))
+fun EcgSession.stampLabel(): String = formatDate("d MMM yyyy · HH:mm", tsStartMs)
 
 fun EcgSession.durationLabel(): String {
     val total = durationSec.toInt().coerceAtLeast(0)
@@ -28,25 +27,28 @@ fun EcgSession.durationLabel(): String {
 fun EcgSession.hrLabel(): String = hrMedian?.let { "${it.toInt()}" } ?: "—"
 
 fun EcgSession.naoTitle(): String {
+    if (analysisStatus == AnalysisStatus.LOW_QUALITY) return "Low quality"
+    if (analysisStatus == AnalysisStatus.PENDING) return "Analysing…"
+    if (analysisStatus == AnalysisStatus.FAILED) return "Not analysed"
+    if (analysisStatus != AnalysisStatus.OK) return "—"
     val parsed = naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
-    return when {
-        parsed != null -> when (parsed) {
+    return when (parsed) {
             NaoLabel.N -> "Normal"
             NaoLabel.A -> "Possible AF"
             NaoLabel.O -> "Other rhythm"
-        }
-        analysisStatus == AnalysisStatus.PENDING -> "Analysing…"
-        analysisStatus == AnalysisStatus.FAILED -> "Not analysed"
-        else -> "—"
+            null -> "—"
     }
 }
 
 fun EcgSession.naoConfidenceLabel(): String {
+    if (analysisStatus != AnalysisStatus.OK) return ""
     val value = naoConfidence ?: return ""
+    if (!value.isFinite()) return ""
     return "${(value * 100).toInt()}%"
 }
 
 fun EcgSession.findingRows(): List<Pair<String, String>> {
+    if (analysisStatus != AnalysisStatus.OK) return emptyList()
     return EcgFounderLabels.decodeFindings(findings).map { item ->
         item.name.lowercase().replaceFirstChar { it.titlecase() } to
             "${(item.score * 100).toInt()}%"

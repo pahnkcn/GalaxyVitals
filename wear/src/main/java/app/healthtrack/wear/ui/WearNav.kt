@@ -1,12 +1,15 @@
 package app.healthtrack.wear.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.navigation3.SwipeDismissableSceneStrategy
@@ -22,11 +25,19 @@ sealed interface WearRoute {
 fun WearRoot() {
     val backStack = remember { mutableStateListOf<WearRoute>(WearRoute.Home) }
     val homeVm: HomeViewModel = viewModel()
+    val current = backStack.last()
+    LaunchedEffect(current) {
+        if (current is WearRoute.Home) homeVm.refresh()
+    }
     AppScaffold {
         NavDisplay(
             backStack = backStack,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
             sceneStrategy = SwipeDismissableSceneStrategy(),
+            entryDecorators = listOf(
+                rememberSaveableStateHolderNavEntryDecorator(),
+                rememberViewModelStoreNavEntryDecorator(),
+            ),
             entryProvider = { key ->
                 when (key) {
                     WearRoute.Home -> NavEntry(key) {
@@ -46,6 +57,7 @@ fun WearRoot() {
                             state = state,
                             onStartSamsung = measureVm::startSamsung,
                             onStartDemo = measureVm::startDemo,
+                            onCancel = measureVm::cancelRecording,
                             onDone = {
                                 backStack.removeLastOrNull()
                                 homeVm.refresh()

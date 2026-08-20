@@ -23,6 +23,7 @@ fun MeasureScreen(
     state: MeasureUiState,
     onStartSamsung: () -> Unit,
     onStartDemo: () -> Unit,
+    onCancel: () -> Unit,
     onDone: () -> Unit,
 ) {
     LaunchedEffect(Unit) {
@@ -58,6 +59,9 @@ fun MeasureScreen(
                         textAlign = TextAlign.Center,
                     )
                     state.hrBpm?.let { Text("$it bpm", color = MaterialTheme.colorScheme.primary) }
+                    Button(onClick = onStartDemo, modifier = Modifier.fillMaxWidth()) {
+                        Text("Record demo")
+                    }
                 }
                 MeasurePhase.Recording -> {
                     Text(
@@ -67,9 +71,32 @@ fun MeasureScreen(
                     )
                     state.hrBpm?.let { Text("$it bpm", style = MaterialTheme.typography.bodySmall) }
                     EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+                    Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                        Text("Cancel")
+                    }
+                }
+                MeasurePhase.Saving -> {
+                    CircularProgressIndicator()
+                    Text(
+                        "Keeping this recording safe",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
                 }
                 MeasurePhase.Success -> {
-                    Text("On your phone", color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        if (state.error == null) "On your phone" else "Saved on watch",
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    state.error?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
                         Text("Done")
                     }

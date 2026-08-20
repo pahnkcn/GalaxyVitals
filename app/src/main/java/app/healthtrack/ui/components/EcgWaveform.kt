@@ -1,14 +1,20 @@
 package app.healthtrack.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -33,16 +39,16 @@ fun EcgWaveform(
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableFloatStateOf(0f) }
 
+    Column(modifier.fillMaxWidth()) {
     Canvas(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .height(if (interactive) 220.dp else 96.dp)
             .then(
                 if (interactive) {
                     Modifier.pointerInput(samples) {
-                        detectTransformGestures { _, panChange, zoom, _ ->
-                            scale = (scale * zoom).coerceIn(1f, 12f)
-                            pan += panChange.x
+                        detectHorizontalDragGestures { _, dragAmount ->
+                            pan += dragAmount
                         }
                     }
                 } else {
@@ -91,6 +97,18 @@ fun EcgWaveform(
             color = Pulse,
             style = Stroke(width = 3f, cap = StrokeCap.Round),
         )
+    }
+        if (interactive) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { scale = (scale / 1.6f).coerceAtLeast(1f) }) { Text("–") }
+                TextButton(onClick = { scale = 1f; pan = 0f }) { Text("Reset") }
+                TextButton(onClick = { scale = (scale * 1.6f).coerceAtMost(12f) }) { Text("+") }
+            }
+        }
     }
 }
 

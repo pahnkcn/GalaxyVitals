@@ -1,10 +1,7 @@
 package app.healthtrack.wear.ui
 
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
@@ -15,7 +12,6 @@ import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppCard
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.EdgeButton
 import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.ListHeaderDefaults
 import androidx.wear.compose.material3.MaterialTheme
@@ -36,22 +32,7 @@ fun HomeScreen(
     LaunchedEffect(Unit) { onRefresh() }
     val columnState = rememberTransformingLazyColumnState()
     val transformationSpec = rememberTransformationSpec()
-    ScreenScaffold(
-        scrollState = columnState,
-        edgeButton = {
-            EdgeButton(
-                onClick = onStart,
-                modifier = Modifier.scrollable(
-                    columnState,
-                    orientation = Orientation.Vertical,
-                    reverseDirection = true,
-                    overscrollEffect = rememberOverscrollEffect(),
-                ),
-            ) {
-                Text("Start ECG")
-            }
-        },
-    ) { contentPadding ->
+    ScreenScaffold(scrollState = columnState) { contentPadding ->
         TransformingLazyColumn(
             state = columnState,
             contentPadding = contentPadding,
@@ -79,6 +60,18 @@ fun HomeScreen(
                         .transformedHeight(this, transformationSpec)
                         .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding),
                 )
+            }
+            item {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .transformedHeight(this, transformationSpec)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding),
+                    transformation = SurfaceTransformation(transformationSpec),
+                ) {
+                    Text("Start ECG", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             item {
                 AppCard(

@@ -26,7 +26,7 @@ class MainWearActivity : ComponentActivity() {
                 add("android.permission.health.READ_HEART_RATE")
             }
         }.toTypedArray()
-        permissionLauncher.launch(needed)
+        if (savedInstanceState == null) permissionLauncher.launch(needed)
         (application as WearApplication).container.samsungSensor.attach(this)
         setContent {
             HealthTrackWearTheme {

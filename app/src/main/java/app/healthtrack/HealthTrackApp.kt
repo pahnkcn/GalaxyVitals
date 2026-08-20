@@ -15,10 +15,10 @@ class HealthTrackApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         appScope.launch {
-            val ids = container.ecgRepository.ingestPendingInbox()
-            ids.forEach { sessionId ->
-                runCatching { container.wearSyncClient.sendCleanup(sessionId) }
-            }
+            // Recover canonical files left between an atomic write and the Room commit.
+            // Do not acknowledge the watch here: only the listener can first delete the
+            // corresponding replicated DataItem and knows the original remote session ID.
+            container.ecgRepository.ingestPendingInbox()
         }
     }
 }

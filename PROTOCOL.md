@@ -23,8 +23,12 @@ Samsung ECG is a privileged tracker. Without a partner-whitelisted package (and
 the official client AAR), the watch falls back to a demo trace that still uses
 this file + Data Layer contract.
 
-GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. The watch
-deletes `ecg_{sessionId}.csv.gz` on cleanup (not `{sessionId}.csv.gz`).
+GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
+message creates the exact acknowledgement marker
+`ecg_{sessionId}.csv.gz.synced`; it does not immediately delete the recording.
+`syncNow` uploads only gzip files without this marker. When trimming local
+history, the watch may remove acknowledged recordings older than the newest
+eight entries, but it never prunes an unacknowledged recording.
 
 The phone then runs ECGFounder 1-lead locally on 10 s windows at 500 Hz and
 stores an N / A / O screen with the top model findings. That step is analysis,
@@ -100,8 +104,8 @@ DataItems.
 
 | Path | Direction | Purpose |
 |---|---|---|
-| `/rpc/req/{nodeId}/syncNow` | phone → watch | ask watch to re-push inbox files |
-| `/ecg/cleanup/{sessionId}` | phone → watch | delete watch copy after ingest |
+| `/rpc/req/{nodeId}/syncNow` | phone → watch | ask watch to re-push unacknowledged inbox files |
+| `/ecg/cleanup/{sessionId}` | phone → watch | mark that exact watch copy acknowledged after ingest |
 | `/ecg/ack/{sessionId}` | watch → phone | ack |
 | `/ecg/result/{sessionId}` | phone → watch | JSON summary |
 | `/ecg/delete/{sessionId}` | either | delete one |

@@ -55,6 +55,78 @@ class EcgCsvWriterTest {
     }
 
     @Test
+    fun heartRateBeforeCaptureDoesNotMoveStartBackwards() {
+        val start = 1_000L
+        val encoded = EcgCsvWriter.encodeCapture(
+            sessionStartMs = start,
+            valuesMv = floatArrayOf(0.1f, 0.2f),
+            hrStamps = listOf(HrStamp(start - 100L, 70)),
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            watchInfo = "test",
+        )
+
+        val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "before")
+
+        assertThat(parsed.tsStartMs).isEqualTo(start)
+        assertThat(parsed.samples.first().relMs).isEqualTo(0L)
+        assertThat(parsed.samples.first().hrBpm).isEqualTo(70)
+    }
+
+    @Test
+    fun nonGridHeartRateStartUsesActualFirstSampleEpoch() {
+        val start = 10_000L
+        val encoded = EcgCsvWriter.encodeCapture(
+            sessionStartMs = start,
+            valuesMv = FloatArray(60) { it / 100f },
+            hrStamps = listOf(HrStamp(start + 101L, 72)),
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            watchInfo = "test",
+        )
+
+        val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "grid")
+
+        assertThat(parsed.tsStartMs).isEqualTo(start + 102L)
+        assertThat(parsed.samples.first().relMs).isEqualTo(0L)
+        assertThat(parsed.samples.first().hrBpm).isEqualTo(72)
+    }
+
+    @Test
+    fun duplicateHeartRateTimestampUsesLastValue() {
+        val start = 1_000L
+        val encoded = EcgCsvWriter.encodeCapture(
+            sessionStartMs = start,
+            valuesMv = floatArrayOf(0.1f, 0.2f),
+            hrStamps = listOf(HrStamp(start, 60), HrStamp(start, 75)),
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            watchInfo = "test",
+        )
+
+        val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "duplicate")
+
+        assertThat(parsed.samples.first().hrBpm).isEqualTo(75)
+    }
+
+    @Test
+    fun metadataEscapesJsonControlCharacters() {
+        val watchInfo = "line 1\nline 2\t\u0001"
+        val encoded = EcgCsvWriter.encodeCapture(
+            sessionStartMs = 1_000L,
+            valuesMv = floatArrayOf(0.1f),
+            hrStamps = emptyList(),
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            watchInfo = watchInfo,
+        )
+
+        val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "escaped")
+
+        assertThat(parsed.watchInfo).isEqualTo(watchInfo)
+    }
+
+    @Test
     fun parsedRoundTripPreservesRows() {
         val original = EcgCsvParser.parseBytes(
             """

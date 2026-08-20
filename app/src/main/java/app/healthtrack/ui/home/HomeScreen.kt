@@ -99,10 +99,6 @@ fun HomeScreen(
         }
 
         BloodPressureStub(onOpen = onOpenBp)
-
-        state.message?.let {
-            Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall)
-        }
         Spacer(Modifier.height(24.dp))
     }
 }

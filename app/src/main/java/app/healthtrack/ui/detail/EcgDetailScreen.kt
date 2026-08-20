@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,6 +25,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -55,8 +60,26 @@ fun EcgDetailScreen(
     onDelete: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(session?.sessionId) {
         session?.sessionId?.let(onLoad)
+    }
+    if (confirmDelete && session != null) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete recording?") },
+            text = { Text("This removes the waveform from this phone. It cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(session.sessionId)
+                    confirmDelete = false
+                    onBack()
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+            },
+        )
     }
     Column(modifier.fillMaxSize()) {
         TopAppBar(
@@ -68,18 +91,14 @@ fun EcgDetailScreen(
             },
             actions = {
                 if (session != null) {
-                    TextButton(onClick = {
-                        onDelete(session.sessionId)
-                        onBack()
-                    }) { Text("Delete") }
+                    TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         )
         if (session == null) {
             Text("Recording missing", modifier = Modifier.padding(20.dp))
-            return
-        }
+        } else {
         Column(
             Modifier
                 .verticalScroll(rememberScrollState())
@@ -100,7 +119,7 @@ fun EcgDetailScreen(
                     .padding(8.dp),
             )
             Text(
-                "Pinch to zoom · drag to pan · ${session.srHz} Hz · ${session.unit}",
+                "Drag to pan · use + / – to zoom · ${session.srHz} Hz · ${session.unit}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
@@ -125,15 +144,18 @@ fun EcgDetailScreen(
             )
             Spacer(Modifier.height(32.dp))
         }
+        }
     }
 }
 
 @Composable
 private fun AnalysisCard(session: EcgSession) {
     val nao = session.naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
-    val tint = when (nao) {
-        NaoLabel.A -> Danger
-        NaoLabel.O -> Amber
+    val tint = when {
+        session.analysisStatus == AnalysisStatus.FAILED -> Danger
+        session.analysisStatus == AnalysisStatus.LOW_QUALITY -> Amber
+        nao == NaoLabel.A -> Danger
+        nao == NaoLabel.O -> Amber
         else -> Mint
     }
     Column(
@@ -152,9 +174,10 @@ private fun AnalysisCard(session: EcgSession) {
                 fontWeight = FontWeight.SemiBold,
                 color = tint,
             )
-            if (session.naoConfidence != null) {
+            val confidence = session.naoConfidenceLabel()
+            if (confidence.isNotEmpty()) {
                 Text(
-                    session.naoConfidenceLabel(),
+                    confidence,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
@@ -164,8 +187,9 @@ private fun AnalysisCard(session: EcgSession) {
         val body = when (session.analysisStatus) {
             AnalysisStatus.PENDING -> "Running ECGFounder on this recording…"
             AnalysisStatus.FAILED -> session.analysisNote.ifBlank { "Analysis failed." }
-            AnalysisStatus.LOW_QUALITY ->
-                (nao?.shortHelp() ?: "Low-quality strip.") + " ${session.analysisNote}"
+            AnalysisStatus.LOW_QUALITY -> session.analysisNote.ifBlank {
+                "The strip quality is too low for a rhythm result."
+            }
             AnalysisStatus.OK -> nao?.shortHelp() ?: "Analysis complete."
             AnalysisStatus.NONE -> "No analysis yet."
         }

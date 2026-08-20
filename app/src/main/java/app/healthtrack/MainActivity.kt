@@ -11,7 +11,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.healthtrack.ui.HealthTrackRoot
 import app.healthtrack.ui.HealthTrackViewModel
@@ -19,17 +25,12 @@ import app.healthtrack.ui.theme.HealthTrackTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: HealthTrackViewModel by viewModels()
+    private var pendingExternalImport by mutableStateOf<Uri?>(null)
 
     private val importDoc = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
         if (uri != null) {
-            runCatching {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
-            }
             viewModel.importUri(uri)
         }
     }
@@ -41,19 +42,45 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33) {
+        if (Build.VERSION.SDK_INT >= 33 && savedInstanceState == null) {
             notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        handleShare(intent)
+        if (savedInstanceState == null) handleShare(intent)
         setContent {
             HealthTrackTheme {
                 Surface(Modifier.fillMaxSize()) {
                     HealthTrackRoot(
                         viewModel = viewModel,
                         onImport = {
-                            importDoc.launch(arrayOf("application/gzip", "application/octet-stream", "text/csv", "*/*"))
+                            // DocumentsUI often filters by the first type only.
+                            // ECG files may be gzip, csv, or octet-stream depending on name.
+                            importDoc.launch(arrayOf("*/*"))
                         },
                     )
+                    pendingExternalImport?.let { uri ->
+                        AlertDialog(
+                            onDismissRequest = { pendingExternalImport = null },
+                            title = { Text("Import ECG recording?") },
+                            text = {
+                                Text(
+                                    "Only import a file you trust. GalaxyBridge will validate and copy it into private storage.",
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        pendingExternalImport = null
+                                        viewModel.importUri(uri)
+                                    },
+                                ) { Text("Import") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { pendingExternalImport = null }) {
+                                    Text("Cancel")
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -61,6 +88,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleShare(intent)
     }
 
@@ -75,6 +103,6 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_VIEW -> intent.data
             else -> null
         }
-        uri?.let(viewModel::importUri)
+        pendingExternalImport = uri
     }
 }

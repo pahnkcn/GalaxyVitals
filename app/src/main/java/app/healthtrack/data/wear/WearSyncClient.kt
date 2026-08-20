@@ -4,6 +4,7 @@ import android.content.Context
 import app.healthtrack.data.protocol.EcgWearContract
 import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
 
 data class WearLinkStatus(
@@ -29,11 +30,13 @@ class WearSyncClient(context: Context) {
                     "Connected to ${nodes.size} node(s) with the same application id."
                 },
             )
-        } catch (t: Throwable) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
             WearLinkStatus(
                 available = false,
                 nodes = emptyList(),
-                note = t.message ?: "Wearable API unavailable",
+                note = "Wearable API unavailable.",
             )
         }
     }
@@ -51,11 +54,12 @@ class WearSyncClient(context: Context) {
     }
 
     suspend fun sendCleanup(sessionId: String) {
+        val safeSessionId = EcgWearContract.requireSessionId(sessionId)
         val nodes = nodeClient.connectedNodes.await()
         nodes.forEach { node ->
             messageClient.sendMessage(
                 node.id,
-                EcgWearContract.cleanupPath(sessionId),
+                EcgWearContract.cleanupPath(safeSessionId),
                 byteArrayOf(1),
             ).await()
         }

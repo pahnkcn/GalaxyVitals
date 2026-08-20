@@ -1,5 +1,6 @@
 package app.healthtrack.wear.sync
 
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import app.healthtrack.data.protocol.EcgWearContract
@@ -12,13 +13,19 @@ class WatchWearListenerService : WearableListenerService() {
         val path = messageEvent.path
         when {
             path.startsWith(EcgWearContract.CLEANUP_PREFIX) -> {
-                val sessionId = EcgWearContract.sessionIdFromFileName(
-                    path.removePrefix(EcgWearContract.CLEANUP_PREFIX),
-                )
-                WatchEcgStore(this).delete(sessionId)
+                val acknowledged = path.removePrefix(EcgWearContract.CLEANUP_PREFIX)
+                try {
+                    WatchEcgStore(this).apply {
+                        if (markSynced(acknowledged)) pruneAcknowledgedHistory()
+                    }
+                } catch (_: Exception) {
+                    // Ignore malformed or stale acknowledgements; pending data remains untouched.
+                }
             }
             isSyncNow(path) -> {
-                WorkManager.getInstance(this).enqueue(
+                WorkManager.getInstance(this).enqueueUniqueWork(
+                    SyncInboxWorker.UNIQUE_WORK_NAME,
+                    ExistingWorkPolicy.KEEP,
                     OneTimeWorkRequestBuilder<SyncInboxWorker>().build(),
                 )
             }

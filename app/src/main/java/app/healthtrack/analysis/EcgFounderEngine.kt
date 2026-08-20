@@ -1,6 +1,7 @@
 package app.healthtrack.analysis
 
 import android.content.Context
+import android.util.AtomicFile
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -14,6 +15,7 @@ import app.healthtrack.domain.AnalysisStatus
 import java.io.File
 import java.nio.FloatBuffer
 import java.util.Collections
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
 data class AnalysisResult(
@@ -28,16 +30,32 @@ class EcgFounderEngine(private val context: Context) {
     private val head: NaoLinearHead? = NaoCalibrator.load(context)
 
     fun analyze(parsed: ParsedEcgFile): AnalysisResult {
+        if (parsed.samples.size < parsed.srHz * MIN_ANALYSIS_SECONDS ||
+            parsed.durationSec < MIN_ANALYSIS_DURATION_SECONDS
+        ) {
+            return AnalysisResult(
+                status = AnalysisStatus.LOW_QUALITY,
+                decision = null,
+                note = "Recording is too short for a rhythm result",
+            )
+        }
         val windows = EcgFounderPreprocess.windows(parsed.samples, parsed.srHz)
-        val quality = EcgFounderPreprocess.quality(windows, parsed.usablePct)
-        val session = session() ?: return AnalysisResult(
-            status = AnalysisStatus.FAILED,
-            decision = null,
-            note = "ECGFounder model is not installed. Run tools/ecgfounder/export_ecgfounder.py",
-        )
         if (windows.isEmpty()) {
             return AnalysisResult(AnalysisStatus.FAILED, null, "No ECG samples to analyse")
         }
+        val quality = EcgFounderPreprocess.quality(windows, parsed.usablePct)
+        if (!quality.usable) {
+            return AnalysisResult(
+                status = AnalysisStatus.LOW_QUALITY,
+                decision = null,
+                note = quality.reason,
+            )
+        }
+        val session = session() ?: return AnalysisResult(
+            status = AnalysisStatus.FAILED,
+            decision = null,
+            note = "Rhythm model is not installed in this build.",
+        )
         val acc = FloatArray(EcgFounderLabels.ALL.size)
         for (window in windows) {
             val probs = infer(session, window.samples)
@@ -50,13 +68,6 @@ class EcgFounderEngine(private val context: Context) {
         } else {
             EcgFounderLabels.decide(acc)
         }
-        if (!quality.usable) {
-            return AnalysisResult(
-                status = AnalysisStatus.LOW_QUALITY,
-                decision = decision,
-                note = quality.reason,
-            )
-        }
         return AnalysisResult(
             status = AnalysisStatus.OK,
             decision = decision,
@@ -66,26 +77,59 @@ class EcgFounderEngine(private val context: Context) {
 
     private fun qualityNote(quality: SignalQuality, windowCount: Int): String {
         val headNote = if (head != null) "calibrated N/A/O" else "rule N/A/O"
-        return "ECGFounder 1-lead · $headNote · $windowCount window(s) · RMS ${"%.3f".format(quality.rms)} mV"
+        return "ECGFounder 1-lead · $headNote · $windowCount window(s) · RMS ${"%.3f".format(Locale.ROOT, quality.rms)} mV"
     }
 
     @Synchronized
     private fun session(): OrtSession? {
+        val file = ensureModelFile() ?: return null
         sessionRef.get()?.let { return it }
-        val file = File(context.filesDir, "ecgfounder_1lead.onnx")
-        if (!file.exists() || file.length() == 0L) {
-            runCatching {
-                context.assets.open(MODEL_ASSET).use { input ->
-                    file.outputStream().use { output -> input.copyTo(output) }
-                }
-            }.getOrElse { return null }
+        val created = try {
+            OrtSession.SessionOptions().use { opts ->
+                opts.setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
+                env.createSession(file.absolutePath, opts)
+            }
+        } catch (error: Exception) {
+            file.delete()
+            throw error
         }
-        if (!file.exists() || file.length() == 0L) return null
-        val opts = OrtSession.SessionOptions()
-        opts.setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
-        val created = env.createSession(file.absolutePath, opts)
         sessionRef.set(created)
         return created
+    }
+
+    private fun ensureModelFile(): File? {
+        val dest = File(context.filesDir, "ecgfounder_1lead.onnx")
+        val assetLen = try {
+            context.assets.openFd(MODEL_ASSET).use { it.length }
+        } catch (_: Exception) {
+            -1L
+        }
+        if (assetLen <= 0L) {
+            sessionRef.getAndSet(null)?.close()
+            return null
+        }
+        val stale = !dest.exists() || dest.length() == 0L ||
+            dest.length() != assetLen
+        if (stale) {
+            sessionRef.getAndSet(null)?.close()
+            try {
+                dest.parentFile?.mkdirs()
+                context.assets.open(MODEL_ASSET).use { input ->
+                    val atomic = AtomicFile(dest)
+                    val output = atomic.startWrite()
+                    try {
+                        input.copyTo(output)
+                        atomic.finishWrite(output)
+                    } catch (error: Exception) {
+                        atomic.failWrite(output)
+                        throw error
+                    }
+                }
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return dest.takeIf { it.exists() && it.length() > 0L }
     }
 
     private fun infer(session: OrtSession, window: FloatArray): FloatArray {
@@ -94,7 +138,14 @@ class EcgFounderEngine(private val context: Context) {
         tensor.use {
             session.run(Collections.singletonMap("ecg", it)).use { result ->
                 val raw = result[0].value
-                return flattenProbs(raw)
+                val probabilities = flattenProbs(raw)
+                check(probabilities.size == EcgFounderLabels.ALL.size) {
+                    "Unexpected ECGFounder output size: ${probabilities.size}"
+                }
+                check(probabilities.all { it.isFinite() && it in 0f..1f }) {
+                    "ECGFounder returned an invalid probability"
+                }
+                return probabilities
             }
         }
     }
@@ -106,16 +157,18 @@ class EcgFounderEngine(private val context: Context) {
                 when (first) {
                     is FloatArray -> first
                     is Array<*> -> flattenProbs(first)
-                    else -> FloatArray(EcgFounderLabels.ALL.size)
+                    else -> error("Unexpected ECGFounder output element type")
                 }
             }
             is FloatArray -> raw
-            else -> FloatArray(EcgFounderLabels.ALL.size)
+            else -> error("Unexpected ECGFounder output type")
         }
     }
 
     companion object {
         const val MODEL_ASSET = "ecg/ecgfounder_1lead.onnx"
+        private const val MIN_ANALYSIS_SECONDS = 5
+        private const val MIN_ANALYSIS_DURATION_SECONDS = 4.5
     }
 }
 

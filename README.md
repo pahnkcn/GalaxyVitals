@@ -45,7 +45,7 @@ A differently signed vendor watch app still cannot talk to this phone app.
   :app:assembleDebug :wear:assembleDebug
 ```
 
-Requires Android SDK 35. `local.properties` should set `sdk.dir`.
+Requires Android SDK 36. `local.properties` should set `sdk.dir`.
 
 ## Rhythm model
 
@@ -56,7 +56,10 @@ locally through ONNX Runtime. Convert the Hugging Face checkpoint once:
 py -3.12 tools/ecgfounder/export_ecgfounder.py --pth 1_lead_ECGFounder.pth
 ```
 
-Watch traces stay at 500 Hz. The analyser cuts 10 s windows, applies the official
+The ONNX asset is intentionally not committed; release builds fail fast until
+the verified exporter has provisioned it.
+
+Watch traces stay at 500 Hz. The analyser cuts 10 s windows, applies the configured
 band-pass / notch / z-score pipeline, then maps the 150 outputs to N / A / O.
 
 **Not a medical device.** Treat AF flags as a prompt to see a clinician.

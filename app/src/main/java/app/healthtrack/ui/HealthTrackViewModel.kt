@@ -5,9 +5,13 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.healthtrack.HealthTrackApp
+import app.healthtrack.data.userFacingImportError
 import app.healthtrack.data.wear.WearLinkStatus
+import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSample
 import app.healthtrack.domain.EcgSession
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +27,12 @@ data class HomeUiState(
     val busy: Boolean = false,
 )
 
+data class DetailSamplesUiState(
+    val sessionId: String? = null,
+    val samples: List<EcgSample> = emptyList(),
+    val loading: Boolean = false,
+)
+
 class HealthTrackViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as HealthTrackApp
     private val repo = app.container.ecgRepository
@@ -34,8 +44,10 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
     private val _home = MutableStateFlow(HomeUiState())
     val home: StateFlow<HomeUiState> = _home.asStateFlow()
 
-    private val _samples = MutableStateFlow<List<EcgSample>>(emptyList())
-    val samples: StateFlow<List<EcgSample>> = _samples.asStateFlow()
+    private val _detailSamples = MutableStateFlow(DetailSamplesUiState())
+    val detailSamples: StateFlow<DetailSamplesUiState> = _detailSamples.asStateFlow()
+    private var sampleLoadJob: Job? = null
+    private var wearRefreshJob: Job? = null
 
     init {
         // Drive Home from the same list History uses. Separate LIMIT 1 / COUNT
@@ -53,48 +65,54 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun refreshWear() {
-        viewModelScope.launch {
+        wearRefreshJob?.cancel()
+        wearRefreshJob = viewModelScope.launch {
             _home.value = _home.value.copy(wear = wear.status())
         }
     }
 
     fun importUri(uri: Uri) {
+        if (!beginBusy()) return
         viewModelScope.launch {
-            _home.value = _home.value.copy(busy = true, message = null)
             try {
                 val session = repo.importUri(uri)
                 _home.value = _home.value.copy(
-                    busy = false,
                     message = "Imported ${session.sessionId}",
                 )
-            } catch (t: Throwable) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Exception) {
                 _home.value = _home.value.copy(
-                    busy = false,
-                    message = t.message ?: "Import failed",
+                    message = userFacingImportError(t),
                 )
+            } finally {
+                _home.value = _home.value.copy(busy = false)
             }
         }
     }
 
     fun loadDemo() {
+        if (!beginBusy()) return
         viewModelScope.launch {
-            _home.value = _home.value.copy(busy = true, message = null)
             try {
                 repo.importDemo()
-                _home.value = _home.value.copy(busy = false, message = "Loaded a demo 500 Hz trace")
-            } catch (t: Throwable) {
-                _home.value = _home.value.copy(busy = false, message = t.message)
+                _home.value = _home.value.copy(message = "Loaded a demo 500 Hz trace")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Exception) {
+                _home.value = _home.value.copy(message = userFacingImportError(t))
+            } finally {
+                _home.value = _home.value.copy(busy = false)
             }
         }
     }
 
     fun requestSync() {
+        if (!beginBusy()) return
         viewModelScope.launch {
-            _home.value = _home.value.copy(busy = true, message = null)
             try {
                 val n = wear.requestSyncNow()
                 _home.value = _home.value.copy(
-                    busy = false,
                     message = if (n == 0) {
                         "No HealthTrack watch node. Install the watch app, or import a csv.gz."
                     } else {
@@ -102,24 +120,70 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
                     },
                     wear = wear.status(),
                 )
-            } catch (t: Throwable) {
-                _home.value = _home.value.copy(busy = false, message = t.message)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _home.value = _home.value.copy(message = "Watch sync failed.")
+            } finally {
+                _home.value = _home.value.copy(busy = false)
             }
         }
     }
 
     fun loadSamples(sessionId: String) {
-        viewModelScope.launch {
-            val session = repo.get(sessionId)
-            _samples.value = if (session == null) emptyList() else repo.loadSamples(session)
+        sampleLoadJob?.cancel()
+        _detailSamples.value = DetailSamplesUiState(sessionId = sessionId, loading = true)
+        sampleLoadJob = viewModelScope.launch {
+            try {
+                val existing = repo.get(sessionId)
+                if (existing?.analysisStatus in setOf(
+                        AnalysisStatus.NONE,
+                        AnalysisStatus.PENDING,
+                        AnalysisStatus.FAILED,
+                    )
+                ) {
+                    repo.reanalyze(sessionId)
+                }
+                val session = repo.get(sessionId)
+                val loaded = if (session == null) emptyList() else repo.loadSamples(session)
+                if (_detailSamples.value.sessionId == sessionId) {
+                    _detailSamples.value = DetailSamplesUiState(
+                        sessionId = sessionId,
+                        samples = loaded,
+                        loading = false,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (_detailSamples.value.sessionId == sessionId) {
+                    _detailSamples.value = DetailSamplesUiState(sessionId = sessionId)
+                }
+            }
         }
     }
 
     fun delete(sessionId: String) {
-        viewModelScope.launch { repo.delete(sessionId) }
+        if (_detailSamples.value.sessionId == sessionId) {
+            sampleLoadJob?.cancel()
+            sampleLoadJob = null
+            _detailSamples.value = DetailSamplesUiState()
+        }
+        viewModelScope.launch {
+            repo.delete(sessionId)
+        }
     }
 
     fun consumeMessage() {
         _home.value = _home.value.copy(message = null)
+    }
+
+    private fun beginBusy(): Boolean = synchronized(_home) {
+        if (_home.value.busy) {
+            false
+        } else {
+            _home.value = _home.value.copy(busy = true, message = null)
+            true
+        }
     }
 }

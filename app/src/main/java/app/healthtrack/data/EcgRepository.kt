@@ -2,6 +2,7 @@ package app.healthtrack.data
 
 import android.content.Context
 import android.net.Uri
+import android.util.AtomicFile
 import app.healthtrack.analysis.EcgFounderEngine
 import app.healthtrack.data.local.AppDatabase
 import app.healthtrack.data.local.EcgSessionEntity
@@ -14,12 +15,17 @@ import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSample
 import app.healthtrack.domain.EcgSession
 import app.healthtrack.domain.EcgSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 
 class EcgRepository(
     private val context: Context,
@@ -27,6 +33,7 @@ class EcgRepository(
     private val engine: EcgFounderEngine,
 ) {
     private val dao = db.ecgSessionDao()
+    private val ingestMutex = Mutex()
 
     fun observeSessions(): Flow<List<EcgSession>> = dao.observeAll().map { rows ->
         rows.map { it.toDomain() }
@@ -41,30 +48,53 @@ class EcgRepository(
     suspend fun loadSamples(session: EcgSession): List<EcgSample> = withContext(Dispatchers.IO) {
         val file = File(session.filePath)
         if (!file.exists()) return@withContext emptyList()
-        EcgCsvParser.parseFile(file, session.sessionId).samples
+        try {
+            EcgCsvParser.parseFile(file, session.sessionId).samples
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     suspend fun importUri(uri: Uri): EcgSession = withContext(Dispatchers.IO) {
-        val name = queryDisplayName(uri) ?: "ecg_import.csv.gz"
-        val sessionId = EcgWearContract.sessionIdFromFileName(name)
-        val gzip = name.endsWith(".gz", ignoreCase = true)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            val parsed = EcgCsvParser.parseStream(input, gzip, sessionId)
-            persist(parsed, EcgSource.IMPORT)
-        } ?: throw IllegalStateException("Unable to open $uri")
+        ingestMutex.withLock {
+            val name = queryDisplayName(uri) ?: "ecg_import.csv.gz"
+            val baseId = EcgWearContract.sanitizeSessionId(name, "import")
+            val sessionId = uniqueImportId(baseId)
+            val parsed = context.contentResolver.openInputStream(uri)?.use { input ->
+                EcgCsvParser.parseAutoStream(BufferedInputStream(input), sessionId)
+            } ?: throw IllegalStateException("Unable to open that file")
+            persistUnlocked(parsed, EcgSource.IMPORT)
+        }
     }
 
     suspend fun importDemo(): EcgSession = withContext(Dispatchers.IO) {
-        val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
-        val dest = File(inbox, EcgWearContract.inboxFileName("demo"))
-        dest.writeBytes(app.healthtrack.data.protocol.DemoEcg.gzipBytes())
-        ingestGzipFile(dest, "demo", EcgSource.IMPORT)
+        ingestMutex.withLock {
+            val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
+            val sessionId = uniqueImportId("demo")
+            val dest = File(inbox, EcgWearContract.inboxFileName(sessionId))
+            writeAtomic(dest, app.healthtrack.data.protocol.DemoEcg.gzipBytes())
+            val parsed = EcgCsvParser.parseFile(dest, sessionId)
+            persistUnlocked(parsed, EcgSource.IMPORT, keepFile = dest)
+        }
     }
 
     suspend fun ingestGzipFile(sourceFile: File, sessionId: String, source: EcgSource): EcgSession {
         return withContext(Dispatchers.IO) {
-            val parsed = EcgCsvParser.parseFile(sourceFile, sessionId)
-            persist(parsed, source, keepFile = sourceFile)
+            ingestMutex.withLock {
+                val safeSessionId = EcgWearContract.requireSessionId(sessionId)
+                var localSessionId = safeSessionId
+                if (source == EcgSource.WEAR) {
+                    localSessionId = wearLocalSessionId(safeSessionId)
+                    val existing = dao.get(localSessionId)
+                    if (existing?.source == EcgSource.WEAR.name && isValidStoredEcg(existing)) {
+                        return@withLock existing.toDomain()
+                    }
+                }
+                val parsed = EcgCsvParser.parseFile(sourceFile, localSessionId)
+                persistUnlocked(parsed, source, keepFile = sourceFile)
+            }
         }
     }
 
@@ -75,37 +105,69 @@ class EcgRepository(
         } ?: return@withContext emptyList()
         val ingested = ArrayList<String>(files.size)
         files.sortedBy { it.lastModified() }.forEach { file ->
-            val sessionId = EcgWearContract.sessionIdFromFileName(file.name)
-            if (sessionId.isBlank()) return@forEach
-            if (dao.get(sessionId) != null) return@forEach
-            runCatching {
+            val sessionId = runCatching {
+                EcgWearContract.sessionIdFromFileName(file.name)
+            }.getOrNull() ?: return@forEach
+            val existing = dao.get(sessionId)
+            if (existing != null) {
+                if (existing.source == EcgSource.WEAR.name) ingested += sessionId
+                return@forEach
+            }
+            try {
                 ingestGzipFile(file, sessionId, EcgSource.WEAR)
                 ingested += sessionId
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                val bad = File(file.parentFile, file.name + ".bad")
+                if (bad.exists()) bad.delete()
+                file.renameTo(bad)
             }
         }
         ingested
     }
 
-    suspend fun delete(sessionId: String) {
-        val entity = dao.get(sessionId)
-        dao.delete(sessionId)
-        entity?.filePath?.let { path ->
-            val file = File(path)
-            if (file.exists()) file.delete()
+    suspend fun reanalyze(sessionId: String): EcgSession? = withContext(Dispatchers.IO) {
+        ingestMutex.withLock {
+            val entity = dao.get(sessionId) ?: return@withLock null
+            val file = File(entity.filePath)
+            val analysed = try {
+                if (!file.exists()) throw IllegalStateException("ECG waveform is missing")
+                val parsed = EcgCsvParser.parseFile(file, sessionId)
+                analyze(entity, parsed)
+            } catch (err: Exception) {
+                failedAnalysis(entity, err)
+            }
+            dao.upsert(analysed)
+            analysed.toDomain()
         }
     }
 
-    private suspend fun persist(
+    suspend fun delete(sessionId: String) = withContext(Dispatchers.IO) {
+        ingestMutex.withLock {
+            val entity = dao.get(sessionId)
+            dao.delete(sessionId)
+            entity?.filePath?.let { path ->
+                val file = File(path)
+                val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).canonicalFile
+                if (file.canonicalFile.parentFile == inbox && file.exists()) file.delete()
+            }
+            Unit
+        }
+    }
+
+    private suspend fun persistUnlocked(
         parsed: ParsedEcgFile,
         source: EcgSource,
         keepFile: File? = null,
     ): EcgSession {
         val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
-        val dest = File(inbox, EcgWearContract.inboxFileName(parsed.sessionId))
+        val sessionId = EcgWearContract.requireSessionId(parsed.sessionId)
+        val dest = File(inbox, EcgWearContract.inboxFileName(sessionId))
         if (keepFile == null) {
             writeCanonical(dest, parsed)
         } else if (keepFile.canonicalPath != dest.canonicalPath) {
-            keepFile.copyTo(dest, overwrite = true)
+            writeCanonical(dest, parsed)
         }
         val entity = EcgSessionEntity.from(
             parsed = parsed,
@@ -114,14 +176,10 @@ class EcgRepository(
             now = System.currentTimeMillis(),
         )
         dao.upsert(entity)
-        val analysed = runCatching { analyze(entity, parsed) }.getOrElse { err ->
-            entity.withAnalysis(
-                status = AnalysisStatus.FAILED,
-                naoLabel = null,
-                naoConfidence = null,
-                findings = "",
-                note = err.message ?: "Analysis failed",
-            )
+        val analysed = try {
+            analyze(entity, parsed)
+        } catch (err: Exception) {
+            failedAnalysis(entity, err)
         }
         dao.upsert(analysed)
         return analysed.toDomain()
@@ -139,12 +197,77 @@ class EcgRepository(
         )
     }
 
+    private fun failedAnalysis(entity: EcgSessionEntity, error: Exception): EcgSessionEntity =
+        entity.withAnalysis(
+            status = AnalysisStatus.FAILED,
+            naoLabel = null,
+            naoConfidence = null,
+            findings = "",
+            note = userFacingAnalysisError(error),
+        )
+
     private fun writeCanonical(dest: File, parsed: ParsedEcgFile) {
-        // Keep the original bytes when possible. For stream imports we already consumed
-        // the stream, so persist a readable gzip of the parsed rows.
+        writeAtomic(
+            dest,
+            EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeParsed(parsed)),
+        )
+    }
+
+    private fun writeAtomic(dest: File, bytes: ByteArray) {
         dest.parentFile?.mkdirs()
-        FileOutputStream(dest).use { out ->
-            out.write(EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeParsed(parsed)))
+        val atomic = AtomicFile(dest)
+        val output: FileOutputStream = atomic.startWrite()
+        try {
+            output.write(bytes)
+            atomic.finishWrite(output)
+        } catch (error: Exception) {
+            atomic.failWrite(output)
+            throw error
+        }
+    }
+
+    private suspend fun uniqueImportId(baseId: String): String {
+        val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR)
+        var candidate = EcgWearContract.requireSessionId(baseId)
+        var attempt = 0
+        while (dao.get(candidate) != null ||
+            File(inbox, EcgWearContract.inboxFileName(candidate)).exists()
+        ) {
+            val suffix = "-${System.currentTimeMillis()}-${attempt++}"
+            candidate = EcgWearContract.requireSessionId(baseId.take(80 - suffix.length) + suffix)
+        }
+        return candidate
+    }
+
+    private suspend fun wearLocalSessionId(remoteSessionId: String): String {
+        val direct = dao.get(remoteSessionId)
+        if (direct == null || direct.source == EcgSource.WEAR.name) return remoteSessionId
+
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(remoteSessionId.toByteArray(Charsets.UTF_8))
+            .take(8)
+            .joinToString("") { byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+        repeat(MAX_WEAR_COLLISION_ATTEMPTS) { attempt ->
+            val suffix = "-wear-$digest" + if (attempt == 0) "" else "-$attempt"
+            val candidate = EcgWearContract.requireSessionId(
+                remoteSessionId.take(EcgWearContract.MAX_SESSION_ID_LENGTH - suffix.length) + suffix,
+            )
+            val existing = dao.get(candidate)
+            if (existing == null || existing.source == EcgSource.WEAR.name) return candidate
+        }
+        throw IllegalStateException("Unable to allocate a local Wear session id")
+    }
+
+    private fun isValidStoredEcg(entity: EcgSessionEntity): Boolean {
+        val file = File(entity.filePath)
+        if (!file.isFile) return false
+        return try {
+            EcgCsvParser.parseFile(file, entity.sessionId)
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -157,5 +280,40 @@ class EcgRepository(
             }
         }
         return uri.lastPathSegment
+    }
+
+    companion object {
+        private const val MAX_WEAR_COLLISION_ATTEMPTS = 32
+    }
+}
+
+internal fun userFacingImportError(error: Throwable): String {
+    val raw = error.message.orEmpty()
+    return when {
+        raw.contains("Empty file") -> "That file is empty."
+        raw.contains("Missing #meta") -> "Not an ECG recording (missing #meta header)."
+        raw.contains("No ECG samples") -> "That file has no ECG samples."
+        raw.contains("exceeds", ignoreCase = true) || raw.contains("too large", ignoreCase = true) ->
+            "That ECG file is too large."
+        raw.contains("sample rate", ignoreCase = true) ||
+            raw.contains("timestamp", ignoreCase = true) ||
+            raw.contains("session id", ignoreCase = true) ||
+            raw.contains("polarity", ignoreCase = true) ||
+            raw.contains("Unsupported ECG", ignoreCase = true) ->
+            "That file has invalid ECG metadata."
+        raw.contains("Not in GZIP", ignoreCase = true) ||
+            raw.contains("Invalid gzip", ignoreCase = true) ->
+            "That file is not a valid gzip ECG."
+        raw.contains("Unable to open") -> "Could not open that file."
+        else -> "Import failed."
+    }
+}
+
+internal fun userFacingAnalysisError(error: Throwable): String {
+    val raw = error.message.orEmpty()
+    return when {
+        raw.contains("ConvInteger") || raw.contains("ORT_NOT_IMPLEMENTED") ->
+            "Rhythm model could not run on this device."
+        else -> "Analysis failed."
     }
 }

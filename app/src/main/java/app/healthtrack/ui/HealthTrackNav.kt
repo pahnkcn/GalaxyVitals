@@ -56,7 +56,7 @@ fun HealthTrackRoot(
     val showBar = current is Route.Home || current is Route.History || current is Route.Settings
     val home by viewModel.home.collectAsStateWithLifecycle()
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
-    val samples by viewModel.samples.collectAsStateWithLifecycle()
+    val detailSamples by viewModel.detailSamples.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(home.message) {
@@ -76,7 +76,8 @@ fun HealthTrackRoot(
                             selected = current == tab.route,
                             onClick = {
                                 backStack.clear()
-                                backStack.add(tab.route)
+                                backStack.add(Route.Home)
+                                if (tab.route !is Route.Home) backStack.add(tab.route)
                                 if (tab.route is Route.Home) viewModel.refreshWear()
                             },
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
@@ -90,7 +91,7 @@ fun HealthTrackRoot(
         NavDisplay(
             backStack = backStack,
             modifier = Modifier.padding(padding),
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
             entryProvider = { key ->
                 when (key) {
                     Route.Home -> NavEntry(key) {
@@ -102,6 +103,7 @@ fun HealthTrackRoot(
                             onOpenEcg = { id -> backStack.add(Route.EcgDetail(id)) },
                             onOpenHistory = {
                                 backStack.clear()
+                                backStack.add(Route.Home)
                                 backStack.add(Route.History)
                             },
                             onImport = onImport,
@@ -117,13 +119,18 @@ fun HealthTrackRoot(
                         )
                     }
                     Route.Settings -> NavEntry(key) {
+                        LaunchedEffect(Unit) { viewModel.refreshWear() }
                         SettingsScreen(wear = home.wear)
                     }
                     is Route.EcgDetail -> NavEntry(key) {
                         val session: EcgSession? = sessions.firstOrNull { it.sessionId == key.sessionId }
                         EcgDetailScreen(
                             session = session,
-                            samples = samples,
+                            samples = if (detailSamples.sessionId == key.sessionId) {
+                                detailSamples.samples
+                            } else {
+                                emptyList()
+                            },
                             onLoad = viewModel::loadSamples,
                             onBack = { backStack.removeLastOrNull() },
                             onDelete = viewModel::delete,

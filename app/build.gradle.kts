@@ -55,9 +55,27 @@ android {
     }
 }
 
+val verifyEcgFounderModel by tasks.registering {
+    group = "verification"
+    description = "Fails release builds when the locally provisioned ECGFounder model is absent."
+    doLast {
+        val model = file("src/main/assets/ecg/ecgfounder_1lead.onnx")
+        if (!model.isFile || model.length() == 0L) {
+            throw GradleException(
+                "Missing ECGFounder ONNX asset. Run tools/ecgfounder/export_ecgfounder.py first.",
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyEcgFounderModel)
+}
+
 dependencies {
     implementation(project(":protocol"))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -73,7 +91,6 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)

@@ -1,5 +1,6 @@
 package app.healthtrack.analysis
 
+import app.healthtrack.data.protocol.EcgFounderLabels
 import android.content.Context
 import org.json.JSONObject
 
@@ -27,9 +28,14 @@ object NaoCalibrator {
             require(coefJson.length() == 3 && interceptJson.length() == 3)
             val coef = Array(3) { k ->
                 val row = coefJson.getJSONArray(k)
-                FloatArray(row.length()) { i -> row.getDouble(i).toFloat() }
+                require(row.length() == EcgFounderLabels.ALL.size)
+                FloatArray(row.length()) { i ->
+                    row.getDouble(i).toFloat().also { require(it.isFinite()) }
+                }
             }
-            val intercept = FloatArray(3) { interceptJson.getDouble(it).toFloat() }
+            val intercept = FloatArray(3) { index ->
+                interceptJson.getDouble(index).toFloat().also { require(it.isFinite()) }
+            }
             NaoLinearHead(coef, intercept)
         }.getOrNull()
     }

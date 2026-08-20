@@ -24,7 +24,11 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     fun attach(activity: Activity) {
         host = WeakReference(activity)
     }
+    private val connectionLock = Any()
+    @Volatile
     private var service: HealthTrackingService? = null
+    @Volatile
+    private var connectionToken = 0L
     private var hrTracker: HealthTracker? = null
     private var ecgTracker: HealthTracker? = null
     private var hrListening = false
@@ -32,16 +36,30 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
 
     override fun connect(onResult: (SensorAvailability) -> Unit) {
         disconnect()
+        val token = synchronized(connectionLock) { connectionToken }
+        lateinit var candidate: HealthTrackingService
         val listener = object : ConnectionListener {
             override fun onConnectionSuccess() {
-                val svc = service
-                if (svc == null) {
-                    onResult(unavailable("Health tracking service missing after connect."))
+                if (!isCurrentConnection(candidate, token)) {
+                    disconnectStale(candidate)
                     return
                 }
-                val supported = svc.getTrackingCapability().getSupportHealthTrackerTypes()
+                val supported = try {
+                    candidate.getTrackingCapability().getSupportHealthTrackerTypes()
+                } catch (error: RuntimeException) {
+                    deliverResult(
+                        candidate,
+                        token,
+                        onResult,
+                        unavailable(error.message ?: "Unable to read tracker capabilities."),
+                    )
+                    return
+                }
                 if (!supported.contains(HealthTrackerType.ECG_ON_DEMAND)) {
-                    onResult(
+                    deliverResult(
+                        candidate,
+                        token,
+                        onResult,
                         SensorAvailability(
                             kind = SensorKind.SAMSUNG,
                             ready = false,
@@ -51,23 +69,69 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                     )
                     return
                 }
-                hrTracker = if (supported.contains(HealthTrackerType.HEART_RATE_CONTINUOUS)) {
-                    svc.getHealthTracker(HealthTrackerType.HEART_RATE_CONTINUOUS)
-                } else {
-                    null
+                if (!supported.contains(HealthTrackerType.HEART_RATE_CONTINUOUS)) {
+                    deliverResult(
+                        candidate,
+                        token,
+                        onResult,
+                        SensorAvailability(
+                            kind = SensorKind.SAMSUNG,
+                            ready = false,
+                            reason = "HEART_RATE_CONTINUOUS is required for ECG recording.",
+                        ),
+                    )
+                    return
                 }
-                ecgTracker = svc.getHealthTracker(HealthTrackerType.ECG_ON_DEMAND)
-                onResult(SensorAvailability(SensorKind.SAMSUNG, ready = true))
+                val candidateHr: HealthTracker
+                val candidateEcg: HealthTracker
+                try {
+                    candidateHr = candidate.getHealthTracker(HealthTrackerType.HEART_RATE_CONTINUOUS)
+                    candidateEcg = candidate.getHealthTracker(HealthTrackerType.ECG_ON_DEMAND)
+                } catch (error: RuntimeException) {
+                    deliverResult(
+                        candidate,
+                        token,
+                        onResult,
+                        unavailable(error.message ?: "Unable to create Samsung trackers."),
+                    )
+                    return
+                }
+                val installed = synchronized(connectionLock) {
+                    if (connectionToken == token && service === candidate) {
+                        hrTracker = candidateHr
+                        ecgTracker = candidateEcg
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (!installed) {
+                    disconnectStale(candidate)
+                    return
+                }
+                deliverResult(
+                    candidate,
+                    token,
+                    onResult,
+                    SensorAvailability(SensorKind.SAMSUNG, ready = true),
+                )
             }
 
-            override fun onConnectionEnded() = Unit
+            override fun onConnectionEnded() {
+                main.post {
+                    if (isCurrentConnection(candidate, token)) {
+                        onResult(unavailable("Samsung Health connection ended."))
+                    }
+                }
+            }
 
             override fun onConnectionFailed(exception: HealthTrackerException) {
-                val activity = host.get()
-                if (exception.hasResolution() && activity != null && !activity.isFinishing) {
-                    runCatching { exception.resolve(activity) }
-                }
-                onResult(
+                // Never auto-resolve. resolve() opens Play Store / account setup on
+                // emulator and non-Samsung watches, covering the measure UI.
+                deliverResult(
+                    candidate,
+                    token,
+                    onResult,
                     SensorAvailability(
                         kind = SensorKind.SAMSUNG,
                         ready = false,
@@ -77,9 +141,20 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                 )
             }
         }
-        val svc = HealthTrackingService(listener, app)
-        service = svc
-        svc.connectService()
+        candidate = HealthTrackingService(listener, app)
+        val accepted = synchronized(connectionLock) {
+            if (connectionToken == token && service == null) {
+                service = candidate
+                true
+            } else {
+                false
+            }
+        }
+        if (!accepted) {
+            disconnectStale(candidate)
+            return
+        }
+        candidate.connectService()
     }
 
     override fun startHr(onHr: (bpm: Int, status: Int) -> Unit) {
@@ -128,20 +203,82 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     }
 
     override fun stop() {
-        runCatching {
-            if (hrListening) hrTracker?.unsetEventListener()
-            if (ecgListening) ecgTracker?.unsetEventListener()
+        val listeners = synchronized(connectionLock) {
+            ListenerHandles(
+                hr = hrTracker.takeIf { hrListening },
+                ecg = ecgTracker.takeIf { ecgListening },
+            ).also {
+                hrListening = false
+                ecgListening = false
+            }
         }
-        hrListening = false
-        ecgListening = false
+        stopListeners(listeners)
     }
 
     override fun disconnect() {
-        stop()
-        runCatching { service?.disconnectService() }
-        service = null
-        hrTracker = null
-        ecgTracker = null
+        val connection = synchronized(connectionLock) {
+            connectionToken += 1
+            ConnectionHandles(
+                service = service,
+                listeners = ListenerHandles(
+                    hr = hrTracker.takeIf { hrListening },
+                    ecg = ecgTracker.takeIf { ecgListening },
+                ),
+            ).also {
+                service = null
+                hrTracker = null
+                ecgTracker = null
+                hrListening = false
+                ecgListening = false
+            }
+        }
+        stopListeners(connection.listeners)
+        try {
+            connection.service?.disconnectService()
+        } catch (_: Exception) {
+            // Already disconnected or superseded.
+        }
+    }
+
+    private fun isCurrentConnection(candidate: HealthTrackingService, token: Long): Boolean =
+        synchronized(connectionLock) {
+            connectionToken == token && service === candidate
+        }
+
+    private fun deliverResult(
+        candidate: HealthTrackingService,
+        token: Long,
+        onResult: (SensorAvailability) -> Unit,
+        result: SensorAvailability,
+    ) {
+        main.post {
+            if (isCurrentConnection(candidate, token)) {
+                onResult(result)
+            } else {
+                disconnectStale(candidate)
+            }
+        }
+    }
+
+    private fun disconnectStale(candidate: HealthTrackingService) {
+        try {
+            candidate.disconnectService()
+        } catch (_: Exception) {
+            // Stale attempts may already be disconnected.
+        }
+    }
+
+    private fun stopListeners(listeners: ListenerHandles) {
+        try {
+            listeners.hr?.unsetEventListener()
+        } catch (_: Exception) {
+            // Listener may already be unset.
+        }
+        try {
+            listeners.ecg?.unsetEventListener()
+        } catch (_: Exception) {
+            // Listener may already be unset.
+        }
     }
 
     private fun unavailable(reason: String) = SensorAvailability(
@@ -149,5 +286,15 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         ready = false,
         reason = reason,
         policyDenied = true,
+    )
+
+    private data class ListenerHandles(
+        val hr: HealthTracker?,
+        val ecg: HealthTracker?,
+    )
+
+    private data class ConnectionHandles(
+        val service: HealthTrackingService?,
+        val listeners: ListenerHandles,
     )
 }
