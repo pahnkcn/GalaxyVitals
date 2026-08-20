@@ -25,6 +25,13 @@ sealed interface WearRoute {
 fun WearRoot() {
     val backStack = remember { mutableStateListOf<WearRoute>(WearRoute.Home) }
     val homeVm: HomeViewModel = viewModel()
+    // Navigation 3 entry decorators do not provide APPLICATION_KEY in their
+    // CreationExtras. Resolve every AndroidViewModel from the activity-owned
+    // store and pass it into the entry instead of calling viewModel() inside
+    // a route, otherwise non-home screens crash as soon as they are opened.
+    val measureVm: MeasureViewModel = viewModel()
+    val historyVm: HistoryViewModel = viewModel()
+    val settingsVm: SettingsViewModel = viewModel()
     val current = backStack.last()
     LaunchedEffect(current) {
         if (current is WearRoute.Home) homeVm.refresh()
@@ -51,7 +58,6 @@ fun WearRoot() {
                         )
                     }
                     WearRoute.Measure -> NavEntry(key) {
-                        val measureVm: MeasureViewModel = viewModel()
                         val state by measureVm.state.collectAsStateWithLifecycle()
                         MeasureScreen(
                             state = state,
@@ -65,12 +71,10 @@ fun WearRoot() {
                         )
                     }
                     WearRoute.History -> NavEntry(key) {
-                        val historyVm: HistoryViewModel = viewModel()
                         val sessions by historyVm.sessions.collectAsStateWithLifecycle()
                         HistoryScreen(sessions = sessions, onRefresh = historyVm::refresh)
                     }
                     WearRoute.Settings -> NavEntry(key) {
-                        val settingsVm: SettingsViewModel = viewModel()
                         val wrist by settingsVm.wrist.collectAsStateWithLifecycle()
                         val note by settingsVm.sensorNote.collectAsStateWithLifecycle()
                         SettingsScreen(

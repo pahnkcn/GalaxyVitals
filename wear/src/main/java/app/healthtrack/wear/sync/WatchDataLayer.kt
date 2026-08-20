@@ -25,6 +25,10 @@ class WatchDataLayer(context: Context) {
     }
 
     suspend fun putSession(sessionId: String, gzip: ByteArray) {
+        // putDataItem() can succeed locally even when no companion is connected.
+        // Do not report a recording as delivered until Wear OS exposes a target
+        // phone; the pending watch file remains available for a later retry.
+        requireConnectedPhone(nodeClient.connectedNodes.await())
         val now = System.currentTimeMillis()
         val request = PutDataMapRequest.create(EcgWearContract.sessionPath(sessionId)).apply {
             dataMap.putString(EcgWearContract.KEY_SESSION_ID, sessionId)
@@ -50,5 +54,11 @@ class WatchDataLayer(context: Context) {
             uploaded += 1
         }
         return uploaded
+    }
+}
+
+internal fun requireConnectedPhone(nodes: Collection<*>) {
+    check(nodes.isNotEmpty()) {
+        "No connected phone. Keep the HealthTrack phone app nearby and try Sync."
     }
 }
