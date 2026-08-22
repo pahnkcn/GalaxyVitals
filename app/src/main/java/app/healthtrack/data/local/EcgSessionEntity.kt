@@ -32,6 +32,15 @@ data class EcgSessionEntity(
     val naoConfidence: Float? = null,
     val findings: String = "",
     val analysisNote: String = "",
+    val inputSchemaVersion: Int = 1,
+    val timingTrust: String = "ASSUMED",
+    val qualityStatus: String = "UNKNOWN",
+    val cleanCoveragePct: Double = 0.0,
+    val qualityFlagsJson: String = "[]",
+    val ecgHrMedian: Double? = null,
+    val analysisBundleId: String? = null,
+    val payloadSha256: String? = null,
+    val captureSource: String = "LEGACY",
 ) {
     fun toDomain(): EcgSession = EcgSession(
         sessionId = sessionId,
@@ -58,10 +67,25 @@ data class EcgSessionEntity(
         naoConfidence = naoConfidence,
         findings = findings,
         analysisNote = analysisNote,
+        inputSchemaVersion = inputSchemaVersion,
+        timingTrust = timingTrust,
+        qualityStatus = qualityStatus,
+        cleanCoveragePct = cleanCoveragePct,
+        qualityFlagsJson = qualityFlagsJson,
+        ecgHrMedian = ecgHrMedian,
+        analysisBundleId = analysisBundleId,
+        payloadSha256 = payloadSha256,
+        captureSource = captureSource,
     )
 
     companion object {
-        fun from(parsed: app.healthtrack.data.protocol.ParsedEcgFile, filePath: String, source: EcgSource, now: Long): EcgSessionEntity {
+        fun from(
+            parsed: app.healthtrack.data.protocol.ParsedEcgFile,
+            filePath: String,
+            source: EcgSource,
+            now: Long,
+            payloadSha256: String? = null,
+        ): EcgSessionEntity {
             return EcgSessionEntity(
                 sessionId = parsed.sessionId,
                 filePath = filePath,
@@ -82,6 +106,10 @@ data class EcgSessionEntity(
                 source = source.name,
                 createdAtMs = now,
                 analysisStatus = AnalysisStatus.PENDING.name,
+                inputSchemaVersion = parsed.schemaVersion,
+                timingTrust = parsed.timingTrust.name,
+                payloadSha256 = payloadSha256,
+                captureSource = parsed.captureSource.name,
             )
         }
     }
@@ -92,11 +120,21 @@ data class EcgSessionEntity(
         naoConfidence: Float?,
         findings: String,
         note: String,
+        qualityStatus: String = this.qualityStatus,
+        cleanCoveragePct: Double = this.cleanCoveragePct,
+        qualityFlagsJson: String = this.qualityFlagsJson,
+        ecgHrMedian: Double? = this.ecgHrMedian,
+        analysisBundleId: String? = this.analysisBundleId,
     ): EcgSessionEntity = copy(
         analysisStatus = status.name,
         naoLabel = naoLabel,
         naoConfidence = naoConfidence,
         findings = findings,
         analysisNote = note,
+        qualityStatus = qualityStatus,
+        cleanCoveragePct = cleanCoveragePct,
+        qualityFlagsJson = qualityFlagsJson,
+        ecgHrMedian = ecgHrMedian,
+        analysisBundleId = analysisBundleId,
     )
 }

@@ -7,9 +7,9 @@ import org.junit.Test
 class EcgCsvWriterTest {
 
     @Test
-    fun captureRoundTripAppliesHrAlignment() {
+    fun captureRoundTripNeverDropsRowsForHrAlignment() {
         val start = 1_700_000_000_000L
-        // 10 samples at 500 Hz = 2 ms each. First HR arrives 6 ms after start → drop 3 rows.
+        // HR is optional side-channel metadata and must never trim the ECG waveform.
         val values = floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f)
         val hr = listOf(HrStamp(start + 6L, 72), HrStamp(start + 14L, 80))
         val gz = EcgCsvWriter.encodeCaptureGzip(
@@ -22,14 +22,15 @@ class EcgCsvWriterTest {
         )
         val parsed = EcgCsvParser.parseBytes(gz, gzip = true, sessionIdHint = "sid")
         assertThat(parsed.sessionId).isEqualTo("sid")
-        assertThat(parsed.tsStartMs).isEqualTo(start + 6L)
+        assertThat(parsed.tsStartMs).isEqualTo(start)
         assertThat(parsed.wrist.name).isEqualTo("RIGHT")
         assertThat(parsed.signFactor).isEqualTo(-1)
         assertThat(parsed.polarityNormalized).isTrue()
-        assertThat(parsed.samples).hasSize(7)
+        assertThat(parsed.samples).hasSize(10)
         assertThat(parsed.samples.first().relMs).isEqualTo(0L)
-        assertThat(parsed.samples.first().valueMv).isEqualTo(0.4f)
-        assertThat(parsed.samples.first().hrBpm).isEqualTo(72)
+        assertThat(parsed.samples.first().valueMv).isEqualTo(0.1f)
+        assertThat(parsed.samples.first().hrBpm).isNull()
+        assertThat(parsed.samples[3].hrBpm).isEqualTo(72)
         assertThat(parsed.samples.last().hrBpm).isEqualTo(80)
         assertThat(parsed.watchInfo).contains("Test")
     }
@@ -74,7 +75,7 @@ class EcgCsvWriterTest {
     }
 
     @Test
-    fun nonGridHeartRateStartUsesActualFirstSampleEpoch() {
+    fun nonGridHeartRateDoesNotMoveCaptureStart() {
         val start = 10_000L
         val encoded = EcgCsvWriter.encodeCapture(
             sessionStartMs = start,
@@ -87,9 +88,10 @@ class EcgCsvWriterTest {
 
         val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "grid")
 
-        assertThat(parsed.tsStartMs).isEqualTo(start + 102L)
+        assertThat(parsed.tsStartMs).isEqualTo(start)
         assertThat(parsed.samples.first().relMs).isEqualTo(0L)
-        assertThat(parsed.samples.first().hrBpm).isEqualTo(72)
+        assertThat(parsed.samples.first().hrBpm).isNull()
+        assertThat(parsed.samples[51].hrBpm).isEqualTo(72)
     }
 
     @Test
@@ -157,10 +159,7 @@ class EcgCsvWriterTest {
     fun captureTimingMatchesWatchCompanion() {
         assertThat(EcgWearContract.DEFAULT_SR_HZ).isEqualTo(500)
         assertThat(EcgWearContract.MEASURE_DURATION_MS).isEqualTo(30_000L)
-        assertThat(EcgWearContract.LEAD_OFF_NO_CONTACT).isEqualTo(5)
-        assertThat(EcgWearContract.HR_STATUS_OK).isEqualTo(1)
         assertThat(EcgWearContract.OFF_BODY_BLOCK_MS).isEqualTo(1_800L)
         assertThat(EcgWearContract.ECG_STALL_MS).isEqualTo(900L)
-        assertThat(EcgWearContract.HR_LOST_ABORT_MS).isEqualTo(10_000L)
     }
 }

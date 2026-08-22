@@ -1,111 +1,263 @@
 package app.healthtrack.wear.capture
 
 import app.healthtrack.data.protocol.EcgCsvWriter
-import app.healthtrack.data.protocol.HrStamp
+import app.healthtrack.data.protocol.EcgWearContract
+import app.healthtrack.domain.CaptureSource
+import app.healthtrack.domain.EcgSampleFlags
 import app.healthtrack.domain.Wrist
+import app.healthtrack.wear.sensors.EcgBatch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+class EcgCaptureException(message: String) : IllegalStateException(message)
 
 class EcgSessionRecorder {
     private val lock = Any()
     private var recording = false
     var sessionId: String = ""
         private set
-    private var startMs = 0L
+    private var wallStartMs = 0L
     private var wrist = Wrist.LEFT
     private var signFactor = 1
-    private val values = ArrayList<Float>(MAX_SAMPLES)
-    private val hr = ArrayList<HrStamp>(MAX_HR_STAMPS)
+    private var captureSource = CaptureSource.HARDWARE
+    private val values = FloatArray(MAX_SAMPLES)
+    private val sensorTimestampsMs = LongArray(MAX_SAMPLES)
+    private val flags = IntArray(MAX_SAMPLES)
+    private var size = 0
+    private var sensorStartMs = -1L
+    private var previousTimestampMs = -1L
+    private var previousSequence = -1
+    private var gapCount = 0
+    private var missingSampleCount = 0
+    private var sequenceGapCount = 0
+    private var contactLossCount = 0
+    private var clippedSampleCount = 0
+    private var acquisitionFlags = 0
+    private var minThresholdMv: Float? = null
+    private var maxThresholdMv: Float? = null
 
-    val isRecording: Boolean
-        get() = synchronized(lock) { recording }
+    val isRecording: Boolean get() = synchronized(lock) { recording }
+    val sampleCount: Int get() = synchronized(lock) { size }
 
-    val sampleCount: Int
-        get() = synchronized(lock) { values.size }
-
-    fun begin(sessionId: String, wrist: Wrist, signFactor: Int, nowMs: Long = System.currentTimeMillis()) {
+    fun begin(
+        sessionId: String,
+        wrist: Wrist,
+        signFactor: Int,
+        nowMs: Long = System.currentTimeMillis(),
+        captureSource: CaptureSource = CaptureSource.HARDWARE,
+    ) {
+        require(signFactor == -1 || signFactor == 1)
+        require(captureSource == CaptureSource.HARDWARE || captureSource == CaptureSource.DEMO)
         synchronized(lock) {
-            this.sessionId = sessionId
+            this.sessionId = EcgWearContract.requireSessionId(sessionId)
             this.wrist = wrist
             this.signFactor = signFactor
-            startMs = nowMs
-            values.clear()
-            hr.clear()
+            this.captureSource = captureSource
+            wallStartMs = nowMs
+            size = 0
+            sensorStartMs = -1L
+            previousTimestampMs = -1L
+            previousSequence = -1
+            gapCount = 0
+            missingSampleCount = 0
+            sequenceGapCount = 0
+            contactLossCount = 0
+            clippedSampleCount = 0
+            acquisitionFlags = 0
+            minThresholdMv = null
+            maxThresholdMv = null
             recording = true
         }
     }
 
-    fun addEcg(batch: FloatArray, applySign: Boolean = true) {
+    fun addEcg(batch: EcgBatch) {
         synchronized(lock) {
-            if (!recording) return
-            if (batch.any { !it.isFinite() }) return
-            val count = minOf(batch.size, MAX_SAMPLES - values.size)
-            repeat(count) { index ->
-                val value = batch[index]
-                values.add(if (applySign && signFactor != 1) value * signFactor else value)
+            if (!recording || batch.samplesMv.isEmpty()) return
+            if (!batch.contactValid) {
+                contactLossCount += batch.samplesMv.size
+                acquisitionFlags = acquisitionFlags or EcgSampleFlags.CONTACT_LOSS
+                throw EcgCaptureException("ECG contact was lost")
+            }
+            if (batch.samplesMv.any { !it.isFinite() }) {
+                acquisitionFlags = acquisitionFlags or EcgSampleFlags.NONFINITE
+                throw EcgCaptureException("ECG contains a non-finite sample")
+            }
+            if (size + batch.samplesMv.size > MAX_SAMPLES) {
+                throw EcgCaptureException("ECG sample buffer overflow")
+            }
+            if (previousSequence >= 0) {
+                val expected = (previousSequence + 1) and 0xff
+                if (batch.sequence != expected) {
+                    sequenceGapCount++
+                    acquisitionFlags = acquisitionFlags or EcgSampleFlags.SEQUENCE_GAP
+                    throw EcgCaptureException("ECG sequence gap or duplicate")
+                }
+            }
+            previousSequence = batch.sequence
+            minThresholdMv = batch.minThresholdMv ?: minThresholdMv
+            maxThresholdMv = batch.maxThresholdMv ?: maxThresholdMv
+
+            batch.samplesMv.indices.forEach { index ->
+                if (captureSource == CaptureSource.HARDWARE && size >= EXPECTED_SAMPLES) {
+                    return@forEach
+                }
+                val timestamp = batch.sensorTimestampsMs[index]
+                if (timestamp < 0L || timestamp <= previousTimestampMs) {
+                    throw EcgCaptureException("ECG sensor timestamp reversed or duplicated")
+                }
+                if (sensorStartMs < 0L) sensorStartMs = timestamp
+                if (previousTimestampMs >= 0L) {
+                    val delta = timestamp - previousTimestampMs
+                    if (delta > EXPECTED_PERIOD_MS + TIMESTAMP_TOLERANCE_MS) {
+                        val missing = (delta.toDouble() / EXPECTED_PERIOD_MS).roundToInt() - 1
+                        gapCount++
+                        missingSampleCount += missing.coerceAtLeast(1)
+                        acquisitionFlags = acquisitionFlags or EcgSampleFlags.TIMESTAMP_GAP
+                        throw EcgCaptureException("ECG sensor timestamp gap")
+                    }
+                    if (abs(delta - EXPECTED_PERIOD_MS) > TIMESTAMP_TOLERANCE_MS) {
+                        throw EcgCaptureException("ECG sensor timestamp jitter is out of range")
+                    }
+                }
+                val sampleFlags = batch.sampleFlags[index]
+                if (sampleFlags and EcgSampleFlags.CLIPPED != 0) {
+                    clippedSampleCount++
+                    acquisitionFlags = acquisitionFlags or EcgSampleFlags.CLIPPED
+                    throw EcgCaptureException("ECG reached the sensor saturation threshold")
+                }
+                values[size] = batch.samplesMv[index]
+                sensorTimestampsMs[size] = timestamp
+                flags[size] = sampleFlags
+                size++
+                previousTimestampMs = timestamp
             }
         }
     }
 
-    fun addHr(epochMs: Long, bpm: Int) {
-        synchronized(lock) {
-            if (!recording || hr.size >= MAX_HR_STAMPS) return
-            hr.add(HrStamp(epochMs, bpm))
+    /** Compatibility helper for deterministic JVM tests; production uses timestamped batches. */
+    @Suppress("UNUSED_PARAMETER")
+    fun addEcg(batch: FloatArray, applySign: Boolean = false) {
+        val firstTimestamp = synchronized(lock) {
+            if (previousTimestampMs >= 0L) previousTimestampMs + EXPECTED_PERIOD_MS else 1_000L
         }
+        val sequence = synchronized(lock) { if (previousSequence < 0) 0 else (previousSequence + 1) and 0xff }
+        addEcg(
+            EcgBatch(
+                samplesMv = batch,
+                sensorTimestampsMs = LongArray(batch.size) { firstTimestamp + it * EXPECTED_PERIOD_MS },
+                sequence = sequence,
+                leadOff = 0,
+                minThresholdMv = -5f,
+                maxThresholdMv = 5f,
+                sampleFlags = IntArray(batch.size),
+            ),
+        )
     }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun addHr(epochMs: Long, bpm: Int) = Unit
 
     fun cancel() {
         synchronized(lock) {
             recording = false
-            values.clear()
-            hr.clear()
+            size = 0
         }
     }
 
     fun takeSnapshot(): EcgSessionSnapshot = synchronized(lock) {
         check(recording) { "No ECG recording is active" }
+        check(size > 0) { "No ECG samples were recorded" }
         recording = false
         EcgSessionSnapshot(
             sessionId = sessionId,
-            startMs = startMs,
-            values = values.toFloatArray(),
-            hr = hr.toList(),
+            wallStartMs = wallStartMs,
+            sensorStartMs = sensorStartMs,
+            values = values.copyOf(size),
+            sensorTimestampsMs = sensorTimestampsMs.copyOf(size),
+            flags = flags.copyOf(size),
             wrist = wrist,
             signFactor = signFactor,
-        ).also {
-            values.clear()
-            hr.clear()
-        }
+            captureSource = captureSource,
+            gapCount = gapCount,
+            missingSampleCount = missingSampleCount,
+            sequenceGapCount = sequenceGapCount,
+            contactLossCount = contactLossCount,
+            clippedSampleCount = clippedSampleCount,
+            acquisitionFlags = acquisitionFlags,
+            minThresholdMv = minThresholdMv,
+            maxThresholdMv = maxThresholdMv,
+        ).also { size = 0 }
     }
 
     fun finish(watchInfo: String): RecordedSession = finish(takeSnapshot(), watchInfo)
-
-    fun finish(snapshot: EcgSessionSnapshot, watchInfo: String): RecordedSession =
-        snapshot.encode(watchInfo)
+    fun finish(snapshot: EcgSessionSnapshot, watchInfo: String): RecordedSession = snapshot.encode(watchInfo)
 
     companion object {
         const val MAX_SAMPLES = 500 * 32
-        const val MAX_HR_STAMPS = 256
+        const val EXPECTED_SAMPLES = 500 * 30
+        const val EXPECTED_LAST_REL_MS = 29_998L
+        const val EXPECTED_PERIOD_MS = 2L
+        const val TIMESTAMP_TOLERANCE_MS = 1L
     }
 }
 
 class EcgSessionSnapshot internal constructor(
     val sessionId: String,
-    private val startMs: Long,
+    private val wallStartMs: Long,
+    private val sensorStartMs: Long,
     private val values: FloatArray,
-    private val hr: List<HrStamp>,
+    private val sensorTimestampsMs: LongArray,
+    private val flags: IntArray,
     private val wrist: Wrist,
     private val signFactor: Int,
+    private val captureSource: CaptureSource,
+    private val gapCount: Int,
+    private val missingSampleCount: Int,
+    private val sequenceGapCount: Int,
+    private val contactLossCount: Int,
+    private val clippedSampleCount: Int,
+    private val acquisitionFlags: Int,
+    private val minThresholdMv: Float?,
+    private val maxThresholdMv: Float?,
 ) {
-    val nSamples: Int
-        get() = values.size
+    val nSamples: Int get() = values.size
+    val durationMs: Long get() = sensorTimestampsMs.last() - sensorTimestampsMs.first()
+
+    fun requireCompleteHardwareCapture() {
+        if (captureSource != CaptureSource.HARDWARE) return
+        if (nSamples != EcgSessionRecorder.EXPECTED_SAMPLES ||
+            durationMs != EcgSessionRecorder.EXPECTED_LAST_REL_MS
+        ) {
+            throw EcgCaptureException("ECG capture is incomplete: $nSamples samples over $durationMs ms")
+        }
+        if (acquisitionFlags != 0) throw EcgCaptureException("ECG capture contains acquisition errors")
+    }
 
     internal fun encode(watchInfo: String): RecordedSession {
-        val gzip = EcgCsvWriter.encodeCaptureGzip(
-            sessionStartMs = startMs,
-            valuesMv = values,
-            hrStamps = hr,
-            wrist = wrist,
-            signFactor = signFactor,
-            watchInfo = watchInfo,
+        val firstMs = sensorTimestampsMs.first()
+        val relMs = LongArray(sensorTimestampsMs.size) { index ->
+            sensorTimestampsMs[index] - firstMs
+        }
+        val gzip = EcgCsvWriter.gzipBytes(
+            EcgCsvWriter.encodeCaptureV2(
+                wallStartMs = wallStartMs,
+                sensorStartMs = firstMs,
+                valuesMv = values,
+                relMs = relMs,
+                sampleFlags = flags,
+                wrist = wrist,
+                signFactor = signFactor,
+                watchInfo = watchInfo,
+                captureSource = captureSource,
+                gapCount = gapCount,
+                missingSampleCount = missingSampleCount,
+                sequenceGapCount = sequenceGapCount,
+                contactLossCount = contactLossCount,
+                clippedSampleCount = clippedSampleCount,
+                acquisitionFlags = acquisitionFlags,
+                minThresholdMv = minThresholdMv,
+                maxThresholdMv = maxThresholdMv,
+            ),
         )
         return RecordedSession(sessionId, gzip, values.size)
     }

@@ -23,6 +23,8 @@ object EcgWearContract {
     const val KEY_FORMAT = "format"
     const val KEY_NONCE = "nonce"
     const val KEY_ECG_FILE = "ecgFile"
+    const val KEY_BYTE_COUNT = "byteCount"
+    const val KEY_SHA256 = "sha256"
 
     const val FORMAT_CSV_GZ = "csv+gz"
     const val INBOX_DIR = "ecg_inbox"
@@ -33,13 +35,11 @@ object EcgWearContract {
     const val DEFAULT_SR_HZ = 500
     const val MEASURE_DURATION_MS = 30_000L
     const val ASSET_TIMEOUT_SEC = 30L
-    const val LEAD_OFF_NO_CONTACT = 5
-    const val HR_STATUS_OK = 1
     const val OFF_BODY_BLOCK_MS = 1_800L
     const val ECG_STALL_MS = 900L
-    const val HR_LOST_ABORT_MS = 10_000L
 
     private val SESSION_ID_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
+    private val SHA256_PATTERN = Regex("[0-9a-f]{64}")
 
     fun requireSessionId(raw: String): String {
         require(SESSION_ID_PATTERN.matches(raw)) {
@@ -101,4 +101,14 @@ object EcgWearContract {
 
     fun signFactorFor(wrist: app.healthtrack.domain.Wrist): Int =
         if (wrist == app.healthtrack.domain.Wrist.RIGHT) -1 else 1
+
+    fun requireSha256(raw: String): String {
+        require(SHA256_PATTERN.matches(raw)) { "Invalid ECG SHA-256" }
+        return raw
+    }
+
+    fun sha256(bytes: ByteArray): String = java.security.MessageDigest
+        .getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
 }

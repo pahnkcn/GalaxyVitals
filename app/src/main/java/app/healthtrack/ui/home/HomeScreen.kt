@@ -163,7 +163,7 @@ private fun EcgHeroCard(
         if (session == null) {
             Text("No recordings yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Record on the HealthTrack watch app, or import a csv.gz.",
+                "Record on the GalaxyBridge watch app, or import a csv.gz.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -3,8 +3,11 @@ package app.healthtrack.wear.capture
 import app.healthtrack.data.protocol.EcgCsvParser
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.domain.Wrist
+import app.healthtrack.domain.EcgSampleFlags
+import app.healthtrack.wear.sensors.EcgBatch
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
+import org.junit.Assert.assertThrows
 
 class EcgSessionRecorderTest {
     @Test
@@ -20,12 +23,13 @@ class EcgSessionRecorderTest {
         assertThat(parsed.sessionId).isEqualTo("1700000010000")
         assertThat(parsed.srHz).isEqualTo(EcgWearContract.DEFAULT_SR_HZ)
         assertThat(parsed.samples.size).isEqualTo(500)
-        assertThat(parsed.hrMin).isEqualTo(70)
+        assertThat(parsed.hrMin).isNull()
+        assertThat(parsed.schemaVersion).isEqualTo(2)
         assertThat(parsed.signFactor).isEqualTo(1)
     }
 
     @Test
-    fun rightWristFlipsSign() {
+    fun rightWristPreservesRawSign() {
         val recorder = EcgSessionRecorder()
         recorder.begin("1", Wrist.RIGHT, -1, 1000L)
         recorder.addEcg(floatArrayOf(0.5f, 0.25f))
@@ -36,22 +40,19 @@ class EcgSessionRecorderTest {
             sessionIdHint = "1",
         )
         assertThat(parsed.signFactor).isEqualTo(-1)
-        assertThat(parsed.samples[0].valueMv).isEqualTo(-0.5f)
-        assertThat(parsed.samples[1].valueMv).isEqualTo(-0.25f)
+        assertThat(parsed.samples[0].valueMv).isEqualTo(0.5f)
+        assertThat(parsed.samples[1].valueMv).isEqualTo(0.25f)
     }
 
     @Test
-    fun sampleBufferIsCapped() {
+    fun sampleBufferOverflowFailsWithoutTruncating() {
         val recorder = EcgSessionRecorder()
         recorder.begin("cap", Wrist.LEFT, 1, 1000L)
 
-        recorder.addEcg(FloatArray(EcgSessionRecorder.MAX_SAMPLES + 500) { 0.1f })
-
-        assertThat(recorder.sampleCount).isEqualTo(EcgSessionRecorder.MAX_SAMPLES)
-        val recorded = recorder.finish("w")
-        assertThat(recorded.nSamples).isEqualTo(EcgSessionRecorder.MAX_SAMPLES)
-        val parsed = EcgCsvParser.parseBytes(recorded.gzip, gzip = true, sessionIdHint = "cap")
-        assertThat(parsed.samples).hasSize(EcgSessionRecorder.MAX_SAMPLES)
+        assertThrows(EcgCaptureException::class.java) {
+            recorder.addEcg(FloatArray(EcgSessionRecorder.MAX_SAMPLES + 500) { 0.1f })
+        }
+        assertThat(recorder.sampleCount).isEqualTo(0)
     }
 
     @Test
@@ -59,7 +60,9 @@ class EcgSessionRecorderTest {
         val recorder = EcgSessionRecorder()
         recorder.begin("finite", Wrist.LEFT, 1, 1000L)
         recorder.addEcg(floatArrayOf(0.1f))
-        recorder.addEcg(floatArrayOf(0.2f, Float.NaN, Float.POSITIVE_INFINITY))
+        assertThrows(EcgCaptureException::class.java) {
+            recorder.addEcg(floatArrayOf(0.2f, Float.NaN, Float.POSITIVE_INFINITY))
+        }
         recorder.addEcg(floatArrayOf(0.3f))
 
         val parsed = EcgCsvParser.parseBytes(
@@ -95,4 +98,66 @@ class EcgSessionRecorderTest {
         assertThat(recorder.sessionId).isEqualTo("new")
         assertThat(recorder.sampleCount).isEqualTo(1)
     }
+
+    @Test
+    fun exactThirtySecondsIsIndependentOfFiveAndTenPointBatching() {
+        val recorder = EcgSessionRecorder()
+        recorder.begin("exact", Wrist.LEFT, 1, 1_000L)
+        var index = 0
+        var sequence = 250
+        while (index < EcgSessionRecorder.EXPECTED_SAMPLES) {
+            val requested = if ((index / 5) % 3 == 0) 5 else 10
+            val count = minOf(requested, EcgSessionRecorder.EXPECTED_SAMPLES - index)
+            recorder.addEcg(batch(index, count, sequence))
+            index += count
+            sequence = (sequence + 1) and 0xff
+        }
+        val snapshot = recorder.takeSnapshot()
+        snapshot.requireCompleteHardwareCapture()
+        val parsed = EcgCsvParser.parseBytes(
+            recorder.finish(snapshot, "w").gzip, true, "exact",
+        )
+        assertThat(parsed.samples).hasSize(15_000)
+        assertThat(parsed.samples.last().relMs).isEqualTo(29_998L)
+    }
+
+    @Test
+    fun leadOffSaturationAndSequenceGapFailCapture() {
+        listOf(-1, 1, 2, 5, 255).forEach { leadOff ->
+            val lead = EcgSessionRecorder().apply { begin("lead", Wrist.LEFT, 1, 1L) }
+            assertThrows(EcgCaptureException::class.java) {
+                lead.addEcg(batch(0, 5, 0, leadOff = leadOff))
+            }
+        }
+
+        val clipped = EcgSessionRecorder().apply { begin("clip", Wrist.LEFT, 1, 1L) }
+        assertThrows(EcgCaptureException::class.java) {
+            clipped.addEcg(batch(0, 5, 0, flags = IntArray(5) { EcgSampleFlags.CLIPPED }))
+        }
+
+        val sequence = EcgSessionRecorder().apply { begin("seq", Wrist.LEFT, 1, 1L) }
+        sequence.addEcg(batch(0, 5, 255))
+        sequence.addEcg(batch(5, 5, 0))
+        assertThrows(EcgCaptureException::class.java) {
+            sequence.addEcg(batch(10, 5, 0))
+        }
+    }
+
+    private fun batch(
+        firstIndex: Int,
+        count: Int,
+        sequence: Int,
+        leadOff: Int = 0,
+        flags: IntArray = IntArray(count),
+    ): EcgBatch = EcgBatch(
+        samplesMv = FloatArray(count) { 0.1f },
+        sensorTimestampsMs = LongArray(count) { offset ->
+            1_000L + (firstIndex + offset) * EcgSessionRecorder.EXPECTED_PERIOD_MS
+        },
+        sequence = sequence,
+        leadOff = leadOff,
+        minThresholdMv = -5f,
+        maxThresholdMv = 5f,
+        sampleFlags = flags,
+    )
 }

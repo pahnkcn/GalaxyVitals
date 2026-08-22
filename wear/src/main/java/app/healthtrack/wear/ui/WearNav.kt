@@ -1,11 +1,15 @@
 package app.healthtrack.wear.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavEntry
@@ -33,13 +37,26 @@ fun WearRoot() {
     val historyVm: HistoryViewModel = viewModel()
     val settingsVm: SettingsViewModel = viewModel()
     val current = backStack.last()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, current) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && current is WearRoute.Measure) {
+                measureVm.cancelRecording()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(current) {
         if (current is WearRoute.Home) homeVm.refresh()
     }
     AppScaffold {
         NavDisplay(
             backStack = backStack,
-            onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+            onBack = {
+                if (backStack.lastOrNull() is WearRoute.Measure) measureVm.cancelRecording()
+                if (backStack.size > 1) backStack.removeLastOrNull()
+            },
             sceneStrategy = SwipeDismissableSceneStrategy(),
             entryDecorators = listOf(
                 rememberSaveableStateHolderNavEntryDecorator(),

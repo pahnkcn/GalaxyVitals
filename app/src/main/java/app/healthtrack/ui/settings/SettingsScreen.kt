@@ -34,13 +34,13 @@ fun SettingsScreen(
         }
         Section(
             "How ECG arrives",
-            "The HealthTrack watch app writes gzip CSV and pushes DataItem /ecg/session/{id}. " +
+            "The GalaxyBridge watch app writes gzip CSV and pushes DataItem /ecg/session/{id}. " +
                 "This phone listens on that path. Google only delivers those items when both " +
                 "apps share application id app.healthtrack and the same signing key.",
         )
         Section(
             "Galaxy Watch",
-            "Sideload the HealthTrack watch APK on a paired Galaxy Watch. Demo traces always " +
+            "Sideload the GalaxyBridge watch APK on a paired Galaxy Watch. Demo traces always " +
                 "sync. Hardware ECG_ON_DEMAND needs Samsung’s official sensor AAR and a partner " +
                 "whitelist for app.healthtrack. A different vendor companion cannot talk to this " +
                 "phone app.",

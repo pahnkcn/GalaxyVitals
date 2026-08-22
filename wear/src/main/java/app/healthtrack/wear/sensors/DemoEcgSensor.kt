@@ -2,40 +2,47 @@ package app.healthtrack.wear.sensors
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import app.healthtrack.data.protocol.DemoEcg
-import app.healthtrack.data.protocol.EcgWearContract
 
 class DemoEcgSensor : EcgSensor {
     override val kind: SensorKind = SensorKind.DEMO
 
     private val main = Handler(Looper.getMainLooper())
-    private var hrTick: Runnable? = null
     private var ecgTick: Runnable? = null
     private var index = 0
+    private var sensorStartMs = 0L
+    private var sequence = 0
 
     override fun connect(onResult: (SensorAvailability) -> Unit) {
         onResult(SensorAvailability(SensorKind.DEMO, ready = true))
     }
 
-    override fun startHr(onHr: (bpm: Int, status: Int) -> Unit) {
-        stopHr()
-        val tick = object : Runnable {
-            override fun run() {
-                onHr(68, EcgWearContract.HR_STATUS_OK)
-                main.postDelayed(this, 1000L)
-            }
-        }
-        hrTick = tick
-        main.post(tick)
-    }
-
-    override fun startEcg(onBatch: (mv: FloatArray, leadOff: Boolean) -> Unit) {
+    override fun startEcg(
+        onError: (EcgSensorError) -> Unit,
+        onBatch: (EcgBatch) -> Unit,
+    ) {
         stopEcg()
+        if (sensorStartMs == 0L) sensorStartMs = SystemClock.elapsedRealtime()
         val batchSize = 50
         val tick = object : Runnable {
             override fun run() {
-                val batch = FloatArray(batchSize) { DemoEcg.sampleMv(index++) }
-                onBatch(batch, false)
+                val firstIndex = index
+                val samples = FloatArray(batchSize) { DemoEcg.sampleMv(index++) }
+                onBatch(
+                    EcgBatch(
+                        samplesMv = samples,
+                        sensorTimestampsMs = LongArray(batchSize) { offset ->
+                            sensorStartMs + (firstIndex + offset) * 2L
+                        },
+                        sequence = sequence,
+                        leadOff = 0,
+                        minThresholdMv = -5f,
+                        maxThresholdMv = 5f,
+                        sampleFlags = IntArray(batchSize),
+                    ),
+                )
+                sequence = (sequence + 1) and 0xff
                 main.postDelayed(this, 100L)
             }
         }
@@ -44,19 +51,15 @@ class DemoEcgSensor : EcgSensor {
     }
 
     override fun stop() {
-        stopHr()
         stopEcg()
         index = 0
+        sequence = 0
+        sensorStartMs = 0L
     }
 
     override fun disconnect() = stop()
 
-    private fun stopHr() {
-        hrTick?.let(main::removeCallbacks)
-        hrTick = null
-    }
-
-    private fun stopEcg() {
+    override fun stopEcg() {
         ecgTick?.let(main::removeCallbacks)
         ecgTick = null
     }

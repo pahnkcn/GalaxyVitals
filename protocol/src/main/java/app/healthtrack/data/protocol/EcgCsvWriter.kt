@@ -1,6 +1,8 @@
 package app.healthtrack.data.protocol
 
 import app.healthtrack.domain.EcgSample
+import app.healthtrack.domain.CaptureSource
+import app.healthtrack.domain.TimingTrust
 import app.healthtrack.domain.Wrist
 import java.io.ByteArrayOutputStream
 import java.util.Arrays
@@ -28,6 +30,30 @@ object EcgCsvWriter {
     }
 
     fun encodeParsed(parsed: ParsedEcgFile): ByteArray {
+        if (parsed.schemaVersion >= 2) {
+            val relMs = LongArray(parsed.samples.size) { parsed.samples[it].relMs }
+            val flags = IntArray(parsed.samples.size) { parsed.samples[it].flags }
+            return encodeCaptureV2(
+                wallStartMs = parsed.tsStartMs,
+                sensorStartMs = parsed.sensorStartMs ?: 0L,
+                valuesMv = FloatArray(parsed.samples.size) { parsed.samples[it].valueMv },
+                relMs = relMs,
+                sampleFlags = flags,
+                wrist = parsed.wrist,
+                signFactor = parsed.signFactor,
+                watchInfo = parsed.watchInfo,
+                captureSource = parsed.captureSource,
+                nominalSrHz = parsed.srHz,
+                gapCount = parsed.gapCount,
+                missingSampleCount = parsed.missingSampleCount,
+                sequenceGapCount = parsed.sequenceGapCount,
+                contactLossCount = parsed.contactLossCount,
+                clippedSampleCount = parsed.clippedSampleCount,
+                acquisitionFlags = parsed.acquisitionFlags,
+                minThresholdMv = parsed.minThresholdMv,
+                maxThresholdMv = parsed.maxThresholdMv,
+            )
+        }
         val body = buildString {
             append(metaLine(
                 srHz = parsed.srHz,
@@ -48,6 +74,79 @@ object EcgCsvWriter {
         return body.toByteArray(Charsets.UTF_8)
     }
 
+    fun encodeCaptureV2(
+        wallStartMs: Long,
+        sensorStartMs: Long,
+        valuesMv: FloatArray,
+        relMs: LongArray,
+        sampleFlags: IntArray,
+        wrist: Wrist,
+        signFactor: Int,
+        watchInfo: String,
+        captureSource: CaptureSource,
+        nominalSrHz: Int = EcgWearContract.DEFAULT_SR_HZ,
+        gapCount: Int = 0,
+        missingSampleCount: Int = 0,
+        sequenceGapCount: Int = 0,
+        contactLossCount: Int = 0,
+        clippedSampleCount: Int = 0,
+        acquisitionFlags: Int = 0,
+        minThresholdMv: Float? = null,
+        maxThresholdMv: Float? = null,
+    ): ByteArray {
+        require(valuesMv.isNotEmpty()) { "No ECG samples" }
+        require(valuesMv.size == relMs.size && valuesMv.size == sampleFlags.size) {
+            "ECG sample arrays must have equal sizes"
+        }
+        require(signFactor == -1 || signFactor == 1) { "Invalid ECG polarity sign factor" }
+        require(captureSource != CaptureSource.LEGACY) { "Schema v2 requires an explicit capture source" }
+        var previous = -1L
+        valuesMv.indices.forEach { index ->
+            require(valuesMv[index].isFinite()) { "ECG amplitude must be finite" }
+            require(relMs[index] >= 0L && relMs[index] >= previous) {
+                "ECG timestamps must be monotonic"
+            }
+            require(sampleFlags[index] >= 0) { "ECG flags must be nonnegative" }
+            previous = relMs[index]
+        }
+        val durationMs = relMs.last() - relMs.first()
+        val effectiveSrHz = if (durationMs > 0L && valuesMv.size > 1) {
+            (valuesMv.size - 1) * 1000.0 / durationMs
+        } else {
+            nominalSrHz.toDouble()
+        }
+        val body = buildString(valuesMv.size * 24) {
+            append(metaLineV2(
+                srHz = nominalSrHz,
+                effectiveSrHz = effectiveSrHz,
+                tsStartMs = wallStartMs,
+                sensorStartMs = sensorStartMs,
+                sampleCount = valuesMv.size,
+                durationMs = durationMs,
+                watchInfo = watchInfo,
+                wrist = wrist,
+                signFactor = signFactor,
+                captureSource = captureSource,
+                gapCount = gapCount,
+                missingSampleCount = missingSampleCount,
+                sequenceGapCount = sequenceGapCount,
+                contactLossCount = contactLossCount,
+                clippedSampleCount = clippedSampleCount,
+                acquisitionFlags = acquisitionFlags,
+                minThresholdMv = minThresholdMv,
+                maxThresholdMv = maxThresholdMv,
+            ))
+            append("rel_ms,sample_index,ecg_raw_mv,flags,hr_bpm\n")
+            valuesMv.indices.forEach { index ->
+                append(relMs[index] - relMs.first()).append(',')
+                append(index).append(',')
+                append(valuesMv[index]).append(',')
+                append(sampleFlags[index]).append(',').append('\n')
+            }
+        }
+        return body.toByteArray(Charsets.UTF_8)
+    }
+
     fun encodeCapture(
         sessionStartMs: Long,
         valuesMv: FloatArray,
@@ -59,43 +158,28 @@ object EcgCsvWriter {
     ): ByteArray {
         val rate = max(1, srHz)
         val sortedHr = normalizeHrStamps(hrStamps)
-        val hrEmpty = sortedHr.isEmpty()
-        val alignmentEpoch = if (hrEmpty) {
-            sessionStartMs
-        } else {
-            max(sessionStartMs, sortedHr[0].epochMs)
-        }
-        val dropBeforeRel = alignmentEpoch - sessionStartMs
         val hrEpochs = LongArray(sortedHr.size) { sortedHr[it].epochMs }
         val hrBpms = IntArray(sortedHr.size) { sortedHr[it].bpm }
 
-        var dropped = 0
         var withHr = 0
         val kept = ArrayList<EcgSample>(valuesMv.size)
-        var firstKeptRelMs: Long? = null
         for (i in valuesMv.indices) {
             val relMs = i.toLong() * 1000L / rate
-            if (relMs < dropBeforeRel) {
-                dropped++
-                continue
-            }
-            val origin = firstKeptRelMs ?: relMs.also { firstKeptRelMs = it }
             val hr = lookupHr(hrEpochs, hrBpms, sessionStartMs + relMs)
             if (hr != null) withHr++
-            kept.add(EcgSample(relMs - origin, valuesMv[i], hr))
+            kept.add(EcgSample(relMs, valuesMv[i], hr, i))
         }
         if (kept.isEmpty()) {
-            throw EcgParseException("No ECG samples after HR alignment")
+            throw EcgParseException("No ECG samples")
         }
-        val actualStartMs = sessionStartMs + checkNotNull(firstKeptRelMs)
         val coverage = withHr * 100.0 / kept.size
         val body = buildString {
             append(metaLine(
                 srHz = rate,
                 unit = "mV",
-                tsStartMs = actualStartMs,
+                tsStartMs = sessionStartMs,
                 hrStartRelMs = 0L,
-                droppedBeforeHr = dropped,
+                droppedBeforeHr = 0,
                 rowsWithHrPct = coverage,
                 watchInfo = watchInfo,
                 wrist = wrist,
@@ -192,6 +276,61 @@ object EcgCsvWriter {
                     append(char)
                 }
             }
+        }
+    }
+
+    private fun metaLineV2(
+        srHz: Int,
+        effectiveSrHz: Double,
+        tsStartMs: Long,
+        sensorStartMs: Long,
+        sampleCount: Int,
+        durationMs: Long,
+        watchInfo: String,
+        wrist: Wrist,
+        signFactor: Int,
+        captureSource: CaptureSource,
+        gapCount: Int,
+        missingSampleCount: Int,
+        sequenceGapCount: Int,
+        contactLossCount: Int,
+        clippedSampleCount: Int,
+        acquisitionFlags: Int,
+        minThresholdMv: Float?,
+        maxThresholdMv: Float?,
+    ): String {
+        val wristName = if (wrist == Wrist.RIGHT) "RIGHT" else "LEFT"
+        return buildString {
+            append("#meta={")
+            append("\"schema_version\":2,")
+            append("\"sr_hz\":").append(srHz).append(',')
+            append("\"effective_sr_hz\":").append(effectiveSrHz).append(',')
+            append("\"unit\":\"mV\",")
+            append("\"ts_start\":").append(tsStartMs).append(',')
+            append("\"sensor_start_ms\":").append(sensorStartMs).append(',')
+            append("\"clock_source\":\"SAMSUNG_DATAPOINT_MS\",")
+            append("\"timing_trust\":\"").append(TimingTrust.SENSOR.name).append("\",")
+            append("\"format\":\"csv_mv_v2\",")
+            append("\"capture_source\":\"").append(captureSource.name).append("\",")
+            append("\"sample_count\":").append(sampleCount).append(',')
+            append("\"duration_ms\":").append(durationMs).append(',')
+            append("\"gap_count\":").append(gapCount).append(',')
+            append("\"missing_sample_count\":").append(missingSampleCount).append(',')
+            append("\"sequence_gap_count\":").append(sequenceGapCount).append(',')
+            append("\"contact_loss_count\":").append(contactLossCount).append(',')
+            append("\"clipped_sample_count\":").append(clippedSampleCount).append(',')
+            append("\"acquisition_flags\":").append(acquisitionFlags).append(',')
+            append("\"min_threshold_mv\":")
+            if (minThresholdMv == null) append("null") else append(minThresholdMv)
+            append(',')
+            append("\"max_threshold_mv\":")
+            if (maxThresholdMv == null) append("null") else append(maxThresholdMv)
+            append(',')
+            append("\"watch_info\":\"").append(escape(watchInfo)).append("\",")
+            append("\"wrist\":\"").append(wristName).append("\",")
+            append("\"signFactor\":").append(signFactor).append(',')
+            append("\"polarityNormalized\":false")
+            append("}\n")
         }
     }
 }

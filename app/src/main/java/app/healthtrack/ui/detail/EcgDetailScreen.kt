@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.healthtrack.analysis.shortHelp
+import app.healthtrack.analysis.AnalysisBundle
 import app.healthtrack.data.protocol.NaoLabel
 import app.healthtrack.domain.AnalysisStatus
 import app.healthtrack.domain.EcgSample
@@ -43,6 +44,7 @@ import app.healthtrack.ui.components.EcgWaveform
 import app.healthtrack.ui.durationLabel
 import app.healthtrack.ui.findingRows
 import app.healthtrack.ui.hrLabel
+import app.healthtrack.ui.hrSourceLabel
 import app.healthtrack.ui.naoConfidenceLabel
 import app.healthtrack.ui.naoTitle
 import app.healthtrack.ui.stampLabel
@@ -105,10 +107,20 @@ fun EcgDetailScreen(
                 .padding(horizontal = 20.dp),
         ) {
             Text(session.hrLabel(), fontSize = 72.sp, fontWeight = FontWeight.Light, color = Mint)
-            Text("median bpm", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(session.hrSourceLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(session.stampLabel(), modifier = Modifier.padding(top = 8.dp))
             Spacer(Modifier.height(16.dp))
             AnalysisCard(session)
+            if (session.analysisBundleId != null &&
+                session.analysisBundleId != AnalysisBundle.CURRENT_COMPATIBILITY_ID
+            ) {
+                Text(
+                    "This analysis is stale because the verified analysis bundle changed.",
+                    color = Amber,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             Spacer(Modifier.height(16.dp))
             EcgWaveform(
                 samples = samples,
@@ -125,15 +137,23 @@ fun EcgDetailScreen(
                 modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatChip("Min", session.hrMin?.toString() ?: "—", Modifier.weight(1f))
-                StatChip("Max", session.hrMax?.toString() ?: "—", Modifier.weight(1f))
+                StatChip("Clean", "${session.cleanCoveragePct.toInt()}%", Modifier.weight(1f))
+                StatChip("Timing", session.timingTrust.lowercase(), Modifier.weight(1f))
                 StatChip("Time", session.durationLabel(), Modifier.weight(1f))
             }
             Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatChip("Wrist", session.wrist.name.lowercase(), Modifier.weight(1f))
-                StatChip("Usable", "${session.usablePct.toInt()}%", Modifier.weight(1f))
-                StatChip("HR cover", "${session.hrCoveragePct.toInt()}%", Modifier.weight(1f))
+                StatChip("Quality", session.qualityStatus.lowercase(), Modifier.weight(1f))
+                StatChip("Schema", "v${session.inputSchemaVersion}", Modifier.weight(1f))
+            }
+            if (session.qualityFlagsJson != "[]") {
+                Text(
+                    "Quality flags: ${session.qualityFlagsJson}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
             }
             Spacer(Modifier.height(20.dp))
             Text(
@@ -154,6 +174,7 @@ private fun AnalysisCard(session: EcgSession) {
     val tint = when {
         session.analysisStatus == AnalysisStatus.FAILED -> Danger
         session.analysisStatus == AnalysisStatus.LOW_QUALITY -> Amber
+        session.analysisStatus == AnalysisStatus.INDETERMINATE -> Amber
         nao == NaoLabel.A -> Danger
         nao == NaoLabel.O -> Amber
         else -> Mint
@@ -176,12 +197,10 @@ private fun AnalysisCard(session: EcgSession) {
             )
             val confidence = session.naoConfidenceLabel()
             if (confidence.isNotEmpty()) {
-                Text(
-                    confidence,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                Column(modifier = Modifier.padding(top = 4.dp)) {
+                    Text("model score", style = MaterialTheme.typography.labelSmall)
+                    Text(confidence, style = MaterialTheme.typography.titleMedium)
+                }
             }
         }
         val body = when (session.analysisStatus) {
@@ -189,6 +208,9 @@ private fun AnalysisCard(session: EcgSession) {
             AnalysisStatus.FAILED -> session.analysisNote.ifBlank { "Analysis failed." }
             AnalysisStatus.LOW_QUALITY -> session.analysisNote.ifBlank {
                 "The strip quality is too low for a rhythm result."
+            }
+            AnalysisStatus.INDETERMINATE -> session.analysisNote.ifBlank {
+                "The model abstained because the score or window agreement was insufficient."
             }
             AnalysisStatus.OK -> nao?.shortHelp() ?: "Analysis complete."
             AnalysisStatus.NONE -> "No analysis yet."

@@ -255,6 +255,42 @@ def score(y_true: np.ndarray, y_pred: np.ndarray, p_af: np.ndarray) -> dict:
     return out
 
 
+def precision_thresholds(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+    target_precision: float = 0.90,
+) -> tuple[dict[str, float], dict[str, dict]]:
+    """Choose record-disjoint validation thresholds; unattainable classes always abstain."""
+    predicted = probabilities.argmax(axis=1)
+    thresholds: dict[str, float] = {}
+    audit: dict[str, dict] = {}
+    for class_index, label in enumerate(NAO_LABELS):
+        best = None
+        candidates = sorted(set(float(value) for value in probabilities[:, class_index]))
+        for threshold in candidates:
+            selected = (predicted == class_index) & (probabilities[:, class_index] >= threshold)
+            selected_count = int(selected.sum())
+            if selected_count == 0:
+                continue
+            true_positive = int(((y_true == class_index) & selected).sum())
+            precision = true_positive / selected_count
+            recall = true_positive / max(1, int((y_true == class_index).sum()))
+            if precision >= target_precision and (best is None or recall > best["recall"]):
+                best = {
+                    "threshold": threshold,
+                    "precision": precision,
+                    "recall": recall,
+                    "selected": selected_count,
+                }
+        if best is None:
+            thresholds[label] = 1.0
+            audit[label] = {"attainable": False, "precision": None, "recall": 0.0, "selected": 0}
+        else:
+            thresholds[label] = float(best["threshold"])
+            audit[label] = {"attainable": True, **best}
+    return thresholds, audit
+
+
 def fmt(title: str, m: dict) -> str:
     return (
         f"{title}: acc={m['acc']:.3f} macro-F1={m['macro_f1']:.3f} "
@@ -278,6 +314,11 @@ def main() -> None:
     parser.add_argument("--train-per-class", type=int, default=180)
     parser.add_argument("--cache", type=Path, default=ROOT / "models" / "eval" / "founder_head")
     parser.add_argument("--out", type=Path, default=ROOT / "app" / "src" / "main" / "assets" / "ecg" / "nao_calibrator.json")
+    parser.add_argument(
+        "--thresholds-out",
+        type=Path,
+        default=ROOT / "app" / "src" / "main" / "assets" / "ecg" / "decision_thresholds.json",
+    )
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
 
@@ -381,6 +422,13 @@ def main() -> None:
     if best_c is None or best_validation is None:
         raise RuntimeError("failed to select a logistic-regression hyperparameter")
 
+    selection_clf = build_classifier(best_c)
+    selection_clf.fit(x_train[fit_indices], y_train[fit_indices])
+    validation_probabilities = selection_clf.predict_proba(x_train[validation_indices])
+    thresholds, threshold_audit = precision_thresholds(
+        y_train[validation_indices], validation_probabilities, target_precision=0.90
+    )
+
     clf = build_classifier(best_c)
     clf.fit(x_train, y_train)
     calibrated_clean = score(
@@ -421,6 +469,18 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print("wrote", args.out)
+    threshold_payload = {
+        "version": 1,
+        "proxy_dataset": "physionet-cinc-2017-record-disjoint-validation",
+        "target_precision": 0.90,
+        "minimum_window_consensus": 0.60,
+        "class_thresholds": thresholds,
+        "selection_metrics": threshold_audit,
+        "policy": "abstain_when_threshold_or_consensus_fails",
+    }
+    args.thresholds_out.parent.mkdir(parents=True, exist_ok=True)
+    args.thresholds_out.write_text(json.dumps(threshold_payload, indent=2), encoding="utf-8")
+    print("wrote", args.thresholds_out)
 
 
 if __name__ == "__main__":

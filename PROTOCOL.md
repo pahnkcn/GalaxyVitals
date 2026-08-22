@@ -11,11 +11,14 @@ include vendor UI, assets, or classification models.
 The HealthTrack watch app records:
 
 - `HealthTrackerType.ECG_ON_DEMAND` → `ValueKey.EcgSet.ECG_MV` (millivolts)
-- `HealthTrackerType.HEART_RATE_CONTINUOUS` → bpm, aligned by timestamp
-- Lead-off via `ValueKey.EcgSet.LEAD_OFF` (`5` = no contact)
-- 30s session, `sessionId = currentTimeMillis`
+- No concurrent continuous tracker; BPM is derived later from ECG R-peaks
+- Lead-off, sequence, and saturation thresholds from the first point in each batch;
+  every `LEAD_OFF != 0` is invalid contact
+- Exactly 30 s of sensor time (15,000 samples at nominal 500 Hz),
+  `sessionId = currentTimeMillis`
 - Wrist `LEFT` → `signFactor +1`, `RIGHT` → `-1`
-- Sample clock `rel_ms = i * 1000 / 500`; rows before first HR dropped
+- Raw polarity and every sensor timestamp are preserved; `signFactor` is applied
+  only to derived display/preprocessing data
 
 Samples are written as gzip CSV under `filesDir/ecg/ecg_{sessionId}.csv.gz`.
 
@@ -39,38 +42,49 @@ not part of the on-the-wire contract.
 UTF-8 text, then gzip.
 
 ```
-#meta={<json>}
-rel_ms,value_mv,hr_bpm
-0,-0.12,72
-2,-0.11,72
+#meta={"schema_version":2,...}
+rel_ms,sample_index,ecg_raw_mv,flags,hr_bpm
+0,0,-0.12,0,
+2,1,-0.11,0,
 ```
 
-### `#meta` JSON
+### Schema v2 `#meta` JSON
 
 | Field | Type | Meaning |
 |---|---|---|
-| `sr_hz` | number | Sample rate. Default `500`. |
-| `unit` | string | Amplitude unit. Default `mV`. |
-| `ts_start` | number | Epoch millis of first kept sample. |
-| `format` | string | `csv_mv` |
-| `hr_start_rel_ms` | number | Relative ms where HR alignment begins. |
-| `dropped_rows_before_hr` | number | Samples dropped before HR start. |
-| `rows_with_hr_pct` | number | Percent of rows that have HR. |
-| `watch_info` | string | JSON blob (model, manufacturer, app version). |
+| `schema_version` | number | Required value `2`. |
+| `sr_hz` | number | Nominal native rate; Samsung ECG is `500`. |
+| `effective_sr_hz` | number | Rate computed from sample count and sensor duration. |
+| `unit` | string | Required physical amplitude unit `mV`. |
+| `ts_start` | number | Wall-clock epoch millis for display/audit only. |
+| `sensor_start_ms` | number | Sensor timestamp of the first sample in Samsung's documented millisecond unit. |
+| `timing_trust` | string | `SENSOR`; legacy v1 is parsed as `ASSUMED`. |
+| `format` | string | `csv_mv_v2`. |
+| `capture_source` | string | `HARDWARE` or `DEMO`; demo is never classified. |
+| `sample_count` / `duration_ms` | number | Declared row count and sensor-time span. |
+| `gap_count` / `missing_sample_count` | number | Timestamp continuity summary. |
+| `sequence_gap_count` | number | Samsung batch sequence discontinuities. |
+| `contact_loss_count` / `clipped_sample_count` | number | Contact and saturation summary. |
+| `acquisition_flags` | number | Bitmask of acquisition errors. |
+| `min_threshold_mv` / `max_threshold_mv` | number/null | Samsung saturation limits. |
+| `watch_info` | string | JSON blob (device, firmware, sensor SDK, app version). |
 | `wrist` | string | `LEFT` or `RIGHT`. |
-| `signFactor` / `sign_factor` | number | Polarity applied on the watch (`±1`). |
-| `polarityNormalized` / `polarity_normalized` | boolean | Watch already flipped lead polarity. |
+| `signFactor` | number | Derived polarity transform (`±1`), not applied to raw rows. |
+| `polarityNormalized` | boolean | Always `false` for v2 capture. |
 
-Writer keys from the original watch firmware use camelCase; some phone parsers
-also accept snake_case. GalaxyBridge accepts both.
+Schema v1 (`rel_ms,value_mv,hr_bpm`) remains readable. Its index-generated clock
+is marked `timingTrust=ASSUMED`; v1 files keep their prior result and are shown as
+legacy/unverified. Writers never discard waveform rows because HR is missing.
 
 ### Rows
 
 | Column | Meaning |
 |---|---|
-| `rel_ms` | Milliseconds from `ts_start` (after HR alignment). |
-| `value_mv` | ECG amplitude in millivolts. |
-| `hr_bpm` | Instant HR, or empty / `NaN`. |
+| `rel_ms` | Milliseconds from the first sensor timestamp. |
+| `sample_index` | Contiguous zero-based index; duplicates/gaps are rejected. |
+| `ecg_raw_mv` | Unmodified ECG amplitude in millivolts. |
+| `flags` | Per-sample acquisition bitmask. |
+| `hr_bpm` | Reserved optional side channel; hardware v2 capture leaves it empty. |
 
 ## Wear Data Layer
 
@@ -89,6 +103,8 @@ DataItems.
 | `ts` | Long | `currentTimeMillis` |
 | `format` | String | `csv+gz` |
 | `nonce` | Long | change token so the item updates |
+| `byteCount` | Long | exact gzip payload length |
+| `sha256` | String | lowercase SHA-256 of the gzip payload |
 | `ecgFile` | Asset | gzip bytes |
 
 ### Phone receive
@@ -97,8 +113,9 @@ DataItems.
 
 1. Take path after `/ecg/session/`.
 2. `DataClient.getFdForAsset(ecgFile)` (30s).
-3. Write `filesDir/ecg_inbox/ecg_{sessionId}.csv.gz`.
-4. Parse, persist metadata, show the recording.
+3. Verify byte count and SHA-256 before parsing or acknowledging.
+4. Preserve schema-v2 gzip bytes immutably, persist metadata, and show the recording.
+5. A repeated session id with different content is quarantined and not acknowledged.
 
 ### Optional messages
 

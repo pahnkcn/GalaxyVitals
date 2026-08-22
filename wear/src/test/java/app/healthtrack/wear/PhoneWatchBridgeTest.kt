@@ -47,9 +47,9 @@ class PhoneWatchBridgeTest {
         assertThat(parsed.samples.size).isEqualTo(4000)
         assertThat(parsed.wrist).isEqualTo(Wrist.LEFT)
         assertThat(parsed.signFactor).isEqualTo(1)
-        assertThat(parsed.polarityNormalized).isTrue()
-        assertThat(parsed.hrMin).isEqualTo(64)
-        assertThat(parsed.hrMax).isEqualTo(71)
+        assertThat(parsed.polarityNormalized).isFalse()
+        assertThat(parsed.hrMin).isNull()
+        assertThat(parsed.captureSource.name).isEqualTo("HARDWARE")
         assertThat(parsed.durationSec).isWithin(0.01).of(7.998)
         assertThat(parsed.watchInfo).contains("WatchTest")
     }
@@ -94,7 +94,7 @@ class PhoneWatchBridgeTest {
     }
 
     @Test
-    fun rightWristRecordingFlipsLeadAndPhoneSeesIt() {
+    fun rightWristRecordingPreservesRawLeadAndPhoneSeesPolarityMetadata() {
         val recorder = EcgSessionRecorder()
         recorder.begin("9", Wrist.RIGHT, EcgWearContract.signFactorFor(Wrist.RIGHT), 1000L)
         recorder.addEcg(floatArrayOf(0.4f, 0.2f, 0.1f))
@@ -102,6 +102,6 @@ class PhoneWatchBridgeTest {
         val parsed = EcgCsvParser.parseBytes(recorder.finish("w").gzip, gzip = true, sessionIdHint = "9")
         assertThat(parsed.wrist).isEqualTo(Wrist.RIGHT)
         assertThat(parsed.signFactor).isEqualTo(-1)
-        assertThat(parsed.samples.map { it.valueMv }).containsExactly(-0.4f, -0.2f, -0.1f).inOrder()
+        assertThat(parsed.samples.map { it.valueMv }).containsExactly(0.4f, 0.2f, 0.1f).inOrder()
     }
 }

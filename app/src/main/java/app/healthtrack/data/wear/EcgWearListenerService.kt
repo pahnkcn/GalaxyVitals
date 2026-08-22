@@ -5,7 +5,7 @@ import android.app.NotificationManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import app.healthtrack.HealthTrackApp
+import app.healthtrack.GalaxyBridgeApp
 import app.healthtrack.R
 import app.healthtrack.data.protocol.EcgCsvParser
 import app.healthtrack.data.protocol.EcgWearContract
@@ -35,7 +35,7 @@ class EcgWearListenerService : WearableListenerService() {
 
     override fun onDataChanged(dataEvents: DataEventBuffer) {
         // DataEvent / DataItem are only valid while the buffer is open.
-        val pending = ArrayList<Triple<String, Asset, android.net.Uri>>(dataEvents.count)
+        val pending = ArrayList<PendingAsset>(dataEvents.count)
         try {
             for (event in dataEvents) {
                 if (event.type != DataEvent.TYPE_CHANGED) continue
@@ -49,24 +49,35 @@ class EcgWearListenerService : WearableListenerService() {
                 val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
                 if (dataMap.getString(EcgWearContract.KEY_SESSION_ID) != sessionId) continue
                 if (dataMap.getString(EcgWearContract.KEY_FORMAT) != EcgWearContract.FORMAT_CSV_GZ) continue
+                val byteCount = dataMap.getLong(EcgWearContract.KEY_BYTE_COUNT)
+                if (byteCount !in 1L..EcgCsvParser.MAX_COMPRESSED_BYTES) continue
+                val sha256 = runCatching {
+                    EcgWearContract.requireSha256(dataMap.getString(EcgWearContract.KEY_SHA256).orEmpty())
+                }.getOrNull() ?: continue
                 val asset = dataMap.getAsset(EcgWearContract.KEY_ECG_FILE) ?: continue
-                pending += Triple(sessionId, asset, event.dataItem.uri)
+                pending += PendingAsset(sessionId, asset, event.dataItem.uri, byteCount, sha256)
             }
         } finally {
             dataEvents.release()
         }
         if (pending.isEmpty()) return
-        val app = application as HealthTrackApp
-        pending.forEach { (sessionId, asset, dataItemUri) ->
+        val app = application as GalaxyBridgeApp
+        pending.forEach { pendingAsset ->
             app.appScope.launch {
                 RECEIVE_MUTEX.withLock {
                     try {
-                        val incoming = writeAsset(sessionId, asset)
+                        val incoming = writeAsset(
+                            pendingAsset.sessionId,
+                            pendingAsset.asset,
+                            pendingAsset.byteCount,
+                            pendingAsset.sha256,
+                        )
                         try {
                             app.container.ecgRepository.ingestGzipFile(
                                 incoming,
-                                sessionId,
+                                pendingAsset.sessionId,
                                 EcgSource.WEAR,
+                                expectedSha256 = pendingAsset.sha256,
                             )
                         } finally {
                             incoming.delete()
@@ -74,10 +85,10 @@ class EcgWearListenerService : WearableListenerService() {
                         // Remove the replicated health-data item before telling the watch
                         // it may stop retrying the corresponding local recording.
                         Wearable.getDataClient(this@EcgWearListenerService)
-                            .deleteDataItems(dataItemUri)
+                            .deleteDataItems(pendingAsset.dataItemUri)
                             .await()
-                        app.container.wearSyncClient.sendCleanup(sessionId)
-                        notifyReceived(sessionId)
+                        app.container.wearSyncClient.sendCleanup(pendingAsset.sessionId)
+                        notifyReceived(pendingAsset.sessionId)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -89,7 +100,12 @@ class EcgWearListenerService : WearableListenerService() {
         }
     }
 
-    private suspend fun writeAsset(sessionId: String, asset: Asset): File {
+    private suspend fun writeAsset(
+        sessionId: String,
+        asset: Asset,
+        expectedByteCount: Long,
+        expectedSha256: String,
+    ): File {
         val dataClient = Wearable.getDataClient(this)
         val fd = withTimeout(TimeUnit.SECONDS.toMillis(EcgWearContract.ASSET_TIMEOUT_SEC)) {
             dataClient.getFdForAsset(asset).await()
@@ -110,6 +126,12 @@ class EcgWearListenerService : WearableListenerService() {
             runCatching { output.close() }
             dest.delete()
             throw error
+        }
+        if (dest.length() != expectedByteCount ||
+            EcgWearContract.sha256(dest.readBytes()) != expectedSha256
+        ) {
+            dest.delete()
+            throw java.io.IOException("ECG payload integrity check failed")
         }
         return dest
     }
@@ -151,4 +173,12 @@ class EcgWearListenerService : WearableListenerService() {
     companion object {
         private val RECEIVE_MUTEX = Mutex()
     }
+
+    private data class PendingAsset(
+        val sessionId: String,
+        val asset: Asset,
+        val dataItemUri: android.net.Uri,
+        val byteCount: Long,
+        val sha256: String,
+    )
 }

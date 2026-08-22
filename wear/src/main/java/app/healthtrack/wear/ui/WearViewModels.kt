@@ -6,10 +6,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.data.protocol.ParsedEcgFile
+import app.healthtrack.domain.CaptureSource
 import app.healthtrack.domain.Wrist
 import app.healthtrack.wear.WearApplication
 import app.healthtrack.wear.capture.MeasureForegroundLeaseManager
+import app.healthtrack.wear.capture.EcgSessionRecorder
 import app.healthtrack.wear.sensors.EcgSensor
+import app.healthtrack.wear.sensors.EcgBatch
+import app.healthtrack.wear.sensors.EcgSensorError
 import app.healthtrack.wear.sensors.OffBodyMonitor
 import app.healthtrack.wear.sensors.SensorAvailability
 import app.healthtrack.wear.sensors.SensorKind
@@ -67,7 +71,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 latest = parsed.firstOrNull(),
                 count = parsed.size,
                 phoneNote = if (phones.isEmpty()) {
-                    "Phone not linked. Keep HealthTrack open nearby."
+                    "Phone not linked. Keep GalaxyBridge open nearby."
                 } else {
                     "Phone: ${phones.joinToString()}"
                 },
@@ -121,16 +125,16 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private var sensor: EcgSensor? = null
     private var autoStartOnContact = true
     private var leadOff = true
-    private var hrOk = false
     private var lastEcgAt = 0L
-    private var lastGoodHrAt = 0L
     private var ecgStarted = false
     private var tickJob: Job? = null
     private var delayedStartJob: Job? = null
     private var connectTimeoutJob: Job? = null
+    private var preflightTimeoutJob: Job? = null
     private var sessionGeneration = 0L
     private var foregroundLease: MeasureForegroundLeaseManager.Lease? = null
     private val live = ArrayList<Float>(1000)
+    private var lastUiWaveformAt = 0L
     private val offBody = OffBodyMonitor(application) { blocked ->
         if (blocked && _state.value.phase == MeasurePhase.Recording) {
             abortToLeadOff("Watch not worn properly")
@@ -205,38 +209,22 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         val generation = sessionGeneration
         autoStartOnContact = autoStart
         leadOff = target.kind != SensorKind.DEMO
-        hrOk = false
         lastEcgAt = 0L
-        lastGoodHrAt = 0L
         ecgStarted = false
         if (target.kind == SensorKind.SAMSUNG) offBody.start()
         _state.value = MeasureUiState(
             phase = MeasurePhase.Warmup,
-            status = "Warming up heart rate…",
+            status = if (target.kind == SensorKind.DEMO) readyLabel else "Checking ECG contact…",
             samsungReady = target.kind == SensorKind.SAMSUNG,
         )
-        target.startHr { bpm, status ->
-            if (generation != sessionGeneration || sensor !== target) {
-                return@startHr
-            }
-            hrOk = status == EcgWearContract.HR_STATUS_OK && bpm > 0
-            val current = _state.value
-            if (hrOk) lastGoodHrAt = SystemClock.elapsedRealtime()
-            if (current.phase == MeasurePhase.Recording && hrOk) {
-                app.container.recorder.addHr(System.currentTimeMillis(), bpm)
-            }
-            _state.value = current.copy(hrBpm = bpm.coerceAtLeast(0))
-            if (hrOk && current.phase == MeasurePhase.Warmup) {
-                startEcgIfNeeded(target)
-                _state.value = _state.value.copy(
-                    phase = if (leadOff) MeasurePhase.LeadOff else MeasurePhase.Ready,
-                    status = if (leadOff) "Touch the button" else readyLabel,
-                )
-                if (!leadOff && autoStartOnContact) beginRecording()
-            }
-        }
-        if (target.kind == SensorKind.DEMO) {
+        if (target.kind == SensorKind.SAMSUNG) {
             startEcgIfNeeded(target)
+            preflightTimeoutJob = viewModelScope.launch {
+                delay(CONTACT_PREFLIGHT_TIMEOUT_MS)
+                if (generation == sessionGeneration && _state.value.phase != MeasurePhase.Recording) {
+                    failSamsung("ECG contact was not detected in time. Adjust the watch and try again.")
+                }
+            }
         }
     }
 
@@ -244,17 +232,19 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         if (ecgStarted) return
         ecgStarted = true
         val generation = sessionGeneration
-        target.startEcg { mv, off ->
+        target.startEcg(
+            onError = { error -> handleSensorError(target, generation, error) },
+        ) { batch ->
             if (generation != sessionGeneration || sensor !== target) {
                 return@startEcg
             }
             lastEcgAt = SystemClock.elapsedRealtime()
-            leadOff = off
+            leadOff = !batch.contactValid
             val phase = _state.value.phase
-            if (off) {
+            if (!batch.contactValid) {
                 if (phase == MeasurePhase.Recording) {
                     abortToLeadOff("Lost contact")
-                } else if (hrOk) {
+                } else {
                     _state.value = _state.value.copy(
                         phase = MeasurePhase.LeadOff,
                         status = "Touch the button",
@@ -262,25 +252,47 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 }
                 return@startEcg
             }
-            if (mv.any { !it.isFinite() }) {
-                if (phase == MeasurePhase.Recording) {
-                    abortToLeadOff("Invalid ECG signal")
-                }
-                return@startEcg
-            }
             if (phase == MeasurePhase.Recording) {
-                app.container.recorder.addEcg(mv)
-                synchronized(live) {
-                    live.addAll(mv.toList())
-                    val keep = 500 * 3
-                    if (live.size > keep) {
-                        repeat(live.size - keep) { live.removeAt(0) }
-                    }
-                    _state.value = _state.value.copy(liveMv = live.toList())
-                }
-            } else if (autoStartOnContact && hasRecentHeartRate()) {
+                recordBatch(batch)
+            } else if (autoStartOnContact) {
+                target.stopEcg()
+                ecgStarted = false
+                preflightTimeoutJob?.cancel()
+                preflightTimeoutJob = null
+                _state.value = _state.value.copy(phase = MeasurePhase.Ready, status = "Contact detected")
                 beginRecording()
             }
+        }
+    }
+
+    private fun recordBatch(batch: EcgBatch) {
+        try {
+            app.container.recorder.addEcg(batch)
+        } catch (error: Exception) {
+            abortToLeadOff(error.message ?: "Invalid ECG signal")
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        synchronized(live) {
+            batch.samplesMv.forEach(live::add)
+            val keep = EcgWearContract.DEFAULT_SR_HZ * 3
+            if (live.size > keep) live.subList(0, live.size - keep).clear()
+            if (now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS) {
+                lastUiWaveformAt = now
+                _state.value = _state.value.copy(liveMv = live.toList())
+            }
+        }
+        if (app.container.recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) {
+            viewModelScope.launch { if (_state.value.phase == MeasurePhase.Recording) complete() }
+        }
+    }
+
+    private fun handleSensorError(target: EcgSensor, generation: Long, error: EcgSensorError) {
+        if (generation != sessionGeneration || sensor !== target) return
+        if (_state.value.phase == MeasurePhase.Recording) {
+            abortToLeadOff(error.message)
+        } else {
+            failSamsung(error.message)
         }
     }
 
@@ -294,20 +306,17 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             )
             return
         }
-        if (activeSensor.kind == SensorKind.SAMSUNG && !hasRecentHeartRate()) {
-            hrOk = false
-            _state.value = _state.value.copy(
-                phase = MeasurePhase.Warmup,
-                status = "Waiting for a clear heart-rate signal…",
-            )
-            return
-        }
         val sessionId = System.currentTimeMillis().toString()
         val wrist = app.container.prefs.wrist
         app.container.recorder.begin(
             sessionId = sessionId,
             wrist = wrist,
             signFactor = EcgWearContract.signFactorFor(wrist),
+            captureSource = if (activeSensor.kind == SensorKind.DEMO) {
+                CaptureSource.DEMO
+            } else {
+                CaptureSource.HARDWARE
+            },
         )
         if (activeSensor.kind == SensorKind.SAMSUNG) {
             try {
@@ -329,6 +338,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             sessionId = sessionId,
             error = null,
         )
+        activeSensor.stopEcg()
+        ecgStarted = false
+        startEcgIfNeeded(activeSensor)
         tickJob?.cancel()
         tickJob = viewModelScope.launch {
             val started = SystemClock.elapsedRealtime()
@@ -337,14 +349,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 val left = ((EcgWearContract.MEASURE_DURATION_MS - elapsed) / 1000L).toInt().coerceAtLeast(0)
                 val now = SystemClock.elapsedRealtime()
                 val stalled = lastEcgAt > 0 && now - lastEcgAt > EcgWearContract.ECG_STALL_MS
-                val hrLost = lastGoodHrAt > 0 && now - lastGoodHrAt > EcgWearContract.HR_LOST_ABORT_MS
                 if (autoStartOnContact && stalled) {
                     abortToLeadOff("Lost contact")
-                    return@launch
-                }
-                if (autoStartOnContact && hrLost) {
-                    hrOk = false
-                    abortToLeadOff("No clear heart-rate signal")
                     return@launch
                 }
                 _state.value = _state.value.copy(remainingSec = left)
@@ -362,8 +368,15 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         tickJob = null
         delayedStartJob?.cancel()
         delayedStartJob = null
+        val completedSensor = sensor
+        try {
+            completedSensor?.stopEcg()
+            ecgStarted = false
+        } catch (_: Exception) {
+            // Snapshot validation below still prevents an incomplete success.
+        }
         val snapshot = try {
-            app.container.recorder.takeSnapshot()
+            app.container.recorder.takeSnapshot().also { it.requireCompleteHardwareCapture() }
         } catch (_: Exception) {
             resetSession()
             _state.value = MeasureUiState(
@@ -375,7 +388,6 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
         sessionGeneration += 1
         val completionGeneration = sessionGeneration
-        val completedSensor = sensor
         sensor = null
         val persistenceForegroundLease = foregroundLease
         foregroundLease = null
@@ -415,7 +427,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                             error = if (pushed) {
                                 null
                             } else {
-                                "Phone not linked. Keep HealthTrack open nearby, then Sync."
+                                "Phone not linked. Keep GalaxyBridge open nearby, then Sync."
                             },
                         )
                     }
@@ -457,6 +469,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         tickJob?.cancel()
         tickJob = null
         app.container.recorder.cancel()
+        val activeSensor = sensor
+        activeSensor?.stopEcg()
+        ecgStarted = false
         releaseForegroundLease()
         synchronized(live) { live.clear() }
         _state.value = _state.value.copy(
@@ -465,6 +480,17 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             remainingSec = 30,
             liveMv = emptyList(),
         )
+        if (activeSensor?.kind == SensorKind.SAMSUNG) {
+            startEcgIfNeeded(activeSensor)
+            val generation = sessionGeneration
+            preflightTimeoutJob?.cancel()
+            preflightTimeoutJob = viewModelScope.launch {
+                delay(CONTACT_PREFLIGHT_TIMEOUT_MS)
+                if (generation == sessionGeneration && _state.value.phase != MeasurePhase.Recording) {
+                    failSamsung("ECG retry timed out. Adjust the watch and try again.")
+                }
+            }
+        }
     }
 
     private fun resetSession() {
@@ -475,6 +501,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         delayedStartJob = null
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
+        preflightTimeoutJob?.cancel()
+        preflightTimeoutJob = null
         val activeSensor = sensor
         sensor = null
         activeSensor?.stop()
@@ -485,7 +513,6 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         app.container.recorder.cancel()
         releaseForegroundLease()
         offBody.stop()
-        lastGoodHrAt = 0L
         lastEcgAt = 0L
         ecgStarted = false
         synchronized(live) { live.clear() }
@@ -506,11 +533,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         foregroundLease = null
     }
 
-    private fun hasRecentHeartRate(now: Long = SystemClock.elapsedRealtime()): Boolean =
-        isRecentHeartRate(hrOk, lastGoodHrAt, now)
-
     override fun onCleared() {
         resetSession()
         super.onCleared()
+    }
+
+    companion object {
+        private const val CONTACT_PREFLIGHT_TIMEOUT_MS = 10_000L
+        private const val UI_WAVEFORM_INTERVAL_MS = 100L
     }
 }

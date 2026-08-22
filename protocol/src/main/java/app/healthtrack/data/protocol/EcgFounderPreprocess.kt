@@ -11,6 +11,12 @@ data class PreparedWindow(
     val samples: FloatArray,
     val startRelMs: Long,
     val rms: Float,
+    val qualityFlags: Set<QualityFlag> = emptySet(),
+)
+
+data class PreparedRecording(
+    val windows: List<PreparedWindow>,
+    val quality: SignalQualityReport,
 )
 
 data class SignalQuality(
@@ -28,6 +34,38 @@ object EcgFounderPreprocess {
     const val WINDOW_SAMPLES = 5000
     const val WINDOW_MS = 10_000L
     const val HOP_MS = 5_000L
+    val SUPPORTED_INPUT_HZ = setOf(250, 300, 500)
+
+    fun prepare(parsed: ParsedEcgFile): PreparedRecording {
+        val baseQuality = SignalQualityAnalyzer.analyze(parsed)
+        if (parsed.srHz !in SUPPORTED_INPUT_HZ) return PreparedRecording(emptyList(), baseQuality)
+        val out = ArrayList<PreparedWindow>()
+        val cleanRanges = ArrayList<LongRange>()
+        baseQuality.segments.forEach { segment ->
+            if (segment.endRelMs - segment.startRelMs < WINDOW_MS - 2L) return@forEach
+            val oriented = FloatArray(segment.samples.size) { index ->
+                segment.samples[index].valueMv * parsed.signFactor
+            }
+            val series = resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
+            val filtered = filterBandpass(series)
+            val hop = TARGET_HZ * (HOP_MS / 1000).toInt()
+            var start = 0
+            while (start + WINDOW_SAMPLES <= filtered.size) {
+                val rawSlice = series.copyOfRange(start, start + WINDOW_SAMPLES)
+                val windowFlags = SignalQualityAnalyzer.assessWindow(rawSlice, TARGET_HZ)
+                val slice = filtered.copyOfRange(start, start + WINDOW_SAMPLES)
+                val startMs = segment.startRelMs + start * 1000L / TARGET_HZ
+                if (windowFlags.isEmpty()) {
+                    out += PreparedWindow(zScore(slice), startMs, rms(slice), windowFlags)
+                    cleanRanges += startMs..(startMs + WINDOW_MS)
+                }
+                start += hop
+            }
+        }
+        val durationMs = parsed.samples.last().relMs - parsed.samples.first().relMs
+        val finalQuality = SignalQualityAnalyzer.withCleanWindows(baseQuality, cleanRanges, durationMs)
+        return PreparedRecording(out, finalQuality)
+    }
 
     // iirnotch(50, 30, 500) as SOS
     private val NOTCH = arrayOf(
@@ -46,30 +84,19 @@ object EcgFounderPreprocess {
     )
 
     fun windows(samples: List<EcgSample>, srHz: Int): List<PreparedWindow> {
-        if (samples.isEmpty()) return emptyList()
+        if (samples.isEmpty() || srHz !in SUPPORTED_INPUT_HZ) return emptyList()
         val series = resampleToTarget(samples, srHz)
         val filtered = filterBandpass(series)
         val out = ArrayList<PreparedWindow>()
         var start = 0
         val hop = TARGET_HZ * (HOP_MS / 1000).toInt()
-        if (filtered.size < WINDOW_SAMPLES) {
-            val padded = FloatArray(WINDOW_SAMPLES)
-            val offset = (WINDOW_SAMPLES - filtered.size) / 2
-            System.arraycopy(filtered, 0, padded, offset, filtered.size)
-            val z = zScore(padded)
-            out += PreparedWindow(z, samples.first().relMs, rms(padded))
-            return out
-        }
+        if (filtered.size < WINDOW_SAMPLES) return emptyList()
         while (start + WINDOW_SAMPLES <= filtered.size) {
             val slice = filtered.copyOfRange(start, start + WINDOW_SAMPLES)
             val z = zScore(slice)
             val startMs = samples.first().relMs + start * 1000L / TARGET_HZ
             out += PreparedWindow(z, startMs, rms(slice))
             start += hop
-        }
-        if (out.isEmpty()) {
-            val slice = filtered.copyOfRange(filtered.size - WINDOW_SAMPLES, filtered.size)
-            out += PreparedWindow(zScore(slice), samples.first().relMs, rms(slice))
         }
         return out
     }
@@ -95,27 +122,41 @@ object EcgFounderPreprocess {
 
     internal fun resampleToTarget(samples: List<EcgSample>, srHz: Int): FloatArray {
         if (samples.isEmpty()) return FloatArray(0)
-        if (srHz == TARGET_HZ) {
-            return FloatArray(samples.size) { samples[it].valueMv }
-        }
-        val durationMs = max(1L, samples.last().relMs - samples.first().relMs)
-        val nOut = max(1, ((durationMs * TARGET_HZ) / 1000L).toInt() + 1)
-        val out = FloatArray(nOut)
-        var j = 0
-        for (i in 0 until nOut) {
-            val t = samples.first().relMs + i * 1000L / TARGET_HZ
-            while (j + 1 < samples.size && samples[j + 1].relMs < t) j++
-            val a = samples[j]
-            val b = samples[min(j + 1, samples.lastIndex)]
-            val span = (b.relMs - a.relMs).toFloat()
-            out[i] = if (span <= 0f) {
-                a.valueMv
-            } else {
-                val w = ((t - a.relMs).toFloat() / span).coerceIn(0f, 1f)
-                a.valueMv + (b.valueMv - a.valueMv) * w
+        return resamplePolyphase(FloatArray(samples.size) { samples[it].valueMv }, srHz, TARGET_HZ)
+    }
+
+    /** Windowed-sinc polyphase FIR resampler for the supported 250/300/500-Hz inputs. */
+    internal fun resamplePolyphase(input: FloatArray, sourceHz: Int, targetHz: Int): FloatArray {
+        require(sourceHz in SUPPORTED_INPUT_HZ && targetHz == TARGET_HZ)
+        if (sourceHz == targetHz) return input.copyOf()
+        if (input.isEmpty()) return FloatArray(0)
+        val outputSize = ((input.size - 1).toLong() * targetHz / sourceHz).toInt() + 1
+        val output = FloatArray(outputSize)
+        val radius = 16
+        for (outIndex in output.indices) {
+            val sourcePosition = outIndex.toDouble() * sourceHz / targetHz
+            val center = kotlin.math.floor(sourcePosition).toInt()
+            var weighted = 0.0
+            var weightSum = 0.0
+            for (tap in (center - radius + 1)..(center + radius)) {
+                if (tap !in input.indices) continue
+                val distance = sourcePosition - tap
+                val sinc = if (abs(distance) < 1e-12) 1.0 else {
+                    kotlin.math.sin(Math.PI * distance) / (Math.PI * distance)
+                }
+                val normalized = distance / radius
+                val window = if (abs(normalized) <= 1.0) {
+                    0.5 + 0.5 * kotlin.math.cos(Math.PI * normalized)
+                } else 0.0
+                val weight = sinc * window
+                weighted += input[tap] * weight
+                weightSum += weight
             }
+            output[outIndex] = if (abs(weightSum) > 1e-12) {
+                (weighted / weightSum).toFloat()
+            } else input[center.coerceIn(input.indices)]
         }
-        return out
+        return output
     }
 
     internal fun filterBandpass(raw: FloatArray): FloatArray {

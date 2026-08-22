@@ -29,12 +29,16 @@ class WatchDataLayer(context: Context) {
         // Do not report a recording as delivered until Wear OS exposes a target
         // phone; the pending watch file remains available for a later retry.
         requireConnectedPhone(nodeClient.connectedNodes.await())
+        require(gzip.isNotEmpty()) { "ECG payload is empty" }
         val now = System.currentTimeMillis()
+        val sha256 = EcgWearContract.sha256(gzip)
         val request = PutDataMapRequest.create(EcgWearContract.sessionPath(sessionId)).apply {
             dataMap.putString(EcgWearContract.KEY_SESSION_ID, sessionId)
             dataMap.putLong(EcgWearContract.KEY_TS, now)
             dataMap.putString(EcgWearContract.KEY_FORMAT, EcgWearContract.FORMAT_CSV_GZ)
             dataMap.putLong(EcgWearContract.KEY_NONCE, now)
+            dataMap.putLong(EcgWearContract.KEY_BYTE_COUNT, gzip.size.toLong())
+            dataMap.putString(EcgWearContract.KEY_SHA256, sha256)
             dataMap.putAsset(EcgWearContract.KEY_ECG_FILE, Asset.createFromBytes(gzip))
         }.asPutDataRequest().setUrgent()
         dataClient.putDataItem(request).await()
@@ -59,6 +63,6 @@ class WatchDataLayer(context: Context) {
 
 internal fun requireConnectedPhone(nodes: Collection<*>) {
     check(nodes.isNotEmpty()) {
-        "No connected phone. Keep the HealthTrack phone app nearby and try Sync."
+        "No connected phone. Keep the GalaxyBridge phone app nearby and try Sync."
     }
 }

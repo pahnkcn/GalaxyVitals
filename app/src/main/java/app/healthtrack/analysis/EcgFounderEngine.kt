@@ -7,10 +7,12 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import app.healthtrack.data.protocol.EcgFounderLabels
 import app.healthtrack.data.protocol.EcgFounderPreprocess
+import app.healthtrack.data.protocol.EcgBeatAnalyzer
 import app.healthtrack.data.protocol.NaoDecision
 import app.healthtrack.data.protocol.NaoLabel
 import app.healthtrack.data.protocol.ParsedEcgFile
-import app.healthtrack.data.protocol.SignalQuality
+import app.healthtrack.data.protocol.SignalQualityReport
+import app.healthtrack.domain.CaptureSource
 import app.healthtrack.domain.AnalysisStatus
 import java.io.File
 import java.nio.FloatBuffer
@@ -22,67 +24,87 @@ data class AnalysisResult(
     val status: AnalysisStatus,
     val decision: NaoDecision?,
     val note: String,
+    val quality: SignalQualityReport? = null,
+    val ecgHrMedian: Double? = null,
+    val analysisBundleId: String? = null,
 )
 
 class EcgFounderEngine(private val context: Context) {
     private val env = OrtEnvironment.getEnvironment()
     private val sessionRef = AtomicReference<OrtSession?>()
-    private val head: NaoLinearHead? = NaoCalibrator.load(context)
+    private val bundle: AnalysisBundle by lazy { AnalysisBundle.load(context) }
+    private val head: NaoLinearHead by lazy { NaoCalibrator.load(context) }
 
     fun analyze(parsed: ParsedEcgFile): AnalysisResult {
-        if (parsed.samples.size < parsed.srHz * MIN_ANALYSIS_SECONDS ||
-            parsed.durationSec < MIN_ANALYSIS_DURATION_SECONDS
-        ) {
+        if (parsed.captureSource == CaptureSource.DEMO) {
+            return AnalysisResult(
+                status = AnalysisStatus.INDETERMINATE,
+                decision = null,
+                note = "Demo ECG is not eligible for rhythm classification",
+            )
+        }
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+        val quality = prepared.quality
+        val beat = EcgBeatAnalyzer.analyze(parsed, prepared)
+        if (!quality.usableForAnalysis) {
             return AnalysisResult(
                 status = AnalysisStatus.LOW_QUALITY,
                 decision = null,
-                note = "Recording is too short for a rhythm result",
+                note = "Low ECG quality: ${quality.flags.joinToString { it.name }}",
+                quality = quality,
+                ecgHrMedian = beat.bpmMedian,
             )
         }
-        val windows = EcgFounderPreprocess.windows(parsed.samples, parsed.srHz)
-        if (windows.isEmpty()) {
-            return AnalysisResult(AnalysisStatus.FAILED, null, "No ECG samples to analyse")
-        }
-        val quality = EcgFounderPreprocess.quality(windows, parsed.usablePct)
-        if (!quality.usable) {
-            return AnalysisResult(
-                status = AnalysisStatus.LOW_QUALITY,
-                decision = null,
-                note = quality.reason,
-            )
-        }
-        val session = session() ?: return AnalysisResult(
+        val verifiedBundle = bundle
+        val session = session(verifiedBundle) ?: return AnalysisResult(
             status = AnalysisStatus.FAILED,
             decision = null,
             note = "Rhythm model is not installed in this build.",
+            quality = quality,
+            ecgHrMedian = beat.bpmMedian,
+            analysisBundleId = verifiedBundle.compatibilityId,
         )
         val acc = FloatArray(EcgFounderLabels.ALL.size)
-        for (window in windows) {
+        val windowDecisions = ArrayList<NaoDecision>(prepared.windows.size)
+        for (window in prepared.windows) {
             val probs = infer(session, window.samples)
             for (i in acc.indices) acc[i] += probs[i]
+            windowDecisions += EcgFounderLabels.decideLogistic(probs, head.coef, head.intercept)
         }
-        val n = windows.size.toFloat()
+        val n = prepared.windows.size.toFloat()
         for (i in acc.indices) acc[i] /= n
-        val decision = if (head != null) {
-            EcgFounderLabels.decideLogistic(acc, head.coef, head.intercept)
-        } else {
-            EcgFounderLabels.decide(acc)
+        val decision = EcgFounderLabels.decideLogistic(acc, head.coef, head.intercept)
+        val consensus = windowDecisions.count { it.label == decision.label }.toFloat() / windowDecisions.size
+        val classThreshold = verifiedBundle.classThresholds.getValue(decision.label)
+        if (decision.confidence < classThreshold || consensus < verifiedBundle.minimumWindowConsensus) {
+            return AnalysisResult(
+                status = AnalysisStatus.INDETERMINATE,
+                decision = null,
+                note = "Model abstained: score or window consensus was below the validated proxy threshold",
+                quality = quality,
+                ecgHrMedian = beat.bpmMedian,
+                analysisBundleId = verifiedBundle.compatibilityId,
+            )
         }
         return AnalysisResult(
             status = AnalysisStatus.OK,
             decision = decision,
-            note = qualityNote(quality, windows.size),
+            note = qualityNote(quality, prepared.windows.size, consensus),
+            quality = quality,
+            ecgHrMedian = beat.bpmMedian,
+            analysisBundleId = verifiedBundle.compatibilityId,
         )
     }
 
-    private fun qualityNote(quality: SignalQuality, windowCount: Int): String {
-        val headNote = if (head != null) "calibrated N/A/O" else "rule N/A/O"
-        return "ECGFounder 1-lead · $headNote · $windowCount window(s) · RMS ${"%.3f".format(Locale.ROOT, quality.rms)} mV"
+    private fun qualityNote(quality: SignalQualityReport, windowCount: Int, consensus: Float): String {
+        return "ECGFounder 1-lead · calibrated N/A/O · $windowCount clean window(s) · " +
+            "${"%.0f".format(Locale.ROOT, quality.cleanCoveragePct)}% clean · " +
+            "${"%.0f".format(Locale.ROOT, consensus * 100)}% consensus"
     }
 
     @Synchronized
-    private fun session(): OrtSession? {
-        val file = ensureModelFile() ?: return null
+    private fun session(bundle: AnalysisBundle): OrtSession? {
+        val file = ensureModelFile(bundle) ?: return null
         sessionRef.get()?.let { return it }
         val created = try {
             OrtSession.SessionOptions().use { opts ->
@@ -97,7 +119,7 @@ class EcgFounderEngine(private val context: Context) {
         return created
     }
 
-    private fun ensureModelFile(): File? {
+    private fun ensureModelFile(bundle: AnalysisBundle): File? {
         val dest = File(context.filesDir, "ecgfounder_1lead.onnx")
         val assetLen = try {
             context.assets.openFd(MODEL_ASSET).use { it.length }
@@ -108,8 +130,8 @@ class EcgFounderEngine(private val context: Context) {
             sessionRef.getAndSet(null)?.close()
             return null
         }
-        val stale = !dest.exists() || dest.length() == 0L ||
-            dest.length() != assetLen
+        val stale = !dest.exists() || dest.length() == 0L || dest.length() != assetLen ||
+            runCatching { bundle.verifyModelFile(dest) }.isFailure
         if (stale) {
             sessionRef.getAndSet(null)?.close()
             try {
@@ -129,6 +151,7 @@ class EcgFounderEngine(private val context: Context) {
                 return null
             }
         }
+        bundle.verifyModelFile(dest)
         return dest.takeIf { it.exists() && it.length() > 0L }
     }
 
@@ -167,8 +190,6 @@ class EcgFounderEngine(private val context: Context) {
 
     companion object {
         const val MODEL_ASSET = "ecg/ecgfounder_1lead.onnx"
-        private const val MIN_ANALYSIS_SECONDS = 5
-        private const val MIN_ANALYSIS_DURATION_SECONDS = 4.5
     }
 }
 

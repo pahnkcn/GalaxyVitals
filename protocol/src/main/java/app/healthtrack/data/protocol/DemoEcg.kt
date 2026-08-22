@@ -1,6 +1,7 @@
 package app.healthtrack.data.protocol
 
 import app.healthtrack.domain.Wrist
+import app.healthtrack.domain.CaptureSource
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
@@ -24,16 +25,16 @@ object DemoEcg {
         val n = sr * seconds
         val start = 1_700_000_000_000L
         val values = FloatArray(n) { sampleMv(it, sr) }
-        val hr = List(seconds) { sec ->
-            HrStamp(start + sec * 1000L, 68)
-        }
-        return EcgCsvWriter.encodeCaptureGzip(
-            sessionStartMs = start,
+        return EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeCaptureV2(
+            wallStartMs = start,
+            sensorStartMs = 1_000L,
             valuesMv = values,
-            hrStamps = hr,
+            relMs = LongArray(n) { it * 2L },
+            sampleFlags = IntArray(n),
             wrist = Wrist.LEFT,
             signFactor = 1,
             watchInfo = "demo",
-        )
+            captureSource = CaptureSource.DEMO,
+        ))
     }
 }

@@ -24,11 +24,10 @@ class EcgFounderPreprocessTest {
     }
 
     @Test
-    fun shortTraceIsPaddedToOneWindow() {
+    fun shortTraceIsRejectedInsteadOfZeroPadded() {
         val samples = synthetic(seconds = 8, srHz = 500, hz = 1.0)
         val windows = EcgFounderPreprocess.windows(samples, 500)
-        assertThat(windows).hasSize(1)
-        assertThat(windows[0].samples.size).isEqualTo(5000)
+        assertThat(windows).isEmpty()
     }
 
     @Test

@@ -24,12 +24,16 @@ fun EcgSession.durationLabel(): String {
     return if (m > 0) "${m}m ${s}s" else "${s}s"
 }
 
-fun EcgSession.hrLabel(): String = hrMedian?.let { "${it.toInt()}" } ?: "—"
+fun EcgSession.hrLabel(): String = (ecgHrMedian ?: hrMedian)?.let { "${it.toInt()}" } ?: "—"
+
+fun EcgSession.hrSourceLabel(): String =
+    if (ecgHrMedian != null) "ECG-derived median bpm" else "legacy median bpm"
 
 fun EcgSession.naoTitle(): String {
     if (analysisStatus == AnalysisStatus.LOW_QUALITY) return "Low quality"
     if (analysisStatus == AnalysisStatus.PENDING) return "Analysing…"
     if (analysisStatus == AnalysisStatus.FAILED) return "Not analysed"
+    if (analysisStatus == AnalysisStatus.INDETERMINATE) return "Indeterminate"
     if (analysisStatus != AnalysisStatus.OK) return "—"
     val parsed = naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
     return when (parsed) {

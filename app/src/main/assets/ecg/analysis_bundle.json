@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "compatibility_id": "ecgfounder-1lead-nao-v1",
+  "model_output_count": 150,
+  "artifacts": {
+    "model": {
+      "path": "ecg/ecgfounder_1lead.onnx",
+      "sha256": "4e108346c51b0ae42f897000871c2371c09c5f8f08f79f08a0db83498c9131ed"
+    },
+    "labels": {
+      "path": "ecg/labels.json",
+      "sha256": "3bfe3217dd5bb0196465977ee5ee7e875eb9bdcde33d0325445a2ead50a86492"
+    },
+    "filters": {
+      "path": "ecg/filters.json",
+      "sha256": "dd3977ebb9ab3cee6d48a4afa8d87305a4e0c7785656e882b053eb61535b360b"
+    },
+    "calibrator": {
+      "path": "ecg/nao_calibrator.json",
+      "sha256": "4252bc0cd2ff9cba18e1ca844ff28c55faa44a81947ed46b06aaaa887e8e1255"
+    },
+    "thresholds": {
+      "path": "ecg/decision_thresholds.json",
+      "sha256": "7b5167184ddb96a22511b96e2b379e18626939f5bc9bea699b0cb22dd568df81"
+    }
+  }
+}

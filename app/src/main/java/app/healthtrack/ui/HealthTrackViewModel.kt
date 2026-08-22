@@ -4,10 +4,11 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.healthtrack.HealthTrackApp
+import app.healthtrack.GalaxyBridgeApp
 import app.healthtrack.data.userFacingImportError
 import app.healthtrack.data.wear.WearLinkStatus
 import app.healthtrack.domain.AnalysisStatus
+import app.healthtrack.analysis.AnalysisBundle
 import app.healthtrack.domain.EcgSample
 import app.healthtrack.domain.EcgSession
 import kotlinx.coroutines.CancellationException
@@ -34,7 +35,7 @@ data class DetailSamplesUiState(
 )
 
 class HealthTrackViewModel(application: Application) : AndroidViewModel(application) {
-    private val app = application as HealthTrackApp
+    private val app = application as GalaxyBridgeApp
     private val repo = app.container.ecgRepository
     private val wear = app.container.wearSyncClient
 
@@ -114,7 +115,7 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
                 val n = wear.requestSyncNow()
                 _home.value = _home.value.copy(
                     message = if (n == 0) {
-                        "No HealthTrack watch node. Install the watch app, or import a csv.gz."
+                        "No GalaxyBridge watch node. Install the watch app, or import a csv.gz."
                     } else {
                         "Asked $n watch node(s) to sync."
                     },
@@ -140,7 +141,8 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
                         AnalysisStatus.NONE,
                         AnalysisStatus.PENDING,
                         AnalysisStatus.FAILED,
-                    )
+                    ) || (existing?.analysisBundleId != null &&
+                        existing.analysisBundleId != AnalysisBundle.CURRENT_COMPATIBILITY_ID)
                 ) {
                     repo.reanalyze(sessionId)
                 }

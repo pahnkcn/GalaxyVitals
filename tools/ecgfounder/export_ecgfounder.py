@@ -93,7 +93,7 @@ def write_filters(out_json: Path) -> None:
     print("wrote", out_json)
 
 
-def verify_onnx(path: Path, expected: np.ndarray) -> None:
+def verify_onnx(path: Path, probes: list[np.ndarray], expected: list[np.ndarray]) -> None:
     try:
         import onnx
         import onnxruntime as ort
@@ -110,13 +110,48 @@ def verify_onnx(path: Path, expected: np.ndarray) -> None:
         raise RuntimeError(f"unexpected ONNX input schema: {[(v.name, v.shape) for v in inputs]}")
     if len(outputs) != 1 or outputs[0].name != "probs" or outputs[0].shape != [1, 150]:
         raise RuntimeError(f"unexpected ONNX output schema: {[(v.name, v.shape) for v in outputs]}")
-    actual = np.asarray(
-        session.run(["probs"], {"ecg": np.zeros((1, 1, 5000), dtype=np.float32)})[0]
+    for index, (probe, reference) in enumerate(zip(probes, expected, strict=True)):
+        actual = np.asarray(session.run(["probs"], {"ecg": probe})[0])
+        if actual.shape != (1, 150) or not np.isfinite(actual).all():
+            raise RuntimeError(f"ONNX verification returned invalid output for probe {index}")
+        np.testing.assert_allclose(actual, reference, rtol=1e-4, atol=1e-5)
+    print("verified ONNX schema and PyTorch parity on zero, ECG-like, and artifact probes")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_analysis_bundle(assets: Path) -> None:
+    artifacts = {
+        "model": "ecgfounder_1lead.onnx",
+        "labels": "labels.json",
+        "filters": "filters.json",
+        "calibrator": "nao_calibrator.json",
+        "thresholds": "decision_thresholds.json",
+    }
+    missing = [name for name in artifacts.values() if not (assets / name).is_file()]
+    if missing:
+        raise RuntimeError(f"cannot bind incomplete analysis bundle; missing {missing}")
+    payload = {
+        "version": 1,
+        "compatibility_id": "ecgfounder-1lead-nao-v1",
+        "model_output_count": 150,
+        "artifacts": {
+            key: {
+                "path": f"ecg/{name}",
+                "sha256": sha256_file(assets / name),
+            }
+            for key, name in artifacts.items()
+        },
+    }
+    (assets / "analysis_bundle.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
     )
-    if actual.shape != (1, 150) or not np.isfinite(actual).all():
-        raise RuntimeError("ONNX verification returned an invalid or non-finite output")
-    np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
-    print("verified ONNX schema and PyTorch parity")
 
 
 def export(pth: Path, dest_dir: Path, expected_sha256: str) -> None:
@@ -127,7 +162,14 @@ def export(pth: Path, dest_dir: Path, expected_sha256: str) -> None:
     wrapped = SigmoidNet(model)
     wrapped.eval()
     dummy = torch.zeros(1, 1, 5000)
+    phase = torch.linspace(0.0, 20.0 * torch.pi, 5000)
+    ecg_like = (0.08 * torch.sin(phase) + 0.9 * (torch.sin(phase * 1.7) > 0.995)).reshape(1, 1, -1)
+    artifact = torch.zeros(1, 1, 5000)
+    artifact[:, :, 1200:1210] = 4.0
+    artifact[:, :, 3000:3300] = -2.0
+    probes = [dummy, ecg_like, artifact]
     with torch.no_grad():
+        expected = [wrapped(value).detach().cpu().numpy() for value in probes]
         probe = wrapped(dummy)
     print("probe", tuple(probe.shape), float(probe.min()), float(probe.max()))
 
@@ -142,7 +184,7 @@ def export(pth: Path, dest_dir: Path, expected_sha256: str) -> None:
         dynamo=False,
     )
     print("exported", fp32, "bytes", fp32.stat().st_size)
-    verify_onnx(fp32, probe.detach().cpu().numpy())
+    verify_onnx(fp32, [value.numpy() for value in probes], expected)
 
     int8 = dest_dir / "ecgfounder_1lead_int8.onnx"
     try:
@@ -168,6 +210,7 @@ def export(pth: Path, dest_dir: Path, expected_sha256: str) -> None:
         temporary_target.unlink(missing_ok=True)
     print("copied", target, "bytes", target.stat().st_size)
     write_filters(assets / "filters.json")
+    write_analysis_bundle(assets)
 
 
 def main() -> None:

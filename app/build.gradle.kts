@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -57,13 +59,39 @@ android {
 
 val verifyEcgFounderModel by tasks.registering {
     group = "verification"
-    description = "Fails release builds when the locally provisioned ECGFounder model is absent."
+    description = "Fails release builds when any ECG analysis-bundle artifact is absent or changed."
     doLast {
-        val model = file("src/main/assets/ecg/ecgfounder_1lead.onnx")
-        if (!model.isFile || model.length() == 0L) {
-            throw GradleException(
-                "Missing ECGFounder ONNX asset. Run tools/ecgfounder/export_ecgfounder.py first.",
-            )
+        val assetsRoot = file("src/main/assets").canonicalFile
+        val manifestFile = file("src/main/assets/ecg/analysis_bundle.json")
+        if (!manifestFile.isFile) throw GradleException("Missing ECG analysis_bundle.json")
+        @Suppress("UNCHECKED_CAST")
+        val manifest = groovy.json.JsonSlurper().parse(manifestFile) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val artifacts = manifest["artifacts"] as? Map<String, Map<String, String>>
+            ?: throw GradleException("Invalid ECG analysis bundle artifacts")
+        if (artifacts.keys != setOf("model", "labels", "filters", "calibrator", "thresholds")) {
+            throw GradleException("ECG analysis bundle must bind model, labels, filters, calibrator, and thresholds")
+        }
+        artifacts.forEach { (name, entry) ->
+            val artifact = file("src/main/assets/${entry["path"]}").canonicalFile
+            if (!artifact.path.startsWith(assetsRoot.path) || !artifact.isFile || artifact.length() == 0L) {
+                throw GradleException("Missing ECG analysis artifact: $name")
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            artifact.inputStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val actual = digest.digest().joinToString("") { byte: Byte ->
+                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+            }
+            if (actual != entry["sha256"]) {
+                throw GradleException("ECG analysis artifact hash mismatch: $name")
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class HealthTrackApp : Application() {
+class GalaxyBridgeApp : Application() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     lateinit var container: AppContainer
         private set

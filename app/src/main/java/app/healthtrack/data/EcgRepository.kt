@@ -80,20 +80,38 @@ class EcgRepository(
         }
     }
 
-    suspend fun ingestGzipFile(sourceFile: File, sessionId: String, source: EcgSource): EcgSession {
+    suspend fun ingestGzipFile(
+        sourceFile: File,
+        sessionId: String,
+        source: EcgSource,
+        expectedSha256: String? = null,
+    ): EcgSession {
         return withContext(Dispatchers.IO) {
             ingestMutex.withLock {
                 val safeSessionId = EcgWearContract.requireSessionId(sessionId)
+                val incomingSha256 = EcgWearContract.sha256(sourceFile.readBytes())
+                if (expectedSha256 != null && incomingSha256 != EcgWearContract.requireSha256(expectedSha256)) {
+                    throw java.io.IOException("ECG payload SHA-256 mismatch")
+                }
                 var localSessionId = safeSessionId
                 if (source == EcgSource.WEAR) {
                     localSessionId = wearLocalSessionId(safeSessionId)
                     val existing = dao.get(localSessionId)
                     if (existing?.source == EcgSource.WEAR.name && isValidStoredEcg(existing)) {
-                        return@withLock existing.toDomain()
+                        val storedSha256 = existing.payloadSha256
+                            ?: EcgWearContract.sha256(File(existing.filePath).readBytes())
+                        if (storedSha256 == incomingSha256) return@withLock existing.toDomain()
+                        quarantineCollision(sourceFile, safeSessionId, incomingSha256)
+                        throw java.io.IOException("ECG session id collision with different content")
                     }
                 }
                 val parsed = EcgCsvParser.parseFile(sourceFile, localSessionId)
-                persistUnlocked(parsed, source, keepFile = sourceFile)
+                persistUnlocked(
+                    parsed,
+                    source,
+                    keepFile = sourceFile,
+                    payloadSha256 = incomingSha256,
+                )
             }
         }
     }
@@ -108,11 +126,6 @@ class EcgRepository(
             val sessionId = runCatching {
                 EcgWearContract.sessionIdFromFileName(file.name)
             }.getOrNull() ?: return@forEach
-            val existing = dao.get(sessionId)
-            if (existing != null) {
-                if (existing.source == EcgSource.WEAR.name) ingested += sessionId
-                return@forEach
-            }
             try {
                 ingestGzipFile(file, sessionId, EcgSource.WEAR)
                 ingested += sessionId
@@ -160,6 +173,7 @@ class EcgRepository(
         parsed: ParsedEcgFile,
         source: EcgSource,
         keepFile: File? = null,
+        payloadSha256: String? = null,
     ): EcgSession {
         val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
         val sessionId = EcgWearContract.requireSessionId(parsed.sessionId)
@@ -167,13 +181,20 @@ class EcgRepository(
         if (keepFile == null) {
             writeCanonical(dest, parsed)
         } else if (keepFile.canonicalPath != dest.canonicalPath) {
-            writeCanonical(dest, parsed)
+            if (parsed.schemaVersion >= 2) {
+                writeAtomic(dest, keepFile.readBytes())
+            } else {
+                writeCanonical(dest, parsed)
+            }
         }
         val entity = EcgSessionEntity.from(
             parsed = parsed,
             filePath = dest.absolutePath,
             source = source,
             now = System.currentTimeMillis(),
+            payloadSha256 = payloadSha256 ?: runCatching {
+                EcgWearContract.sha256(dest.readBytes())
+            }.getOrNull(),
         )
         dao.upsert(entity)
         val analysed = try {
@@ -194,6 +215,11 @@ class EcgRepository(
             naoConfidence = decision?.confidence,
             findings = decision?.let { EcgFounderLabels.encodeFindings(it.topFindings) }.orEmpty(),
             note = result.note,
+            qualityStatus = result.quality?.status?.name ?: entity.qualityStatus,
+            cleanCoveragePct = result.quality?.cleanCoveragePct ?: entity.cleanCoveragePct,
+            qualityFlagsJson = result.quality?.flagsJson() ?: entity.qualityFlagsJson,
+            ecgHrMedian = result.ecgHrMedian,
+            analysisBundleId = result.analysisBundleId,
         )
     }
 
@@ -211,6 +237,12 @@ class EcgRepository(
             dest,
             EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeParsed(parsed)),
         )
+    }
+
+    private fun quarantineCollision(sourceFile: File, sessionId: String, sha256: String) {
+        val quarantine = File(context.filesDir, "ecg_quarantine").apply { mkdirs() }
+        val dest = File(quarantine, "${sessionId}-${sha256.take(16)}.collision")
+        if (!dest.exists()) writeAtomic(dest, sourceFile.readBytes())
     }
 
     private fun writeAtomic(dest: File, bytes: ByteArray) {

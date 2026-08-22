@@ -10,6 +10,7 @@ enum class AnalysisStatus {
     PENDING,
     OK,
     LOW_QUALITY,
+    INDETERMINATE,
     FAILED,
 }
 
@@ -37,6 +38,15 @@ data class EcgSession(
     val naoConfidence: Float? = null,
     val findings: String = "",
     val analysisNote: String = "",
+    val inputSchemaVersion: Int = 1,
+    val timingTrust: String = "ASSUMED",
+    val qualityStatus: String = "UNKNOWN",
+    val cleanCoveragePct: Double = 0.0,
+    val qualityFlagsJson: String = "[]",
+    val ecgHrMedian: Double? = null,
+    val analysisBundleId: String? = null,
+    val payloadSha256: String? = null,
+    val captureSource: String = "LEGACY",
 )
 
 data class BloodPressureReading(

@@ -46,7 +46,7 @@ fun HomeScreen(
                         .minimumVerticalContentPadding(ListHeaderDefaults.minimumTopListContentPadding),
                     transformation = SurfaceTransformation(transformationSpec),
                 ) {
-                    Text("HealthTrack")
+                    Text("GalaxyBridge")
                 }
             }
             item {
