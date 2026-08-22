@@ -10,10 +10,16 @@ import android.os.Looper
 import android.os.SystemClock
 import app.healthtrack.data.protocol.EcgWearContract
 
+interface OffBodyGate {
+    fun start()
+    fun stop()
+    fun isBlocked(): Boolean
+}
+
 class OffBodyMonitor(
     context: Context,
     private val onChange: (blocked: Boolean) -> Unit,
-) : SensorEventListener {
+) : SensorEventListener, OffBodyGate {
     private val manager = context.getSystemService(SensorManager::class.java)
     private val sensor = manager?.getDefaultSensor(Sensor.TYPE_LOW_LATENCY_OFFBODY_DETECT)
     private val main = Handler(Looper.getMainLooper())
@@ -23,7 +29,7 @@ class OffBodyMonitor(
         if (isBlocked()) onChange(true)
     }
 
-    fun start() {
+    override fun start() {
         resetDetection()
         val s = sensor
         if (s == null) {
@@ -33,12 +39,12 @@ class OffBodyMonitor(
         manager?.registerListener(this, s, SensorManager.SENSOR_DELAY_NORMAL)
     }
 
-    fun stop() {
+    override fun stop() {
         manager?.unregisterListener(this)
         resetDetection()
     }
 
-    fun isBlocked(): Boolean {
+    override fun isBlocked(): Boolean {
         if (sensor == null) return false
         return off && lastOffAt > 0 &&
             SystemClock.elapsedRealtime() - lastOffAt >= EcgWearContract.OFF_BODY_BLOCK_MS

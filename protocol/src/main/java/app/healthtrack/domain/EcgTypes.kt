@@ -8,7 +8,6 @@ enum class Wrist {
 
 enum class CaptureSource {
     HARDWARE,
-    DEMO,
     IMPORT,
     LEGACY,
 }

@@ -116,11 +116,11 @@ fun EcgWaveform(
 @Composable
 private fun EcgWaveformPreview() {
     HealthTrackTheme(darkTheme = true) {
-        val demo = List(400) { i ->
+        val previewSamples = List(400) { i ->
             val t = i / 500.0
             val qrs = if (i % 80 in 38..42) 1.6f else 0f
             EcgSample(i * 2L, (0.12f * kotlin.math.sin(t * 12).toFloat()) + qrs, 68)
         }
-        EcgWaveform(samples = demo)
+        EcgWaveform(samples = previewSamples)
     }
 }

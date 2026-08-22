@@ -1,7 +1,5 @@
 package app.healthtrack.wear.sensors
 
-enum class SensorKind { SAMSUNG, DEMO }
-
 data class EcgBatch(
     val samplesMv: FloatArray,
     val sensorTimestampsMs: LongArray,
@@ -34,20 +32,21 @@ data class EcgSensorError(
 )
 
 data class SensorAvailability(
-    val kind: SensorKind,
     val ready: Boolean,
     val reason: String? = null,
     val policyDenied: Boolean = false,
 )
 
+fun interface EcgSubscription : AutoCloseable {
+    override fun close()
+}
+
 interface EcgSensor {
-    val kind: SensorKind
     fun connect(onResult: (SensorAvailability) -> Unit)
     fun startEcg(
         onError: (EcgSensorError) -> Unit = {},
         onBatch: (EcgBatch) -> Unit,
-    )
-    fun stopEcg()
+    ): EcgSubscription
     fun stop()
     fun disconnect()
 }

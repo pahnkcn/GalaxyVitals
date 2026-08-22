@@ -89,6 +89,54 @@ object EcgCsvParser {
         return parseStream(ByteArrayInputStream(bytes), gzip, sessionIdHint)
     }
 
+    /** Reads only the bounded metadata line and deliberately returns unknown tokens such as DEMO. */
+    fun peekCaptureSourceToken(file: File): String? {
+        if (file.length() > MAX_COMPRESSED_BYTES) return null
+        return runCatching {
+            FileInputStream(file).use(::peekCaptureSourceToken)
+        }.getOrNull()
+    }
+
+    /** Reads only the bounded metadata line and deliberately returns unknown tokens such as DEMO. */
+    fun peekCaptureSourceToken(bytes: ByteArray): String? {
+        if (bytes.size.toLong() > MAX_COMPRESSED_BYTES) return null
+        return runCatching {
+            ByteArrayInputStream(bytes).use(::peekCaptureSourceToken)
+        }.getOrNull()
+    }
+
+    private fun peekCaptureSourceToken(input: InputStream): String? {
+        val boundedRaw = LimitedInputStream(input, MAX_COMPRESSED_BYTES, "ECG compressed data")
+        val pushback = PushbackInputStream(boundedRaw, GZIP_MAGIC.size)
+        val prefix = ByteArray(GZIP_MAGIC.size)
+        var count = 0
+        while (count < prefix.size) {
+            val read = pushback.read(prefix, count, prefix.size - count)
+            if (read < 0) break
+            count += read
+        }
+        if (count > 0) pushback.unread(prefix, 0, count)
+        val decoded = if (count == GZIP_MAGIC.size && prefix.contentEquals(GZIP_MAGIC)) {
+            GZIPInputStream(pushback)
+        } else {
+            pushback
+        }
+        val boundedDecoded = LimitedInputStream(
+            decoded,
+            MAX_UNCOMPRESSED_BYTES,
+            "ECG uncompressed data",
+        )
+        BufferedReader(InputStreamReader(boundedDecoded, StandardCharsets.UTF_8)).use { reader ->
+            val first = readBoundedLine(reader) ?: return null
+            if (!first.startsWith("#meta=")) return null
+            val meta = MetaJson(first.substring(6).trim())
+            if (!meta.has("capture_source")) return null
+            return meta.string("capture_source", "").trim()
+                .takeIf(String::isNotEmpty)
+                ?.uppercase(Locale.US)
+        }
+    }
+
     fun isGzip(bytes: ByteArray): Boolean =
         bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()
 
@@ -224,6 +272,9 @@ object EcgCsvParser {
         val captureSource = parseCaptureSource(
             meta.string("capture_source", if (schemaVersion == 1) "LEGACY" else ""),
         )
+        if (schemaVersion == 2 && captureSource == CaptureSource.LEGACY) {
+            throw EcgParseException("ECG schema v2 requires HARDWARE or IMPORT capture source")
+        }
         val timingTrust = parseTimingTrust(
             meta.string("timing_trust", if (schemaVersion == 1) "ASSUMED" else ""),
         )

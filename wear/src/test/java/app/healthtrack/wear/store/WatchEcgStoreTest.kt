@@ -1,6 +1,9 @@
 package app.healthtrack.wear.store
 
 import app.healthtrack.data.protocol.EcgWearContract
+import app.healthtrack.data.protocol.EcgCsvWriter
+import app.healthtrack.domain.CaptureSource
+import app.healthtrack.domain.Wrist
 import com.google.common.truth.Truth.assertThat
 import org.junit.Rule
 import org.junit.Test
@@ -95,5 +98,45 @@ class WatchEcgStoreTest {
 
         assertThat(store.delete("ecg_42")).isTrue()
         assertThat(dir.listFiles()).isEmpty()
+    }
+
+    @Test
+    fun startupCleanupRemovesOnlyExplicitDemoAndMarker() {
+        val dir = tmp.newFolder("demo-cleanup")
+        val hardwareBytes = EcgCsvWriter.gzipBytes(
+            EcgCsvWriter.encodeCaptureV2(
+                wallStartMs = 1L,
+                sensorStartMs = 1L,
+                valuesMv = floatArrayOf(0.1f),
+                relMs = longArrayOf(0L),
+                sampleFlags = intArrayOf(0),
+                wrist = Wrist.LEFT,
+                signFactor = 1,
+                watchInfo = "watch",
+                captureSource = CaptureSource.HARDWARE,
+            ),
+        )
+        val demoText = EcgCsvWriter.encodeCaptureV2(
+                wallStartMs = 1L,
+                sensorStartMs = 1L,
+                valuesMv = floatArrayOf(0.1f),
+                relMs = longArrayOf(0L),
+                sampleFlags = intArrayOf(0),
+                wrist = Wrist.LEFT,
+                signFactor = 1,
+                watchInfo = "watch",
+                captureSource = CaptureSource.HARDWARE,
+            ).toString(Charsets.UTF_8)
+            .replace("\"capture_source\":\"HARDWARE\"", "\"capture_source\":\"DEMO\"")
+        val demoBytes = EcgCsvWriter.gzipBytes(demoText.toByteArray())
+        File(dir, "ecg_demo.csv.gz").writeBytes(demoBytes)
+        File(dir, "ecg_demo.csv.gz${WatchEcgStore.SYNCED_SUFFIX}").writeBytes(byteArrayOf())
+        File(dir, "ecg_hardware.csv.gz").writeBytes(hardwareBytes)
+
+        WatchEcgStore(dir)
+
+        assertThat(File(dir, "ecg_demo.csv.gz").exists()).isFalse()
+        assertThat(File(dir, "ecg_demo.csv.gz${WatchEcgStore.SYNCED_SUFFIX}").exists()).isFalse()
+        assertThat(File(dir, "ecg_hardware.csv.gz").isFile).isTrue()
     }
 }

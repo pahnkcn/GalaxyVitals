@@ -74,18 +74,17 @@ object SignalQualityAnalyzer {
         }
         if (parsed.srHz !in setOf(250, 300, 500)) flags += QualityFlag.UNSUPPORTED_RATE
 
-        var gaps = parsed.gapCount
-        var missing = parsed.missingSampleCount
+        var gaps = parsed.gapCount + parsed.sequenceGapCount
+        var missing = parsed.missingSampleCount + parsed.sequenceGapCount
         var clipped = parsed.clippedSampleCount
         val segments = ArrayList<ContinuousSegment>()
         var start = 0
         for (index in 1 until samples.size) {
-            val delta = samples[index].relMs - samples[index - 1].relMs
             val flaggedGap = samples[index].flags and
                 (EcgSampleFlags.TIMESTAMP_GAP or EcgSampleFlags.SEQUENCE_GAP) != 0
-            if (flaggedGap || delta > expectedMs * 1.6) {
+            if (flaggedGap) {
                 gaps++
-                missing += max(1, (delta / expectedMs).toInt() - 1)
+                missing++
                 addSegment(samples, start, index - 1, segments)
                 start = index
             }
@@ -101,8 +100,8 @@ object SignalQualityAnalyzer {
         if (acquisitionContact > 0) flags += QualityFlag.CONTACT_LOSS
         clipped += samples.count { sample ->
             sample.flags and EcgSampleFlags.CLIPPED != 0 ||
-                parsed.minThresholdMv?.let { sample.valueMv <= it } == true ||
-                parsed.maxThresholdMv?.let { sample.valueMv >= it } == true
+                parsed.minThresholdMv?.let { sample.valueMv < it } == true ||
+                parsed.maxThresholdMv?.let { sample.valueMv > it } == true
         }
         if (clipped > 0) flags += QualityFlag.CLIPPING
 

@@ -3,7 +3,6 @@ package app.healthtrack.wear
 import android.app.Application
 import app.healthtrack.wear.capture.EcgSessionRecorder
 import app.healthtrack.wear.capture.MeasureForegroundLeaseManager
-import app.healthtrack.wear.sensors.DemoEcgSensor
 import app.healthtrack.wear.sensors.SamsungEcgSensor
 import app.healthtrack.wear.store.WatchEcgStore
 import app.healthtrack.wear.store.WearPreferences
@@ -30,5 +29,4 @@ class WearContainer(app: Application) {
     val recorder = EcgSessionRecorder()
     val measureForegroundLeases = MeasureForegroundLeaseManager(app)
     val samsungSensor = SamsungEcgSensor(app)
-    val demoSensor = DemoEcgSensor()
 }

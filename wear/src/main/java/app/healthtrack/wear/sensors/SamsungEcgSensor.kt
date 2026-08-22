@@ -16,8 +16,6 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
 class SamsungEcgSensor(context: Context) : EcgSensor {
-    override val kind: SensorKind = SensorKind.SAMSUNG
-
     private val app = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val acquisition = Executors.newSingleThreadExecutor { runnable ->
@@ -34,11 +32,18 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     @Volatile
     private var connectionToken = 0L
     private var ecgTracker: HealthTracker? = null
-    private var ecgListening = false
+    private var subscriptionEpoch = 0L
+    private var activeSubscriptionEpoch = 0L
 
     override fun connect(onResult: (SensorAvailability) -> Unit) {
-        disconnect()
-        val token = synchronized(connectionLock) { connectionToken }
+        val hasExistingConnection = synchronized(connectionLock) {
+            service != null || ecgTracker != null || activeSubscriptionEpoch != 0L
+        }
+        if (hasExistingConnection) disconnect()
+        val token = synchronized(connectionLock) {
+            connectionToken += 1
+            connectionToken
+        }
         lateinit var candidate: HealthTrackingService
         val listener = object : ConnectionListener {
             override fun onConnectionSuccess() {
@@ -63,7 +68,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                         token,
                         onResult,
                         SensorAvailability(
-                            kind = SensorKind.SAMSUNG,
                             ready = false,
                             reason = "ECG_ON_DEMAND is not available for ${app.packageName}.",
                             policyDenied = true,
@@ -99,7 +103,7 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                     candidate,
                     token,
                     onResult,
-                    SensorAvailability(SensorKind.SAMSUNG, ready = true),
+                    SensorAvailability(ready = true),
                 )
             }
 
@@ -119,7 +123,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                     token,
                     onResult,
                     SensorAvailability(
-                        kind = SensorKind.SAMSUNG,
                         ready = false,
                         reason = exception.message ?: "Samsung Health connection failed.",
                         policyDenied = true,
@@ -146,32 +149,40 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     override fun startEcg(
         onError: (EcgSensorError) -> Unit,
         onBatch: (EcgBatch) -> Unit,
-    ) {
-        val tracker = ecgTracker
+    ): EcgSubscription {
+        val tracker = synchronized(connectionLock) { ecgTracker }
         if (tracker == null) {
             onError(EcgSensorError(EcgSensorErrorCode.NOT_CONNECTED, "Samsung ECG is not connected."))
-            return
+            return EcgSubscription { }
         }
-        synchronized(connectionLock) {
-            if (ecgListening) return
+        val epoch = synchronized(connectionLock) {
+            check(activeSubscriptionEpoch == 0L) { "Samsung ECG listener is already active." }
+            ++subscriptionEpoch
+            activeSubscriptionEpoch = subscriptionEpoch
+            subscriptionEpoch
         }
         val listener = object : HealthTracker.TrackerEventListener {
                 override fun onDataReceived(data: List<DataPoint>) {
-                    if (data.isEmpty()) return
+                    if (data.isEmpty() || !isCurrentSubscription(epoch)) return
                     val batch = try {
                         mapBatch(data)
                     } catch (error: Exception) {
-                        acquisition.execute {
-                            onError(
-                                EcgSensorError(
-                                    EcgSensorErrorCode.INVALID_BATCH,
-                                    error.message ?: "Samsung returned an invalid ECG batch.",
-                                ),
-                            )
-                        }
+                        deliverSubscriptionError(
+                            epoch,
+                            onError,
+                            EcgSensorError(
+                                EcgSensorErrorCode.INVALID_BATCH,
+                                error.message ?: "Samsung returned an invalid ECG batch.",
+                            ),
+                        )
                         return
                     }
-                    acquisition.execute { onBatch(batch) }
+                    acquisition.execute {
+                        if (!isCurrentSubscription(epoch)) return@execute
+                        main.post {
+                            if (isCurrentSubscription(epoch)) onBatch(batch)
+                        }
+                    }
                 }
 
                 override fun onFlushCompleted() = Unit
@@ -182,16 +193,19 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                     } else {
                         EcgSensorErrorCode.TRACKER
                     }
-                    acquisition.execute {
-                        onError(EcgSensorError(code, "Samsung ECG tracker error: $error"))
-                    }
+                    deliverSubscriptionError(
+                        epoch,
+                        onError,
+                        EcgSensorError(code, "Samsung ECG tracker error: $error"),
+                    )
                 }
             }
         try {
             tracker.setEventListener(listener)
-            synchronized(connectionLock) { ecgListening = true }
         } catch (error: Exception) {
-            synchronized(connectionLock) { ecgListening = false }
+            synchronized(connectionLock) {
+                if (activeSubscriptionEpoch == epoch) activeSubscriptionEpoch = 0L
+            }
             onError(
                 EcgSensorError(
                     EcgSensorErrorCode.START_FAILED,
@@ -199,23 +213,11 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                 ),
             )
         }
-    }
-
-    override fun stopEcg() {
-        val tracker = synchronized(connectionLock) {
-            ecgTracker.takeIf { ecgListening }.also { ecgListening = false }
-        }
-        try {
-            tracker?.unsetEventListener()
-        } catch (_: Exception) {
-            // Listener may already be unset after an SDK error.
-        }
+        return EcgSubscription { closeSubscription(epoch) }
     }
 
     override fun stop() {
-        val listeners = synchronized(connectionLock) {
-            ListenerHandles(ecg = ecgTracker.takeIf { ecgListening }).also { ecgListening = false }
-        }
+        val listeners = takeActiveListener()
         stopListeners(listeners)
     }
 
@@ -224,13 +226,12 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             connectionToken += 1
             ConnectionHandles(
                 service = service,
-                listeners = ListenerHandles(
-                    ecg = ecgTracker.takeIf { ecgListening },
-                ),
+                listeners = ListenerHandles(ecg = ecgTracker.takeIf { activeSubscriptionEpoch != 0L }),
             ).also {
                 service = null
                 ecgTracker = null
-                ecgListening = false
+                activeSubscriptionEpoch = 0L
+                subscriptionEpoch += 1
             }
         }
         stopListeners(connection.listeners)
@@ -245,6 +246,44 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         synchronized(connectionLock) {
             connectionToken == token && service === candidate
         }
+
+    private fun isCurrentSubscription(epoch: Long): Boolean = synchronized(connectionLock) {
+        activeSubscriptionEpoch == epoch
+    }
+
+    private fun deliverSubscriptionError(
+        epoch: Long,
+        onError: (EcgSensorError) -> Unit,
+        error: EcgSensorError,
+    ) {
+        acquisition.execute {
+            if (!isCurrentSubscription(epoch)) return@execute
+            main.post {
+                if (isCurrentSubscription(epoch)) onError(error)
+            }
+        }
+    }
+
+    private fun closeSubscription(epoch: Long) {
+        val tracker = synchronized(connectionLock) {
+            if (activeSubscriptionEpoch != epoch) return
+            activeSubscriptionEpoch = 0L
+            subscriptionEpoch += 1
+            ecgTracker
+        }
+        try {
+            tracker?.unsetEventListener()
+        } catch (_: Exception) {
+            // Listener may already be unset after an SDK error.
+        }
+    }
+
+    private fun takeActiveListener(): ListenerHandles = synchronized(connectionLock) {
+        ListenerHandles(ecg = ecgTracker.takeIf { activeSubscriptionEpoch != 0L }).also {
+            activeSubscriptionEpoch = 0L
+            subscriptionEpoch += 1
+        }
+    }
 
     private fun deliverResult(
         candidate: HealthTrackingService,
@@ -297,7 +336,7 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             timestamps[index] = point.timestamp
             var sampleFlags = EcgSampleFlags.NONE
             if (leadOff != 0) sampleFlags = sampleFlags or EcgSampleFlags.CONTACT_LOSS
-            if (value <= minThreshold || value >= maxThreshold) {
+            if (value < minThreshold || value > maxThreshold) {
                 sampleFlags = sampleFlags or EcgSampleFlags.CLIPPED
             }
             flags[index] = sampleFlags
@@ -314,7 +353,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     }
 
     private fun unavailable(reason: String) = SensorAvailability(
-        kind = SensorKind.SAMSUNG,
         ready = false,
         reason = reason,
         policyDenied = true,

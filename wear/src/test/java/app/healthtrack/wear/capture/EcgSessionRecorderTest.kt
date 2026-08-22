@@ -113,7 +113,7 @@ class EcgSessionRecorderTest {
             sequence = (sequence + 1) and 0xff
         }
         val snapshot = recorder.takeSnapshot()
-        snapshot.requireCompleteHardwareCapture()
+        snapshot.requireCompleteCapture()
         val parsed = EcgCsvParser.parseBytes(
             recorder.finish(snapshot, "w").gzip, true, "exact",
         )
@@ -140,6 +140,77 @@ class EcgSessionRecorderTest {
         sequence.addEcg(batch(5, 5, 0))
         assertThrows(EcgCaptureException::class.java) {
             sequence.addEcg(batch(10, 5, 0))
+        }
+    }
+
+    @Test
+    fun localTimestampJitterPassesWhenAggregateRateIsWithinOnePercent() {
+        val recorder = EcgSessionRecorder()
+        recorder.begin("jitter", Wrist.LEFT, 1, 1L)
+        var first = 0
+        var sequence = 0
+        while (first < EcgSessionRecorder.EXPECTED_SAMPLES) {
+            val count = minOf(10, EcgSessionRecorder.EXPECTED_SAMPLES - first)
+            recorder.addEcg(
+                batch(first, count, sequence).copy(
+                    sensorTimestampsMs = LongArray(count) { offset ->
+                        val index = first + offset
+                        1_000L + index * 2L - if (index % 2 == 1) 1L else 0L
+                    },
+                ),
+            )
+            first += count
+            sequence = (sequence + 1) and 0xff
+        }
+
+        recorder.takeSnapshot().requireCompleteCapture()
+    }
+
+    @Test
+    fun timestampReversalAndAggregateRateOutsideToleranceFail() {
+        val reversed = EcgSessionRecorder().apply { begin("reverse", Wrist.LEFT, 1, 1L) }
+        reversed.addEcg(batch(0, 5, 0))
+        assertThrows(EcgCaptureException::class.java) {
+            reversed.addEcg(
+                batch(5, 5, 1).copy(
+                    sensorTimestampsMs = longArrayOf(1_007L, 1_012L, 1_014L, 1_016L, 1_018L),
+                ),
+            )
+        }
+
+        val slow = EcgSessionRecorder().apply { begin("slow", Wrist.LEFT, 1, 1L) }
+        var first = 0
+        var sequence = 0
+        while (first < EcgSessionRecorder.EXPECTED_SAMPLES) {
+            val count = minOf(10, EcgSessionRecorder.EXPECTED_SAMPLES - first)
+            slow.addEcg(
+                batch(first, count, sequence).copy(
+                    sensorTimestampsMs = LongArray(count) { offset ->
+                        1_000L + (first + offset) * 3L
+                    },
+                ),
+            )
+            first += count
+            sequence = (sequence + 1) and 0xff
+        }
+        assertThrows(EcgCaptureException::class.java) {
+            slow.takeSnapshot().requireCompleteCapture()
+        }
+    }
+
+    @Test
+    fun saturationThresholdEqualityPassesButValuesBeyondItFail() {
+        val atBoundary = EcgSessionRecorder().apply { begin("boundary", Wrist.LEFT, 1, 1L) }
+        atBoundary.addEcg(
+            batch(0, 2, 0).copy(samplesMv = floatArrayOf(-5f, 5f)),
+        )
+        assertThat(atBoundary.sampleCount).isEqualTo(2)
+
+        val outside = EcgSessionRecorder().apply { begin("outside", Wrist.LEFT, 1, 1L) }
+        assertThrows(EcgCaptureException::class.java) {
+            outside.addEcg(
+                batch(0, 2, 0).copy(samplesMv = floatArrayOf(-5.01f, 0f)),
+            )
         }
     }
 

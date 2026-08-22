@@ -72,13 +72,16 @@ class EcgWearListenerService : WearableListenerService() {
                             pendingAsset.byteCount,
                             pendingAsset.sha256,
                         )
+                        val discardedDemo = EcgCsvParser.peekCaptureSourceToken(incoming) == "DEMO"
                         try {
-                            app.container.ecgRepository.ingestGzipFile(
-                                incoming,
-                                pendingAsset.sessionId,
-                                EcgSource.WEAR,
-                                expectedSha256 = pendingAsset.sha256,
-                            )
+                            if (!discardedDemo) {
+                                app.container.ecgRepository.ingestGzipFile(
+                                    incoming,
+                                    pendingAsset.sessionId,
+                                    EcgSource.WEAR,
+                                    expectedSha256 = pendingAsset.sha256,
+                                )
+                            }
                         } finally {
                             incoming.delete()
                         }
@@ -88,7 +91,7 @@ class EcgWearListenerService : WearableListenerService() {
                             .deleteDataItems(pendingAsset.dataItemUri)
                             .await()
                         app.container.wearSyncClient.sendCleanup(pendingAsset.sessionId)
-                        notifyReceived(pendingAsset.sessionId)
+                        if (!discardedDemo) notifyReceived(pendingAsset.sessionId)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {

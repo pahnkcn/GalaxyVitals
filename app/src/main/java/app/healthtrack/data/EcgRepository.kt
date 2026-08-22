@@ -69,17 +69,6 @@ class EcgRepository(
         }
     }
 
-    suspend fun importDemo(): EcgSession = withContext(Dispatchers.IO) {
-        ingestMutex.withLock {
-            val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
-            val sessionId = uniqueImportId("demo")
-            val dest = File(inbox, EcgWearContract.inboxFileName(sessionId))
-            writeAtomic(dest, app.healthtrack.data.protocol.DemoEcg.gzipBytes())
-            val parsed = EcgCsvParser.parseFile(dest, sessionId)
-            persistUnlocked(parsed, EcgSource.IMPORT, keepFile = dest)
-        }
-    }
-
     suspend fun ingestGzipFile(
         sourceFile: File,
         sessionId: String,
@@ -138,6 +127,35 @@ class EcgRepository(
             }
         }
         ingested
+    }
+
+    /** Deletes only explicit DEMO metadata and the exact legacy phone-demo signature. */
+    suspend fun purgeDemoData(): Int = withContext(Dispatchers.IO) {
+        ingestMutex.withLock {
+            val inbox = File(context.filesDir, EcgWearContract.INBOX_DIR).apply { mkdirs() }
+                .canonicalFile
+            val removedIds = linkedSetOf<String>()
+            dao.getDemoCleanupCandidates().filter(::isSafeDemoCleanupCandidate).forEach { entity ->
+                dao.delete(entity.sessionId)
+                deleteCanonicalFile(File(entity.filePath), inbox)
+                removedIds += entity.sessionId
+            }
+            inbox.listFiles { file ->
+                file.isFile && file.name.endsWith(EcgWearContract.FILE_SUFFIX)
+            }.orEmpty().forEach { file ->
+                if (EcgCsvParser.peekCaptureSourceToken(file) == "DEMO") {
+                    val sessionId = runCatching {
+                        EcgWearContract.sessionIdFromFileName(file.name)
+                    }.getOrNull()
+                    if (sessionId != null) {
+                        dao.delete(sessionId)
+                        removedIds += sessionId
+                    }
+                    deleteCanonicalFile(file, inbox)
+                }
+            }
+            removedIds.size
+        }
     }
 
     suspend fun reanalyze(sessionId: String): EcgSession? = withContext(Dispatchers.IO) {
@@ -303,6 +321,11 @@ class EcgRepository(
         }
     }
 
+    private fun deleteCanonicalFile(file: File, inbox: File) {
+        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return
+        if (canonical.parentFile == inbox && canonical.isFile) canonical.delete()
+    }
+
     private fun queryDisplayName(uri: Uri): String? {
         val cursor = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
         cursor?.use {
@@ -340,6 +363,15 @@ internal fun userFacingImportError(error: Throwable): String {
         else -> "Import failed."
     }
 }
+
+internal fun isSafeDemoCleanupCandidate(entity: EcgSessionEntity): Boolean =
+    entity.captureSource == "DEMO" ||
+        (entity.source == EcgSource.IMPORT.name &&
+            entity.watchInfo == "demo" &&
+            entity.tsStartMs == 1_700_000_000_000L &&
+            entity.srHz == 500 &&
+            entity.nSamples == 4_000 &&
+            (entity.sessionId == "demo" || entity.sessionId.startsWith("demo-")))
 
 internal fun userFacingAnalysisError(error: Throwable): String {
     val raw = error.message.orEmpty()

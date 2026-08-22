@@ -12,7 +12,6 @@ import app.healthtrack.data.protocol.NaoDecision
 import app.healthtrack.data.protocol.NaoLabel
 import app.healthtrack.data.protocol.ParsedEcgFile
 import app.healthtrack.data.protocol.SignalQualityReport
-import app.healthtrack.domain.CaptureSource
 import app.healthtrack.domain.AnalysisStatus
 import java.io.File
 import java.nio.FloatBuffer
@@ -36,13 +35,6 @@ class EcgFounderEngine(private val context: Context) {
     private val head: NaoLinearHead by lazy { NaoCalibrator.load(context) }
 
     fun analyze(parsed: ParsedEcgFile): AnalysisResult {
-        if (parsed.captureSource == CaptureSource.DEMO) {
-            return AnalysisResult(
-                status = AnalysisStatus.INDETERMINATE,
-                decision = null,
-                note = "Demo ECG is not eligible for rhythm classification",
-            )
-        }
         val prepared = EcgFounderPreprocess.prepare(parsed)
         val quality = prepared.quality
         val beat = EcgBeatAnalyzer.analyze(parsed, prepared)

@@ -32,9 +32,7 @@ adb -d install -r app/build/outputs/apk/debug/app-debug.apk
 adb -e install -r wear/build/outputs/apk/debug/wear-debug.apk   # watch after pairing
 ```
 
-On the watch: **Start ECG**. If Samsung Health Tracking does not grant
-`ECG_ON_DEMAND` to this package, use **Record demo** to verify the Data Layer
-path. Hardware ECG needs the official Privileged Health SDK AAR at
+On the watch: **Start ECG**. Hardware ECG needs the official Privileged Health SDK AAR at
 `wear/libs/samsung-health-sensor-api.aar` *and* a Samsung partner whitelist for
 `app.healthtrack`.
 

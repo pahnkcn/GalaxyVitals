@@ -160,6 +160,6 @@ class EcgCsvWriterTest {
         assertThat(EcgWearContract.DEFAULT_SR_HZ).isEqualTo(500)
         assertThat(EcgWearContract.MEASURE_DURATION_MS).isEqualTo(30_000L)
         assertThat(EcgWearContract.OFF_BODY_BLOCK_MS).isEqualTo(1_800L)
-        assertThat(EcgWearContract.ECG_STALL_MS).isEqualTo(900L)
+        assertThat(EcgWearContract.ECG_STALL_MS).isEqualTo(2_000L)
     }
 }

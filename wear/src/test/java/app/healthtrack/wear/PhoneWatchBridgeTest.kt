@@ -1,6 +1,5 @@
 package app.healthtrack.wear
 
-import app.healthtrack.data.protocol.DemoEcg
 import app.healthtrack.data.protocol.EcgCsvParser
 import app.healthtrack.data.protocol.EcgWearContract
 import app.healthtrack.domain.Wrist
@@ -11,6 +10,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.exp
+import kotlin.math.sin
 
 /**
  * Simulates the watch writer and the phone listener without Play Services.
@@ -28,7 +30,7 @@ class PhoneWatchBridgeTest {
         val recorder = EcgSessionRecorder()
         recorder.begin(sessionId, Wrist.LEFT, 1, start)
         repeat(8) { sec ->
-            val batch = FloatArray(500) { i -> DemoEcg.sampleMv(sec * 500 + i) }
+            val batch = FloatArray(500) { i -> syntheticSampleMv(sec * 500 + i) }
             recorder.addEcg(batch)
             recorder.addHr(start + sec * 1000L, 64 + sec)
         }
@@ -103,5 +105,16 @@ class PhoneWatchBridgeTest {
         assertThat(parsed.wrist).isEqualTo(Wrist.RIGHT)
         assertThat(parsed.signFactor).isEqualTo(-1)
         assertThat(parsed.samples.map { it.valueMv }).containsExactly(0.4f, 0.2f, 0.1f).inOrder()
+    }
+
+    private fun syntheticSampleMv(index: Int): Float {
+        val t = index / EcgWearContract.DEFAULT_SR_HZ.toDouble()
+        val beat = index % EcgWearContract.DEFAULT_SR_HZ
+        return if (beat in 140..155) {
+            val x = (beat - 147) / 3.0
+            (1.4 * exp(-x * x)).toFloat()
+        } else {
+            (0.08 * sin(2 * PI * t * 1.2)).toFloat()
+        }
     }
 }

@@ -22,9 +22,8 @@ The HealthTrack watch app records:
 
 Samples are written as gzip CSV under `filesDir/ecg/ecg_{sessionId}.csv.gz`.
 
-Samsung ECG is a privileged tracker. Without a partner-whitelisted package (and
-the official client AAR), the watch falls back to a demo trace that still uses
-this file + Data Layer contract.
+Samsung ECG is a privileged tracker. Hardware capture requires both the official
+client AAR and a partner-whitelisted package.
 
 GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
 message creates the exact acknowledgement marker
@@ -60,7 +59,7 @@ rel_ms,sample_index,ecg_raw_mv,flags,hr_bpm
 | `sensor_start_ms` | number | Sensor timestamp of the first sample in Samsung's documented millisecond unit. |
 | `timing_trust` | string | `SENSOR`; legacy v1 is parsed as `ASSUMED`. |
 | `format` | string | `csv_mv_v2`. |
-| `capture_source` | string | `HARDWARE` or `DEMO`; demo is never classified. |
+| `capture_source` | string | `HARDWARE` or `IMPORT`; `LEGACY` is used only while reading pre-v2 files. |
 | `sample_count` / `duration_ms` | number | Declared row count and sensor-time span. |
 | `gap_count` / `missing_sample_count` | number | Timestamp continuity summary. |
 | `sequence_gap_count` | number | Samsung batch sequence discontinuities. |

@@ -92,22 +92,6 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun loadDemo() {
-        if (!beginBusy()) return
-        viewModelScope.launch {
-            try {
-                repo.importDemo()
-                _home.value = _home.value.copy(message = "Loaded a demo 500 Hz trace")
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (t: Exception) {
-                _home.value = _home.value.copy(message = userFacingImportError(t))
-            } finally {
-                _home.value = _home.value.copy(busy = false)
-            }
-        }
-    }
-
     fun requestSync() {
         if (!beginBusy()) return
         viewModelScope.launch {

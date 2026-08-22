@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -21,14 +20,10 @@ import app.healthtrack.wear.ui.components.EcgWaveformMini
 @Composable
 fun MeasureScreen(
     state: MeasureUiState,
-    onStartSamsung: () -> Unit,
-    onStartDemo: () -> Unit,
+    onRetry: () -> Unit,
     onCancel: () -> Unit,
     onDone: () -> Unit,
 ) {
-    LaunchedEffect(Unit) {
-        if (state.phase == MeasurePhase.Connecting) onStartSamsung()
-    }
     ScreenScaffold { contentPadding ->
         Column(
             modifier = Modifier
@@ -47,9 +42,6 @@ fun MeasureScreen(
                 MeasurePhase.Connecting, MeasurePhase.Warmup -> {
                     CircularProgressIndicator()
                     state.hrBpm?.let { Text("$it bpm", color = MaterialTheme.colorScheme.primary) }
-                    Button(onClick = onStartDemo, modifier = Modifier.fillMaxWidth()) {
-                        Text("Record demo")
-                    }
                 }
                 MeasurePhase.Ready, MeasurePhase.LeadOff -> {
                     Text(
@@ -59,9 +51,6 @@ fun MeasureScreen(
                         textAlign = TextAlign.Center,
                     )
                     state.hrBpm?.let { Text("$it bpm", color = MaterialTheme.colorScheme.primary) }
-                    Button(onClick = onStartDemo, modifier = Modifier.fillMaxWidth()) {
-                        Text("Record demo")
-                    }
                 }
                 MeasurePhase.Recording -> {
                     Text(
@@ -108,8 +97,8 @@ fun MeasureScreen(
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center,
                     )
-                    Button(onClick = onStartDemo, modifier = Modifier.fillMaxWidth()) {
-                        Text("Record demo")
+                    Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                        Text("Record again")
                     }
                 }
             }

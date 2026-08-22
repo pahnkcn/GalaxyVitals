@@ -17,6 +17,13 @@ interface EcgSessionDao {
     @Query("SELECT * FROM ecg_sessions WHERE sessionId = :id LIMIT 1")
     suspend fun get(id: String): EcgSessionEntity?
 
+    @Query(
+        """SELECT * FROM ecg_sessions WHERE captureSource = 'DEMO' OR
+            (source = 'IMPORT' AND watchInfo = 'demo' AND tsStartMs = 1700000000000 AND
+             srHz = 500 AND nSamples = 4000 AND (sessionId = 'demo' OR sessionId LIKE 'demo-%'))""",
+    )
+    suspend fun getDemoCleanupCandidates(): List<EcgSessionEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: EcgSessionEntity)
 

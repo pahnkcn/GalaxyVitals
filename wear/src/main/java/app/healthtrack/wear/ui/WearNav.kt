@@ -68,7 +68,10 @@ fun WearRoot() {
                         val state by homeVm.state.collectAsStateWithLifecycle()
                         HomeScreen(
                             state = state,
-                            onStart = { backStack.add(WearRoute.Measure) },
+                            onStart = {
+                                measureVm.startSamsung()
+                                backStack.add(WearRoute.Measure)
+                            },
                             onHistory = { backStack.add(WearRoute.History) },
                             onSettings = { backStack.add(WearRoute.Settings) },
                             onRefresh = homeVm::refresh,
@@ -78,8 +81,7 @@ fun WearRoot() {
                         val state by measureVm.state.collectAsStateWithLifecycle()
                         MeasureScreen(
                             state = state,
-                            onStartSamsung = measureVm::startSamsung,
-                            onStartDemo = measureVm::startDemo,
+                            onRetry = measureVm::retry,
                             onCancel = measureVm::cancelRecording,
                             onDone = {
                                 backStack.removeLastOrNull()

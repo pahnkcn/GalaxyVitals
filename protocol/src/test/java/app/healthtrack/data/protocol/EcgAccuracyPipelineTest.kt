@@ -85,10 +85,69 @@ class EcgAccuracyPipelineTest {
             maxThresholdMv = 5f,
         )
         val report = SignalQualityAnalyzer.analyze(parsed)
-        assertThat(report.flags).contains(QualityFlag.TIMESTAMP_GAP)
+        assertThat(report.flags).doesNotContain(QualityFlag.TIMESTAMP_GAP)
+        assertThat(report.flags).contains(QualityFlag.MISSING_SAMPLES)
         assertThat(report.flags).contains(QualityFlag.FLATLINE)
         assertThat(report.flags).contains(QualityFlag.CLIPPING)
         assertThat(report.usableForAnalysis).isFalse()
+    }
+
+    @Test
+    fun saturationThresholdEqualityIsNotClipping() {
+        val parsed = EcgCsvParser.summarize(
+            sessionId = "thresholds",
+            srHz = 500,
+            unit = "mV",
+            tsStartMs = 1,
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            polarityNormalized = false,
+            watchInfo = "",
+            samples = listOf(
+                EcgSample(0L, -5f, null, 0, 0),
+                EcgSample(2L, 5f, null, 1, 0),
+            ),
+            schemaVersion = 2,
+            captureSource = CaptureSource.HARDWARE,
+            timingTrust = TimingTrust.SENSOR,
+            minThresholdMv = -5f,
+            maxThresholdMv = 5f,
+        )
+
+        assertThat(SignalQualityAnalyzer.analyze(parsed).flags)
+            .doesNotContain(QualityFlag.CLIPPING)
+    }
+
+    @Test
+    fun localTimestampJitterAtCorrectAggregateRateIsNotMissingData() {
+        val samples = List(2_000) { index ->
+            val relMs = index * 2L - if (index % 2 == 1) 1L else 0L
+            EcgSample(
+                relMs = relMs,
+                valueMv = (0.2 * sin(2 * PI * index / 500.0)).toFloat(),
+                hrBpm = null,
+                sampleIndex = index,
+            )
+        }
+        val parsed = EcgCsvParser.summarize(
+            sessionId = "jitter",
+            srHz = 500,
+            unit = "mV",
+            tsStartMs = 1,
+            wrist = Wrist.LEFT,
+            signFactor = 1,
+            polarityNormalized = false,
+            watchInfo = "",
+            samples = samples,
+            schemaVersion = 2,
+            captureSource = CaptureSource.HARDWARE,
+            timingTrust = TimingTrust.SENSOR,
+        )
+
+        val report = SignalQualityAnalyzer.analyze(parsed)
+        assertThat(report.flags).doesNotContain(QualityFlag.TIMESTAMP_GAP)
+        assertThat(report.flags).doesNotContain(QualityFlag.MISSING_SAMPLES)
+        assertThat(report.effectiveHz).isWithin(5.0).of(500.0)
     }
 
     @Test

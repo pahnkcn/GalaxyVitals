@@ -17,6 +17,7 @@ class WatchEcgStore internal constructor(private val dir: File) {
 
     init {
         check(dir.mkdirs() || dir.isDirectory) { "Unable to create ECG store: ${dir.path}" }
+        purgeDemoRecordings()
     }
 
     fun fileFor(sessionId: String): File =
@@ -92,6 +93,21 @@ class WatchEcgStore internal constructor(private val dir: File) {
     }
 
     fun latest(): ParsedEcgFile? = parseAll().firstOrNull()
+
+    /** Removes only recordings explicitly labelled DEMO; unlabelled legacy captures are preserved. */
+    fun purgeDemoRecordings(): Int {
+        var removed = 0
+        listGzipFiles().forEach { file ->
+            if (EcgCsvParser.peekCaptureSourceToken(file) == "DEMO") {
+                val marker = syncedMarkerFor(file)
+                val existed = file.exists() || marker.exists()
+                val fileDeleted = !file.exists() || file.delete()
+                val markerDeleted = !marker.exists() || marker.delete()
+                if (existed && fileDeleted && markerDeleted) removed += 1
+            }
+        }
+        return removed
+    }
 
     private fun isSynced(file: File): Boolean = syncedMarkerFor(file).isFile
 

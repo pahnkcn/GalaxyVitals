@@ -107,7 +107,6 @@ fun HealthTrackRoot(
                                 backStack.add(Route.History)
                             },
                             onImport = onImport,
-                            onLoadDemo = viewModel::loadDemo,
                             onSync = viewModel::requestSync,
                             onOpenBp = { backStack.add(Route.BloodPressure) },
                         )

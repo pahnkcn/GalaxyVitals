@@ -15,6 +15,7 @@ class GalaxyBridgeApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         appScope.launch {
+            container.ecgRepository.purgeDemoData()
             // Recover canonical files left between an atomic write and the Room commit.
             // Do not acknowledge the watch here: only the listener can first delete the
             // corresponding replicated DataItem and knows the original remote session ID.

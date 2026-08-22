@@ -53,7 +53,6 @@ fun HomeScreen(
     onOpenEcg: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onImport: () -> Unit,
-    onLoadDemo: () -> Unit,
     onSync: () -> Unit,
     onOpenBp: () -> Unit,
     modifier: Modifier = Modifier,
@@ -89,15 +88,6 @@ fun HomeScreen(
         ) {
             Text(if (state.busy) "Working…" else "Import recording")
         }
-        OutlinedButton(
-            onClick = onLoadDemo,
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Text("Load demo trace")
-        }
-
         BloodPressureStub(onOpen = onOpenBp)
         Spacer(Modifier.height(24.dp))
     }
@@ -217,7 +207,7 @@ private fun HomeScreenPreview() {
         HomeScreen(
             state = HomeUiState(
                 latest = EcgSession(
-                    sessionId = "demo",
+                    sessionId = "preview",
                     filePath = "",
                     tsStartMs = System.currentTimeMillis(),
                     srHz = 500,
@@ -242,7 +232,6 @@ private fun HomeScreenPreview() {
             onOpenEcg = {},
             onOpenHistory = {},
             onImport = {},
-            onLoadDemo = {},
             onSync = {},
             onOpenBp = {},
         )

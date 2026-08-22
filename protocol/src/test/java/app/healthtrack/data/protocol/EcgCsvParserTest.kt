@@ -115,6 +115,21 @@ class EcgCsvParserTest {
     }
 
     @Test
+    fun peeksButParserRejectsRemovedDemoCaptureSource() {
+        val text = """
+            #meta={"schema_version":2,"sr_hz":500,"effective_sr_hz":500,"unit":"mV","ts_start":1,"sensor_start_ms":1,"clock_source":"SAMSUNG_DATAPOINT_MS","format":"csv_mv_v2","capture_source":"DEMO","timing_trust":"SENSOR","sample_count":1,"duration_ms":0,"wrist":"LEFT","signFactor":1,"polarityNormalized":false}
+            rel_ms,sample_index,value_mv,flags,hr_bpm
+            0,0,0.1,0,
+        """.trimIndent()
+        val compressed = gzip(text)
+
+        assertThat(EcgCsvParser.peekCaptureSourceToken(compressed)).isEqualTo("DEMO")
+        assertThrows(EcgParseException::class.java) {
+            EcgCsvParser.parseBytes(compressed, gzip = true, sessionIdHint = "removed-demo")
+        }
+    }
+
+    @Test
     fun rejectsInvalidSampleRatesBeforeAllocating() {
         listOf(-1, 0, 2001, Int.MAX_VALUE).forEach { srHz ->
             val text = """

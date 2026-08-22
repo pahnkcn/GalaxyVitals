@@ -40,8 +40,8 @@ fun SettingsScreen(
         )
         Section(
             "Galaxy Watch",
-            "Sideload the GalaxyBridge watch APK on a paired Galaxy Watch. Demo traces always " +
-                "sync. Hardware ECG_ON_DEMAND needs Samsung’s official sensor AAR and a partner " +
+            "Sideload the GalaxyBridge watch APK on a paired Galaxy Watch. Hardware " +
+                "ECG_ON_DEMAND needs Samsung’s official sensor AAR and a partner " +
                 "whitelist for app.healthtrack. A different vendor companion cannot talk to this " +
                 "phone app.",
         )

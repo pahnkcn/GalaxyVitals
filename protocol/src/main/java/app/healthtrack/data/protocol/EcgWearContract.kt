@@ -36,7 +36,7 @@ object EcgWearContract {
     const val MEASURE_DURATION_MS = 30_000L
     const val ASSET_TIMEOUT_SEC = 30L
     const val OFF_BODY_BLOCK_MS = 1_800L
-    const val ECG_STALL_MS = 900L
+    const val ECG_STALL_MS = 2_000L
 
     private val SESSION_ID_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
     private val SHA256_PATTERN = Regex("[0-9a-f]{64}")

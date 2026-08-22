@@ -7,7 +7,6 @@ import app.healthtrack.domain.EcgSampleFlags
 import app.healthtrack.domain.Wrist
 import app.healthtrack.wear.sensors.EcgBatch
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 class EcgCaptureException(message: String) : IllegalStateException(message)
 
@@ -19,7 +18,6 @@ class EcgSessionRecorder {
     private var wallStartMs = 0L
     private var wrist = Wrist.LEFT
     private var signFactor = 1
-    private var captureSource = CaptureSource.HARDWARE
     private val values = FloatArray(MAX_SAMPLES)
     private val sensorTimestampsMs = LongArray(MAX_SAMPLES)
     private val flags = IntArray(MAX_SAMPLES)
@@ -44,15 +42,12 @@ class EcgSessionRecorder {
         wrist: Wrist,
         signFactor: Int,
         nowMs: Long = System.currentTimeMillis(),
-        captureSource: CaptureSource = CaptureSource.HARDWARE,
     ) {
         require(signFactor == -1 || signFactor == 1)
-        require(captureSource == CaptureSource.HARDWARE || captureSource == CaptureSource.DEMO)
         synchronized(lock) {
             this.sessionId = EcgWearContract.requireSessionId(sessionId)
             this.wrist = wrist
             this.signFactor = signFactor
-            this.captureSource = captureSource
             wallStartMs = nowMs
             size = 0
             sensorStartMs = -1L
@@ -98,34 +93,25 @@ class EcgSessionRecorder {
             maxThresholdMv = batch.maxThresholdMv ?: maxThresholdMv
 
             batch.samplesMv.indices.forEach { index ->
-                if (captureSource == CaptureSource.HARDWARE && size >= EXPECTED_SAMPLES) {
+                if (size >= EXPECTED_SAMPLES) {
                     return@forEach
                 }
                 val timestamp = batch.sensorTimestampsMs[index]
-                if (timestamp < 0L || timestamp <= previousTimestampMs) {
-                    throw EcgCaptureException("ECG sensor timestamp reversed or duplicated")
+                if (timestamp < 0L || timestamp < previousTimestampMs) {
+                    throw EcgCaptureException("ECG sensor timestamp reversed")
                 }
                 if (sensorStartMs < 0L) sensorStartMs = timestamp
-                if (previousTimestampMs >= 0L) {
-                    val delta = timestamp - previousTimestampMs
-                    if (delta > EXPECTED_PERIOD_MS + TIMESTAMP_TOLERANCE_MS) {
-                        val missing = (delta.toDouble() / EXPECTED_PERIOD_MS).roundToInt() - 1
-                        gapCount++
-                        missingSampleCount += missing.coerceAtLeast(1)
-                        acquisitionFlags = acquisitionFlags or EcgSampleFlags.TIMESTAMP_GAP
-                        throw EcgCaptureException("ECG sensor timestamp gap")
-                    }
-                    if (abs(delta - EXPECTED_PERIOD_MS) > TIMESTAMP_TOLERANCE_MS) {
-                        throw EcgCaptureException("ECG sensor timestamp jitter is out of range")
-                    }
-                }
                 val sampleFlags = batch.sampleFlags[index]
-                if (sampleFlags and EcgSampleFlags.CLIPPED != 0) {
+                val sample = batch.samplesMv[index]
+                val clipped = sampleFlags and EcgSampleFlags.CLIPPED != 0 ||
+                    batch.minThresholdMv?.let { sample < it } == true ||
+                    batch.maxThresholdMv?.let { sample > it } == true
+                if (clipped) {
                     clippedSampleCount++
                     acquisitionFlags = acquisitionFlags or EcgSampleFlags.CLIPPED
                     throw EcgCaptureException("ECG reached the sensor saturation threshold")
                 }
-                values[size] = batch.samplesMv[index]
+                values[size] = sample
                 sensorTimestampsMs[size] = timestamp
                 flags[size] = sampleFlags
                 size++
@@ -177,7 +163,6 @@ class EcgSessionRecorder {
             flags = flags.copyOf(size),
             wrist = wrist,
             signFactor = signFactor,
-            captureSource = captureSource,
             gapCount = gapCount,
             missingSampleCount = missingSampleCount,
             sequenceGapCount = sequenceGapCount,
@@ -195,9 +180,8 @@ class EcgSessionRecorder {
     companion object {
         const val MAX_SAMPLES = 500 * 32
         const val EXPECTED_SAMPLES = 500 * 30
-        const val EXPECTED_LAST_REL_MS = 29_998L
         const val EXPECTED_PERIOD_MS = 2L
-        const val TIMESTAMP_TOLERANCE_MS = 1L
+        const val RATE_TOLERANCE_FRACTION = 0.01
     }
 }
 
@@ -210,7 +194,6 @@ class EcgSessionSnapshot internal constructor(
     private val flags: IntArray,
     private val wrist: Wrist,
     private val signFactor: Int,
-    private val captureSource: CaptureSource,
     private val gapCount: Int,
     private val missingSampleCount: Int,
     private val sequenceGapCount: Int,
@@ -223,10 +206,16 @@ class EcgSessionSnapshot internal constructor(
     val nSamples: Int get() = values.size
     val durationMs: Long get() = sensorTimestampsMs.last() - sensorTimestampsMs.first()
 
-    fun requireCompleteHardwareCapture() {
-        if (captureSource != CaptureSource.HARDWARE) return
+    fun requireCompleteCapture() {
+        val effectiveRate = if (durationMs > 0L) {
+            (nSamples - 1) * 1000.0 / durationMs
+        } else {
+            0.0
+        }
+        val rateError = abs(effectiveRate - EcgWearContract.DEFAULT_SR_HZ) /
+            EcgWearContract.DEFAULT_SR_HZ
         if (nSamples != EcgSessionRecorder.EXPECTED_SAMPLES ||
-            durationMs != EcgSessionRecorder.EXPECTED_LAST_REL_MS
+            rateError > EcgSessionRecorder.RATE_TOLERANCE_FRACTION
         ) {
             throw EcgCaptureException("ECG capture is incomplete: $nSamples samples over $durationMs ms")
         }
@@ -248,7 +237,7 @@ class EcgSessionSnapshot internal constructor(
                 wrist = wrist,
                 signFactor = signFactor,
                 watchInfo = watchInfo,
-                captureSource = captureSource,
+                captureSource = CaptureSource.HARDWARE,
                 gapCount = gapCount,
                 missingSampleCount = missingSampleCount,
                 sequenceGapCount = sequenceGapCount,
