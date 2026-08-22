@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GalaxyBridge"
+rootProject.name = "GalaxyVitals"
 include(":protocol")
 include(":samsung-health-api")
 include(":app")

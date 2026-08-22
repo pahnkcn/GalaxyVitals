@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render GalaxyBridge launcher assets from the app theme palette."""
+"""Render GalaxyVitals launcher assets from the canonical branding asset."""
 
 from __future__ import annotations
 
@@ -9,7 +9,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
-RES = ROOT / "app" / "src" / "main" / "res"
+BRANDING = ROOT / "branding" / "galaxyvitals-logo.png"
+RES_ROOTS = (
+    ROOT / "app" / "src" / "main" / "res",
+    ROOT / "wear" / "src" / "main" / "res",
+)
 
 INK = (7, 16, 22, 255)
 MINT = (46, 230, 200, 255)
@@ -166,6 +170,26 @@ def fit_square(im: Image.Image, size: int) -> Image.Image:
     return im.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def render_branding(size: int, transparent: bool, max_fraction: float) -> Image.Image:
+    if not BRANDING.is_file():
+        raise FileNotFoundError(f"Missing canonical branding asset: {BRANDING}")
+
+    source = Image.open(BRANDING).convert("RGBA")
+    bbox = source.getchannel("A").getbbox()
+    if bbox is not None:
+        source = source.crop(bbox)
+    source.thumbnail(
+        (int(round(size * max_fraction)), int(round(size * max_fraction))),
+        Image.Resampling.LANCZOS,
+    )
+
+    base = Image.new("RGBA", (size, size), (0, 0, 0, 0) if transparent else INK)
+    x = (size - source.width) // 2
+    y = (size - source.height) // 2
+    base.alpha_composite(source, (x, y))
+    return base
+
+
 def save(im: Image.Image, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     im.save(path, "PNG", optimize=True)
@@ -173,12 +197,10 @@ def save(im: Image.Image, path: Path) -> None:
 
 def main() -> None:
     master = 1024
-    fg = render_mark(master, transparent=True)
-    full = render_mark(master, transparent=False)
+    fg = render_branding(master, transparent=True, max_fraction=0.62)
+    full = render_branding(master, transparent=False, max_fraction=0.86)
 
     # 108dp at xxxhdpi (4x) is 432px — enough for the adaptive foreground.
-    save(fit_square(fg, 432), RES / "drawable-xxxhdpi" / "ic_launcher_foreground.png")
-
     densities = {
         "mipmap-mdpi": 48,
         "mipmap-hdpi": 72,
@@ -186,10 +208,12 @@ def main() -> None:
         "mipmap-xxhdpi": 144,
         "mipmap-xxxhdpi": 192,
     }
-    for folder, edge in densities.items():
-        icon = fit_square(full, edge)
-        save(icon, RES / folder / "ic_launcher.png")
-        save(icon, RES / folder / "ic_launcher_round.png")
+    for res in RES_ROOTS:
+        save(fit_square(fg, 432), res / "drawable-xxxhdpi" / "ic_launcher_foreground.png")
+        for folder, edge in densities.items():
+            icon = fit_square(full, edge)
+            save(icon, res / folder / "ic_launcher.png")
+            save(icon, res / folder / "ic_launcher_round.png")
 
     print("wrote launcher assets")
 

@@ -1,14 +1,14 @@
 # ECG retrieval protocol
 
-GalaxyBridge implements the wearable ECG file contract used by Galaxy Watch
+GalaxyVitals implements the wearable ECG file contract used by Galaxy Watch
 companions that push a gzip CSV over the Play Services Wearable Data Layer.
 
-This document describes the **on-the-wire format** only. GalaxyBridge does not
+This document describes the **on-the-wire format** only. GalaxyVitals does not
 include vendor UI, assets, or classification models.
 
 ## Capture (watch module `:wear`)
 
-The HealthTrack watch app records:
+The GalaxyVitals watch app records:
 
 - `HealthTrackerType.ECG_ON_DEMAND` → `ValueKey.EcgSet.ECG_MV` (millivolts)
 - No concurrent continuous tracker; BPM is derived later from ECG R-peaks
@@ -25,7 +25,7 @@ Samples are written as gzip CSV under `filesDir/ecg/ecg_{sessionId}.csv.gz`.
 Samsung ECG is a privileged tracker. Hardware capture requires both the official
 client AAR and a partner-whitelisted package.
 
-GalaxyBridge v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
+GalaxyVitals v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
 message creates the exact acknowledgement marker
 `ecg_{sessionId}.csv.gz.synced`; it does not immediately delete the recording.
 `syncNow` uploads only gzip files without this marker. When trimming local

@@ -1,0 +1,135 @@
+package app.galaxyvitals.wear.ui
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import app.galaxyvitals.data.protocol.ParsedEcgFile
+import app.galaxyvitals.domain.Wrist
+import app.galaxyvitals.wear.WearApplication
+import app.galaxyvitals.wear.sensors.OffBodyMonitor
+import app.galaxyvitals.wear.sensors.SensorAvailability
+import app.galaxyvitals.wear.store.watchInfoJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+data class HomeUiState(
+    val latest: ParsedEcgFile?,
+    val count: Int,
+    val phoneNote: String,
+    val wrist: Wrist,
+)
+
+enum class MeasurePhase {
+    Connecting,
+    Unavailable,
+    Warmup,
+    Ready,
+    LeadOff,
+    Recording,
+    Saving,
+    Success,
+    Failed,
+}
+
+data class MeasureUiState(
+    val phase: MeasurePhase = MeasurePhase.Connecting,
+    val status: String = "Connecting…",
+    val hrBpm: Int? = null,
+    val remainingSec: Int = 30,
+    val liveMv: List<Float> = emptyList(),
+    val error: String? = null,
+    val sessionId: String? = null,
+    val samsungReady: Boolean = false,
+)
+
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+    private val app = application as WearApplication
+    private val _state = MutableStateFlow(HomeUiState(null, 0, "Checking phone…", app.container.prefs.wrist))
+    val state: StateFlow<HomeUiState> = _state.asStateFlow()
+
+    fun refresh() {
+        viewModelScope.launch {
+            val parsed = withContext(Dispatchers.IO) { app.container.store.parseAll() }
+            val phones = app.container.dataLayer.connectedPhoneNames()
+            _state.value = HomeUiState(
+                latest = parsed.firstOrNull(),
+                count = parsed.size,
+                phoneNote = if (phones.isEmpty()) {
+                    "Phone not linked. Keep GalaxyVitals open nearby."
+                } else {
+                    "Phone: ${phones.joinToString()}"
+                },
+                wrist = app.container.prefs.wrist,
+            )
+        }
+    }
+}
+
+class HistoryViewModel(application: Application) : AndroidViewModel(application) {
+    private val app = application as WearApplication
+    private val _sessions = MutableStateFlow<List<ParsedEcgFile>>(emptyList())
+    val sessions: StateFlow<List<ParsedEcgFile>> = _sessions.asStateFlow()
+
+    fun refresh() {
+        viewModelScope.launch {
+            _sessions.value = withContext(Dispatchers.IO) { app.container.store.parseAll() }
+        }
+    }
+}
+
+class SettingsViewModel(application: Application) : AndroidViewModel(application) {
+    private val app = application as WearApplication
+    private val _wrist = MutableStateFlow(app.container.prefs.wrist)
+    val wrist: StateFlow<Wrist> = _wrist.asStateFlow()
+    private val _sensorNote = MutableStateFlow("Checking sensor…")
+    val sensorNote: StateFlow<String> = _sensorNote.asStateFlow()
+
+    fun probeSensor() {
+        app.container.samsungSensor.connect { avail: SensorAvailability ->
+            _sensorNote.value = if (avail.ready) {
+                "Samsung ECG tracker ready"
+            } else {
+                avail.reason ?: "Samsung ECG is not available for this package."
+            }
+            app.container.samsungSensor.disconnect()
+        }
+    }
+
+    fun setWrist(value: Wrist) {
+        app.container.prefs.wrist = value
+        _wrist.value = value
+    }
+}
+
+class MeasureViewModel(application: Application) : AndroidViewModel(application) {
+    private val app = application as WearApplication
+    private val coordinator = EcgMeasurementCoordinator(
+        sensor = app.container.samsungSensor,
+        recorder = app.container.recorder,
+        scope = viewModelScope,
+        persistenceScope = app.container.persistenceScope,
+        wrist = { app.container.prefs.wrist },
+        acquireForeground = { app.container.measureForegroundLeases.acquire() },
+        save = { sessionId, gzip -> app.container.store.save(sessionId, gzip) },
+        pushToPhone = { sessionId, gzip -> app.container.dataLayer.putSession(sessionId, gzip) },
+        watchInfo = { watchInfoJson(application) },
+        offBodyFactory = { onChange -> OffBodyMonitor(application, onChange) },
+    )
+
+    val state: StateFlow<MeasureUiState> = coordinator.state
+
+    fun startSamsung() = coordinator.startHardware()
+
+    fun retry() = coordinator.retry()
+
+    fun cancelRecording() = coordinator.cancel()
+
+    override fun onCleared() {
+        coordinator.close()
+        super.onCleared()
+    }
+}

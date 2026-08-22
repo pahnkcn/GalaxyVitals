@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "app.healthtrack"
+    namespace = "app.galaxyvitals"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "app.healthtrack"
+        applicationId = "app.galaxyvitals"
         minSdk = 32
         targetSdk = 35
         versionCode = 1

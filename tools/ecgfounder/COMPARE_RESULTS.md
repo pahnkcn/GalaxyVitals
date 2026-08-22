@@ -34,7 +34,7 @@ EMG, dropouts, and random polarity. Both models read that same degraded file.
 - Clean 2017 may flatter nao. The I/O of `nao_full` *is* the 2017 task,
   so GeminiMan may have trained on these public files. ECGFounder treated
   2017 as an external set. The watch-like column is the fairer one for
-  GalaxyBridge.
+  GalaxyVitals.
 
 ## After training a frozen N/A/O head
 

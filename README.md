@@ -1,8 +1,8 @@
-# GalaxyBridge
+# GalaxyVitals
 
 Open-source Android companion for Galaxy Watch ECG recordings.
 
-GalaxyBridge implements the wearable **Data Layer + gzip CSV** contract used to
+GalaxyVitals implements the wearable **Data Layer + gzip CSV** contract used to
 move ECG traces from a watch to a phone. The UI is original. It does not
 redistribute another vendor’s layouts, icons, or classification models.
 
@@ -13,7 +13,7 @@ unwell, seek professional care.
 
 - Import `ecg_*.csv.gz` / `.csv` files that match [PROTOCOL.md](PROTOCOL.md)
 - Wear Data Layer listener on `/ecg/session/{id}` (same app id + signing key)
-- `:wear` GalaxyBridge watch app (`applicationId app.healthtrack`) that records and pushes that contract
+- `:wear` GalaxyVitals watch app (`applicationId app.galaxyvitals`) that records and pushes that contract
 - Waveform viewer, HR stats, history
 - On-device **ECGFounder 1-lead** rhythm screen (N / A / O) after each import or watch sync
 - Architecture stub so blood pressure can be added later
@@ -21,10 +21,10 @@ unwell, seek professional care.
 ## Live watch sync
 
 Install both debug APKs on a paired phone and Wear OS watch. They share
-`app.healthtrack` and the same debug signing key, so `/ecg/session/{id}` is
+`app.galaxyvitals` and the same debug signing key, so `/ecg/session/{id}` is
 delivered to the phone. The package ID is intentionally retained for the
 existing phone/watch Data Layer pairing even though the visible app name is
-GalaxyBridge.
+GalaxyVitals.
 
 ```bash
 ./gradlew :app:assembleDebug :wear:assembleDebug
@@ -34,7 +34,7 @@ adb -e install -r wear/build/outputs/apk/debug/wear-debug.apk   # watch after pa
 
 On the watch: **Start ECG**. Hardware ECG needs the official Privileged Health SDK AAR at
 `wear/libs/samsung-health-sensor-api.aar` *and* a Samsung partner whitelist for
-`app.healthtrack`.
+`app.galaxyvitals`.
 
 A differently signed vendor watch app still cannot talk to this phone app.
 

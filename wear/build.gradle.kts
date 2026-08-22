@@ -7,11 +7,11 @@ plugins {
 val samsungAar = file("libs/samsung-health-sensor-api.aar")
 
 android {
-    namespace = "app.healthtrack.wear"
+    namespace = "app.galaxyvitals.wear"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "app.healthtrack"
+        applicationId = "app.galaxyvitals"
         minSdk = 33
         targetSdk = 35
         versionCode = 1
