@@ -84,7 +84,7 @@ fun HomeScreen(
                     appName = { Text("ECG") },
                     title = {
                         Text(
-                            state.latest?.hrMedian?.toInt()?.let { "$it bpm" } ?: "No recordings",
+                            WatchSessionBpm.homeLabel(state.latest),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

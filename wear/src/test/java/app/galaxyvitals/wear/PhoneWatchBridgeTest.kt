@@ -80,6 +80,9 @@ class PhoneWatchBridgeTest {
         assertThat(store.markSynced(cleanupId)).isTrue()
         assertThat(file.exists()).isTrue()
         assertThat(store.listPendingGzipFiles()).isEmpty()
+        assertThat(EcgWearContract.deletePath(sessionId)).isEqualTo("/ecg/delete/42")
+        assertThat(store.delete(sessionId)).isTrue()
+        assertThat(file.exists()).isFalse()
     }
 
     @Test

@@ -157,7 +157,29 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
             _detailSamples.value = DetailSamplesUiState()
         }
         viewModelScope.launch {
+            val remaining = sessions.value.filterNot { it.sessionId == sessionId }
             repo.delete(sessionId)
+            try {
+                wear.sendDelete(sessionId)
+                if (remaining.isEmpty()) wear.sendDeleteAll()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Phone history is already gone; the watch copy is retried on the next delete/sync.
+            }
+        }
+    }
+
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            try {
+                wear.sendDeleteAll()
+                _home.value = _home.value.copy(message = "Asked the watch to remove leftover recordings.")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _home.value = _home.value.copy(message = "Could not reach the watch.")
+            }
         }
     }
 

@@ -51,9 +51,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(HomeUiState(null, 0, "Checking phone…", app.container.prefs.wrist))
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            app.container.storeChanges.collect { refresh() }
+        }
+    }
+
     fun refresh() {
         viewModelScope.launch {
-            val parsed = withContext(Dispatchers.IO) { app.container.store.parseAll() }
+            val parsed = withContext(Dispatchers.IO) {
+                app.container.store.parseAll().map(WatchSessionBpm::withDisplayBpm)
+            }
             val phones = app.container.dataLayer.connectedPhoneNames()
             _state.value = HomeUiState(
                 latest = parsed.firstOrNull(),
@@ -74,9 +82,17 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _sessions = MutableStateFlow<List<ParsedEcgFile>>(emptyList())
     val sessions: StateFlow<List<ParsedEcgFile>> = _sessions.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            app.container.storeChanges.collect { refresh() }
+        }
+    }
+
     fun refresh() {
         viewModelScope.launch {
-            _sessions.value = withContext(Dispatchers.IO) { app.container.store.parseAll() }
+            _sessions.value = withContext(Dispatchers.IO) {
+                app.container.store.parseAll().map(WatchSessionBpm::withDisplayBpm)
+            }
         }
     }
 }

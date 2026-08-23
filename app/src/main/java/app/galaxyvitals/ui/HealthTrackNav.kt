@@ -115,6 +115,8 @@ fun HealthTrackRoot(
                         HistoryScreen(
                             sessions = sessions,
                             onOpen = { id -> backStack.add(Route.EcgDetail(id)) },
+                            watchLinked = home.wear.available,
+                            onClearWatchHistory = viewModel::clearWatchHistory,
                         )
                     }
                     Route.Settings -> NavEntry(key) {

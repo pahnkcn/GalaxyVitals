@@ -57,6 +57,16 @@ class WatchEcgStore internal constructor(private val dir: File) {
         return existed && fileDeleted && markerDeleted
     }
 
+    /** Removes every local recording and acknowledgement marker. */
+    fun deleteAll(): Int {
+        var removed = 0
+        listGzipFiles().forEach { file ->
+            val sessionId = sessionIdFromCanonicalFile(file) ?: return@forEach
+            if (delete(sessionId)) removed += 1
+        }
+        return removed
+    }
+
     /** Marks only the recording named by the phone acknowledgement as synchronized. */
     fun markSynced(sessionId: String): Boolean {
         val file = fileFor(sessionId)

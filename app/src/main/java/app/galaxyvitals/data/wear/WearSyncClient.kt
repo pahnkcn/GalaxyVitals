@@ -44,24 +44,37 @@ class WearSyncClient(context: Context) {
     suspend fun requestSyncNow(): Int {
         val nodes = nodeClient.connectedNodes.await()
         nodes.forEach { node ->
-            messageClient.sendMessage(
-                node.id,
-                EcgWearContract.syncNowPath(node.id),
-                "ok".toByteArray(),
-            ).await()
+            send(node, EcgWearContract.syncNowPath(node.id), "ok".toByteArray())
         }
         return nodes.size
     }
 
     suspend fun sendCleanup(sessionId: String) {
-        val safeSessionId = EcgWearContract.requireSessionId(sessionId)
-        val nodes = nodeClient.connectedNodes.await()
-        nodes.forEach { node ->
-            messageClient.sendMessage(
-                node.id,
-                EcgWearContract.cleanupPath(safeSessionId),
-                byteArrayOf(1),
-            ).await()
-        }
+        sendToConnected(
+            EcgWearContract.cleanupPath(EcgWearContract.requireSessionId(sessionId)),
+            byteArrayOf(1),
+        )
     }
+
+    suspend fun sendDelete(sessionId: String) {
+        sendToConnected(
+            EcgWearContract.deletePath(EcgWearContract.requireSessionId(sessionId)),
+            deletePayload(),
+        )
+    }
+
+    suspend fun sendDeleteAll() {
+        sendToConnected(EcgWearContract.DELETE_ALL, deletePayload())
+    }
+
+    private suspend fun sendToConnected(path: String, payload: ByteArray) {
+        nodeClient.connectedNodes.await().forEach { node -> send(node, path, payload) }
+    }
+
+    private suspend fun send(node: Node, path: String, payload: ByteArray) {
+        messageClient.sendMessage(node.id, path, payload).await()
+    }
+
+    private fun deletePayload(): ByteArray =
+        """{"ts":${System.currentTimeMillis()}}""".toByteArray()
 }

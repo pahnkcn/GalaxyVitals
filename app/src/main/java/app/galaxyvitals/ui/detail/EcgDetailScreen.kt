@@ -70,7 +70,7 @@ fun EcgDetailScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete recording?") },
-            text = { Text("This removes the waveform from this phone. It cannot be undone.") },
+            text = { Text("This removes the recording from this phone and the linked watch. It cannot be undone.") },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(session.sessionId)

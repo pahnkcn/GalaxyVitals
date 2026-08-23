@@ -73,7 +73,7 @@ fun HistoryScreen(
                         appName = { Text("ECG") },
                         title = {
                             Text(
-                                session.hrMedian?.toInt()?.let { "$it bpm" } ?: "— bpm",
+                                WatchSessionBpm.historyLabel(session),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )

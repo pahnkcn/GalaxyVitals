@@ -101,6 +101,19 @@ class WatchEcgStoreTest {
     }
 
     @Test
+    fun deleteAllRemovesPendingAndAcknowledgedRecordings() {
+        val dir = tmp.newFolder("delete-all")
+        val store = WatchEcgStore(dir)
+        store.save("pending", byteArrayOf(1))
+        store.save("acked", byteArrayOf(2))
+        store.markSynced("acked")
+
+        assertThat(store.deleteAll()).isEqualTo(2)
+        assertThat(dir.listFiles()).isEmpty()
+        assertThat(store.parseAll()).isEmpty()
+    }
+
+    @Test
     fun startupCleanupRemovesOnlyExplicitDemoAndMarker() {
         val dir = tmp.newFolder("demo-cleanup")
         val hardwareBytes = EcgCsvWriter.gzipBytes(

@@ -75,6 +75,8 @@ object EcgWearContract {
 
     fun cleanupPath(sessionId: String): String = CLEANUP_PREFIX + requireSessionId(sessionId)
 
+    fun deletePath(sessionId: String): String = DELETE_PREFIX + requireSessionId(sessionId)
+
     fun syncNowPath(nodeId: String): String = "${RPC_REQ_PREFIX}$nodeId/syncNow"
 
     fun inboxFileName(sessionId: String): String =
