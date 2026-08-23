@@ -4,7 +4,8 @@ Open-source Android companion for Galaxy Watch ECG recordings.
 
 GalaxyVitals implements the wearable **Data Layer + gzip CSV** contract used to
 move ECG traces from a watch to a phone. The UI and runtime integration are
-original.
+original. This repository is named GalaxyBridge; the visible app and
+`applicationId` are GalaxyVitals (`app.galaxyvitals`).
 
 **Not a medical device.** Readings are for personal tracking only. If you feel
 unwell, seek professional care.
@@ -15,8 +16,24 @@ unwell, seek professional care.
 - Wear Data Layer listener on `/ecg/session/{id}` (same app id + signing key)
 - `:wear` GalaxyVitals watch app (`applicationId app.galaxyvitals`) that records and pushes that contract
 - Waveform viewer, HR stats, history
-- On-device **N / A / O rhythm screen** after each import or watch sync
+- On-device **N / A / O** rhythm screen after each import or watch sync (**N**ormal / **A**F / **O**ther)
 - Architecture stub so blood pressure can be added later
+
+## Requirements
+
+- JDK 17
+- Android SDK 36 (`local.properties` → `sdk.dir`)
+- Phone minSdk 32 (Android 12L+), watch minSdk 33
+- Version `0.1.0` (`versionCode` 1) on both apps
+
+On Windows use `gradlew.bat` in place of `./gradlew`.
+
+| Module | Role |
+|---|---|
+| `:app` | Phone companion |
+| `:wear` | Watch capture and sync |
+| `:protocol` | gzip CSV / Data Layer contract |
+| `:samsung-health-api` | Compile stub when the official AAR is absent |
 
 ## Live watch sync
 
@@ -33,8 +50,8 @@ adb -e install -r wear/build/outputs/apk/debug/wear-debug.apk   # watch after pa
 ```
 
 On the watch: **Start ECG**. Hardware ECG needs the official Privileged Health SDK AAR at
-`wear/libs/samsung-health-sensor-api.aar` *and* a Samsung partner whitelist for
-`app.galaxyvitals`.
+`wear/libs/samsung-health-sensor-api.aar` (see [wear/libs/README.md](wear/libs/README.md))
+*and* a Samsung partner whitelist for `app.galaxyvitals`.
 
 A differently signed vendor watch app still cannot talk to this phone app.
 
@@ -45,14 +62,20 @@ A differently signed vendor watch app still cannot talk to this phone app.
   :app:assembleDebug :wear:assembleDebug
 ```
 
-Requires Android SDK 36. `local.properties` should set `sdk.dir`.
+Prebuilt sideload APKs and checksums for 0.1.0 are described in
+[dist/RELEASE_NOTES.md](dist/RELEASE_NOTES.md). The `.apk` files themselves are
+gitignored.
 
 ## Rhythm model
+
+Labels are **N**ormal, **A**F, and **O**ther.
 
 The phone runs the direct three-class NAO3 model locally through LiteRT. The
 hash-bound FP32 reference is the packaged default. The host-parity FP16 and
 rejected INT8 candidates remain under `models/nao3/` and are not packaged as
 runtime fallbacks until the quantized row passes target-device verification.
+See [models/nao3/README.md](models/nao3/README.md) for hashes, host parity, and
+why FP32 is the packaged default.
 
 Stored watch traces remain raw at 500 Hz. For rhythm analysis, the phone applies
 the recording polarity once, resamples to 256 Hz, applies the configured filter
