@@ -37,6 +37,23 @@ class EcgWaveformReducerTest {
         assertThat(reduced.map { it.sampleIndex }).containsExactly(1, 3).inOrder()
     }
 
+    @Test
+    fun fullTraceScaleIgnoresLeadingElectrodeSwing() {
+        val samples = List(15_000) { index ->
+            val value = if (index < 1_000) {
+                if (index == 10) 8f else 0.1f
+            } else {
+                if (index % 400 == 0) 0.8f else 0f
+            }
+            EcgSample(index * 2L, value, null, index)
+        }
+
+        val bounds = waveformAmplitudeBounds(samples, viewingFromStart = true)
+
+        assertThat(bounds.span).isLessThan(2f)
+        assertThat(bounds.span).isGreaterThan(0.5f)
+    }
+
     private fun sample(index: Int, value: Float) = EcgSample(
         relMs = index * 2L,
         valueMv = value,

@@ -59,6 +59,9 @@ fun MeasureScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )
+                    if (state.liveMv.size >= 2) {
+                        EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+                    }
                     state.hrBpm?.let { Text("$it bpm", color = MaterialTheme.colorScheme.primary) }
                 }
                 MeasurePhase.Recording -> {

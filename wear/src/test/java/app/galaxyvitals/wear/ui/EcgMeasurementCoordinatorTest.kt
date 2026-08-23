@@ -22,12 +22,19 @@ class EcgMeasurementCoordinatorTest {
 
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
         harness.now = 100L
-        harness.sensor.emit(0, batch(sequence = 0))
+        harness.sensor.emit(0, batch(sequence = 0, valueMv = 140f))
         harness.now = 400L
-        harness.sensor.emit(0, batch(sequence = 1))
+        harness.sensor.emit(0, batch(sequence = 1, valueMv = 140f))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
-        harness.now = 601L
-        harness.sensor.emit(0, batch(sequence = 2))
+        harness.now = 2_101L
+        harness.sensor.emit(0, batch(sequence = 2, valueMv = 140f))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
+        assertThat(harness.recorder.isRecording).isFalse()
+        assertThat(harness.coordinator.state.value.liveMv).isNotEmpty()
+        assertThat(harness.coordinator.state.value.liveMv.maxOf { kotlin.math.abs(it) }).isLessThan(5f)
+
+        harness.now = 4_101L
+        harness.sensor.emit(0, batch(sequence = 3))
 
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
         assertThat(harness.sensor.startCount).isEqualTo(1)
@@ -35,7 +42,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.recorder.isRecording).isTrue()
         assertThat(harness.recorder.sampleCount).isEqualTo(0)
 
-        harness.sensor.emit(0, batch(sequence = 3))
+        harness.sensor.emit(0, batch(sequence = 4))
         assertThat(harness.recorder.sampleCount).isEqualTo(10)
     }
 
@@ -55,7 +62,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
         assertThat(harness.foregroundAcquires).isEqualTo(0)
 
-        harness.now = 801L
+        harness.now = 4_301L
         harness.sensor.emit(0, batch(sequence = 4))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
     }
@@ -66,7 +73,7 @@ class EcgMeasurementCoordinatorTest {
         harness.coordinator.startHardware()
         harness.now = 100L
         harness.sensor.emit(0, batch(sequence = 0))
-        harness.now = 601L
+        harness.now = 4_101L
         harness.sensor.emit(0, batch(sequence = 1))
         harness.sensor.emit(0, batch(sequence = 2))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
@@ -169,8 +176,8 @@ class EcgMeasurementCoordinatorTest {
     }
 
     companion object {
-        private fun batch(sequence: Int, leadOff: Int = 0): EcgBatch = EcgBatch(
-            samplesMv = FloatArray(10) { 0.1f },
+        private fun batch(sequence: Int, leadOff: Int = 0, valueMv: Float = 0.1f): EcgBatch = EcgBatch(
+            samplesMv = FloatArray(10) { valueMv },
             sensorTimestampsMs = LongArray(10) { 1_000L + sequence * 20L + it * 2L },
             sequence = sequence and 0xff,
             leadOff = leadOff,

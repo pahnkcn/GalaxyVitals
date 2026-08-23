@@ -95,6 +95,25 @@ class EcgDisplayProcessorTest {
         assertThat(filtered.maxOf { abs(it.valueMv) }).isLessThan(1e-6f)
     }
 
+    @Test
+    fun watchElectrodeOffsetAndSlowDriftDoNotDominateTheFirstTwoSeconds() {
+        val srHz = 500
+        val count = 30 * srHz
+        val samples = List(count) { index ->
+            val timeSec = index.toDouble() / srHz
+            val electrodeOffset = 140.0 + 16.0 * kotlin.math.exp(-timeSec / 1.5)
+            val qrs = 0.7 * sin(2 * PI * 1.25 * timeSec)
+            EcgSample(index * 2L, (electrodeOffset + qrs).toFloat(), 75, index)
+        }
+
+        val filtered = EcgDisplayProcessor.filter(samples, srHz, 1, false)
+        val firstTwo = peakToPeak(filtered, 0, 2 * srHz)
+        val middle = peakToPeak(filtered, 10 * srHz, 20 * srHz)
+
+        assertThat(middle.toDouble()).isGreaterThan(1.0)
+        assertThat(firstTwo.toDouble()).isLessThan(middle * 1.6)
+    }
+
     private fun linearSlope(values: FloatArray, start: Int): Double {
         val count = values.size - start
         val meanX = (start + values.lastIndex) / 2.0
@@ -124,6 +143,17 @@ class EcgDisplayProcessorTest {
         }
         val count = values.size - start
         return 2.0 * kotlin.math.sqrt(sine * sine + cosine * cosine) / count
+    }
+
+    private fun peakToPeak(samples: List<EcgSample>, start: Int, endExclusive: Int): Float {
+        var minV = Float.POSITIVE_INFINITY
+        var maxV = Float.NEGATIVE_INFINITY
+        for (index in start until endExclusive) {
+            val value = samples[index].valueMv
+            if (value < minV) minV = value
+            if (value > maxV) maxV = value
+        }
+        return maxV - minV
     }
 
     private fun maxAbsoluteDifference(first: List<EcgSample>, second: List<EcgSample>): Float =

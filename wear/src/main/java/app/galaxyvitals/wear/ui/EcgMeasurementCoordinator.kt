@@ -60,6 +60,9 @@ class EcgMeasurementCoordinator(
     private var sensorDisconnected = true
     private var offBodyStarted = false
     private var lastUiWaveformAt = 0L
+    private var liveHpPrev = Float.NaN
+    private var liveHpState = 0f
+    private var liveLpState = 0f
     private val live = ArrayList<Float>(EcgWearContract.DEFAULT_SR_HZ * 3)
 
     fun startHardware() {
@@ -98,7 +101,7 @@ class EcgMeasurementCoordinator(
         contactSince = 0L
         recordingStartedAt = 0L
         lastUiWaveformAt = 0L
-        live.clear()
+        resetLive()
         transition(MeasurePhase.Connecting, "CONNECTING") {
             MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
         }
@@ -166,16 +169,7 @@ class EcgMeasurementCoordinator(
             return
         }
         lastBatchAt = elapsedRealtime()
-        preflightTimeoutJob = scope.launch(mainDispatcher) {
-            delay(CONTACT_PREFLIGHT_TIMEOUT_MS)
-            if (isCurrent(id) && !terminal && _state.value.phase != MeasurePhase.Recording) {
-                failTerminal(
-                    "CONTACT_TIMEOUT",
-                    "Recording failed",
-                    "ECG contact was not detected in time. Adjust the watch and try again.",
-                )
-            }
-        }
+        restartPreflightTimeout()
         streamMonitorJob = scope.launch(mainDispatcher) {
             while (isCurrent(id) && !terminal) {
                 delay(STREAM_POLL_MS)
@@ -204,28 +198,51 @@ class EcgMeasurementCoordinator(
     private fun handlePreflightBatch(batch: EcgBatch) {
         if (!batch.contactValid) {
             contactSince = 0L
+            resetLive()
+            restartPreflightTimeout()
             transition(MeasurePhase.LeadOff, "CONTACT_LOST_PREFLIGHT") {
-                _state.value.copy(phase = MeasurePhase.LeadOff, status = "Touch the button")
+                _state.value.copy(
+                    phase = MeasurePhase.LeadOff,
+                    status = "Touch the button",
+                    liveMv = emptyList(),
+                )
             }
             return
         }
         if (offBody?.isBlocked() == true) {
             contactSince = 0L
+            resetLive()
+            restartPreflightTimeout()
             transition(MeasurePhase.LeadOff, "OFF_BODY_PREFLIGHT") {
-                _state.value.copy(phase = MeasurePhase.LeadOff, status = "Wear the watch snugly")
+                _state.value.copy(
+                    phase = MeasurePhase.LeadOff,
+                    status = "Wear the watch snugly",
+                    liveMv = emptyList(),
+                )
             }
             return
         }
         val now = elapsedRealtime()
-        if (contactSince == 0L) contactSince = now
-        if (now - contactSince < CONTACT_DEBOUNCE_MS) {
-            transition(MeasurePhase.Ready, "CONTACT_DEBOUNCE") {
-                _state.value.copy(phase = MeasurePhase.Ready, status = "Hold still")
+        if (contactSince == 0L) {
+            contactSince = now
+            preflightTimeoutJob?.cancel()
+            preflightTimeoutJob = null
+        }
+        appendLive(batch.samplesMv)
+        val heldMs = now - contactSince
+        if (heldMs < PRE_RECORD_HOLD_MS) {
+            val settling = heldMs >= CONTACT_DEBOUNCE_MS
+            transition(MeasurePhase.Ready, if (settling) "SENSOR_SETTLE" else "CONTACT_DEBOUNCE") {
+                _state.value.copy(
+                    phase = MeasurePhase.Ready,
+                    status = if (settling) "Stabilizing sensor…" else "Hold still",
+                    liveMv = publishedLive(),
+                )
             }
             return
         }
         beginRecording()
-        // The debounce-completing batch is intentionally not recorded. The existing
+        // The hold-completing batch is intentionally not recorded. The existing
         // subscription remains active and capture begins with the next Samsung batch.
     }
 
@@ -251,7 +268,6 @@ class EcgMeasurementCoordinator(
             )
             return
         }
-        live.clear()
         recordingStartedAt = elapsedRealtime()
         transition(MeasurePhase.Recording, "RECORDING") {
             _state.value.copy(
@@ -259,7 +275,7 @@ class EcgMeasurementCoordinator(
                 status = "Recording",
                 remainingSec = 30,
                 sessionId = sessionId,
-                liveMv = emptyList(),
+                liveMv = live.toList(),
                 error = null,
             )
         }
@@ -295,9 +311,7 @@ class EcgMeasurementCoordinator(
             return
         }
         val now = elapsedRealtime()
-        batch.samplesMv.forEach(live::add)
-        val keep = EcgWearContract.DEFAULT_SR_HZ * 3
-        if (live.size > keep) live.subList(0, live.size - keep).clear()
+        appendLive(batch.samplesMv)
         if (now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS) {
             lastUiWaveformAt = now
             _state.value = _state.value.copy(liveMv = live.toList())
@@ -419,7 +433,7 @@ class EcgMeasurementCoordinator(
         cleanupAcquisition()
         recorder.cancel()
         if (releaseLease) releaseForegroundLease()
-        live.clear()
+        resetLive()
     }
 
     private fun cleanupAcquisition() {
@@ -451,6 +465,56 @@ class EcgMeasurementCoordinator(
         }
     }
 
+    private fun restartPreflightTimeout() {
+        val id = attemptId
+        preflightTimeoutJob?.cancel()
+        preflightTimeoutJob = scope.launch(mainDispatcher) {
+            delay(CONTACT_PREFLIGHT_TIMEOUT_MS)
+            if (isCurrent(id) && !terminal && _state.value.phase != MeasurePhase.Recording) {
+                failTerminal(
+                    "CONTACT_TIMEOUT",
+                    "Recording failed",
+                    "ECG contact was not detected in time. Adjust the watch and try again.",
+                )
+            }
+        }
+    }
+
+    private fun resetLive() {
+        live.clear()
+        liveHpPrev = Float.NaN
+        liveHpState = 0f
+        liveLpState = 0f
+    }
+
+    private fun appendLive(values: FloatArray) {
+        values.forEach { value ->
+            if (liveHpPrev.isNaN()) {
+                liveHpPrev = value
+                liveHpState = 0f
+                liveLpState = 0f
+                live.add(0f)
+                return@forEach
+            }
+            val highPass = LIVE_HP_ALPHA * (liveHpState + value - liveHpPrev)
+            liveHpState = highPass
+            liveHpPrev = value
+            liveLpState += LIVE_LP_ALPHA * (highPass - liveLpState)
+            live.add(liveLpState)
+        }
+        val keep = EcgWearContract.DEFAULT_SR_HZ * 3
+        if (live.size > keep) live.subList(0, live.size - keep).clear()
+    }
+
+    private fun publishedLive(): List<Float> {
+        val now = elapsedRealtime()
+        if (now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS && _state.value.liveMv.isNotEmpty()) {
+            return _state.value.liveMv
+        }
+        lastUiWaveformAt = now
+        return live.toList()
+    }
+
     private fun isCurrent(id: Long): Boolean = id == attemptId
 
     private inline fun transition(
@@ -468,8 +532,19 @@ class EcgMeasurementCoordinator(
     companion object {
         private const val LOG_TAG = "EcgMeasurement"
         private const val CONNECT_TIMEOUT_MS = 3_500L
-        private const val CONTACT_PREFLIGHT_TIMEOUT_MS = 10_000L
-        private const val CONTACT_DEBOUNCE_MS = 500L
+        private const val CONTACT_PREFLIGHT_TIMEOUT_MS = 15_000L
+
+        /**
+         * Finger contact must stay valid this long, then the electrode is
+         * allowed to polarize before the 30 s capture clock starts. Samsung
+         * `ECG_MV` still carries a ~10 mV startup wander if recording begins
+         * on the first lead-on sample; GeminiMan uses a dedicated warmup.
+         */
+        private const val CONTACT_DEBOUNCE_MS = 1_000L
+        private const val SENSOR_SETTLE_MS = 3_000L
+        private const val PRE_RECORD_HOLD_MS = CONTACT_DEBOUNCE_MS + SENSOR_SETTLE_MS
+        private const val LIVE_HP_ALPHA = 0.9937605f
+        private const val LIVE_LP_ALPHA = 0.3344278f
         private const val STREAM_POLL_MS = 200L
         private const val RECORDING_DEADLINE_MS = 31_000L
         private const val UI_WAVEFORM_INTERVAL_MS = 100L

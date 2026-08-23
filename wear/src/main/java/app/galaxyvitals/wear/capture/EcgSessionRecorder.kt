@@ -223,14 +223,16 @@ class EcgSessionSnapshot internal constructor(
     }
 
     internal fun encode(watchInfo: String): RecordedSession {
-        val firstMs = sensorTimestampsMs.first()
+        // Samsung DataPoints share one timestamp per delivery batch, so the raw
+        // sensor clock is quantized. Sequence continuity guarantees a fixed
+        // 500 Hz stream, so the stored sample clock is index-based and uniform.
         val relMs = LongArray(sensorTimestampsMs.size) { index ->
-            sensorTimestampsMs[index] - firstMs
+            index.toLong() * EcgSessionRecorder.EXPECTED_PERIOD_MS
         }
         val gzip = EcgCsvWriter.gzipBytes(
             EcgCsvWriter.encodeCaptureV2(
                 wallStartMs = wallStartMs,
-                sensorStartMs = firstMs,
+                sensorStartMs = sensorTimestampsMs.first(),
                 valuesMv = values,
                 relMs = relMs,
                 sampleFlags = flags,

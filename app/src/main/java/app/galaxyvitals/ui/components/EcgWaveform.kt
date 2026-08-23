@@ -37,6 +37,35 @@ import kotlin.math.min
  * minimum and maximum value in their original chronological order, so the
  * result contains at most twice that many samples.
  */
+internal data class WaveformAmplitudeBounds(val mid: Float, val span: Float)
+
+/**
+ * Full-trace autoscale ignores the leading electrode-polarization swing so QRS
+ * amplitude fills the chart. Zoomed/panned windows use the visible min/max.
+ */
+internal fun waveformAmplitudeBounds(
+    samples: List<EcgSample>,
+    viewingFromStart: Boolean,
+): WaveformAmplitudeBounds {
+    if (samples.isEmpty()) return WaveformAmplitudeBounds(mid = 0f, span = 0.4f)
+    val skip = if (viewingFromStart && samples.size >= 15) {
+        (samples.size / 15).coerceAtMost(samples.size / 4)
+    } else {
+        0
+    }
+    var minV = Float.POSITIVE_INFINITY
+    var maxV = Float.NEGATIVE_INFINITY
+    for (index in skip until samples.size) {
+        val value = samples[index].valueMv
+        minV = min(minV, value)
+        maxV = max(maxV, value)
+    }
+    return WaveformAmplitudeBounds(
+        mid = (maxV + minV) / 2f,
+        span = (maxV - minV).coerceAtLeast(0.4f),
+    )
+}
+
 internal fun reduceWaveform(samples: List<EcgSample>, maxPoints: Int): List<EcgSample> {
     if (samples.isEmpty() || maxPoints <= 0) return emptyList()
     if (samples.size.toLong() <= maxPoints.toLong() * 2L) return samples
@@ -116,26 +145,18 @@ fun EcgWaveform(
             val slice = samples.subList(start, end)
             if (slice.size < 2) return@Canvas
 
-            var minV = Float.POSITIVE_INFINITY
-            var maxV = Float.NEGATIVE_INFINITY
-            slice.forEach {
-                minV = min(minV, it.valueMv)
-                maxV = max(maxV, it.valueMv)
-            }
-            val span = (maxV - minV).coerceAtLeast(0.4f)
-            val mid = (maxV + minV) / 2f
+            val bounds = waveformAmplitudeBounds(slice, viewingFromStart = start == 0)
+            val span = bounds.span
+            val mid = bounds.mid
             val rendered = reduceWaveform(slice, w.toInt().coerceAtLeast(1))
             if (rendered.size < 2) return@Canvas
-            val firstMs = slice.first().relMs
-            val visibleDurationMs = (slice.last().relMs - firstMs).coerceAtLeast(1L)
 
+            // Samples are a uniform fixed-rate stream, so x follows the sample
+            // index; relMs cannot be trusted because captured sensor timestamps
+            // are batch-quantized and would collapse many samples onto one x.
             val path = Path()
             rendered.forEachIndexed { index, sample ->
-                val x = if (slice.last().relMs > firstMs) {
-                    w * (sample.relMs - firstMs).toFloat() / visibleDurationMs
-                } else {
-                    w * index / (rendered.size - 1).coerceAtLeast(1)
-                }
+                val x = w * index / (rendered.size - 1).coerceAtLeast(1)
                 val y = h / 2f - ((sample.valueMv - mid) / span) * (h * 0.78f)
                 if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }

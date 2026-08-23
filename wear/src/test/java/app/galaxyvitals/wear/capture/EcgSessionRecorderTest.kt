@@ -122,6 +122,25 @@ class EcgSessionRecorderTest {
     }
 
     @Test
+    fun batchedIdenticalSensorTimestampsAreStoredOnAUniformFiveHundredHertzClock() {
+        val recorder = EcgSessionRecorder()
+        recorder.begin("batched", Wrist.LEFT, 1, 1_000L)
+        repeat(5) { sequence ->
+            val batchStart = 10_000L + sequence * 20L
+            recorder.addEcg(
+                batch(sequence * 10, 10, sequence).copy(
+                    sensorTimestampsMs = LongArray(10) { batchStart },
+                ),
+            )
+        }
+        val parsed = EcgCsvParser.parseBytes(
+            recorder.finish("w").gzip, true, "batched",
+        )
+        assertThat(parsed.samples.map { it.relMs }).isEqualTo((0 until 50).map { it * 2L })
+        assertThat(parsed.samples.map { it.sampleIndex }).isEqualTo((0 until 50).toList())
+    }
+
+    @Test
     fun leadOffSaturationAndSequenceGapFailCapture() {
         listOf(-1, 1, 2, 5, 255).forEach { leadOff ->
             val lead = EcgSessionRecorder().apply { begin("lead", Wrist.LEFT, 1, 1L) }
