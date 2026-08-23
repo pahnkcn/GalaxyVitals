@@ -47,6 +47,17 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun missingFingerContactAsksToTouchTheButton() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        harness.now = 100L
+        harness.sensor.emit(0, batch(sequence = 0, leadOff = 1))
+
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.LeadOff)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Touch the button")
+    }
+
+    @Test
     fun contactMustRemainStableForFullDebounce() {
         val harness = Harness()
         harness.coordinator.startHardware()

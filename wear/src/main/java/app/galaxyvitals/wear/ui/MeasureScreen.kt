@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,7 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import app.galaxyvitals.wear.ui.components.EcgWaveformMini
+import app.galaxyvitals.wear.ui.components.HomeKeyHint
 import kotlinx.coroutines.delay
 
 @Composable
@@ -46,73 +48,84 @@ fun MeasureScreen(
         onDispose { view.keepScreenOn = previousKeepScreenOn }
     }
 
+    val showHomeKeyHint = state.phase == MeasurePhase.LeadOff &&
+        state.status == "Touch the button"
     ScreenScaffold { contentPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(contentPadding)
-                .padding(horizontal = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
-        ) {
-            Text(
-                state.status,
-                style = MaterialTheme.typography.titleSmall,
-                textAlign = TextAlign.Center,
-            )
-            when (state.phase) {
-                MeasurePhase.Connecting, MeasurePhase.Warmup -> {
-                    CircularProgressIndicator()
-                }
-                MeasurePhase.Ready, MeasurePhase.LeadOff -> {
-                    Text(
-                        if (state.phase == MeasurePhase.LeadOff) "Finger on the button" else "Hold still",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                    if (state.liveMv.size >= 2) {
-                        EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .padding(horizontal = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
+            ) {
+                Text(
+                    state.status,
+                    style = MaterialTheme.typography.titleSmall,
+                    textAlign = TextAlign.Center,
+                )
+                when (state.phase) {
+                    MeasurePhase.Connecting, MeasurePhase.Warmup -> {
+                        CircularProgressIndicator()
                     }
-                }
-                MeasurePhase.Recording -> RecordingReadout(state, Modifier.weight(1f))
-                MeasurePhase.Saving -> {
-                    CircularProgressIndicator()
-                    Text(
-                        "Keeping this recording safe",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-                MeasurePhase.Success -> {
-                    Text(
-                        if (state.error == null) "On your phone" else "Saved on watch",
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    state.error?.let {
+                    MeasurePhase.Ready, MeasurePhase.LeadOff -> {
                         Text(
-                            it,
+                            when {
+                                showHomeKeyHint -> "Top button"
+                                state.phase == MeasurePhase.LeadOff -> "Keep the watch snug"
+                                else -> "Hold still"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        if (state.liveMv.size >= 2) {
+                            EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+                        }
+                    }
+                    MeasurePhase.Recording -> RecordingReadout(state, Modifier.weight(1f))
+                    MeasurePhase.Saving -> {
+                        CircularProgressIndicator()
+                        Text(
+                            "Keeping this recording safe",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                         )
                     }
-                    Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
-                        Text("Done")
+                    MeasurePhase.Success -> {
+                        Text(
+                            if (state.error == null) "On your phone" else "Saved on watch",
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        state.error?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+                            Text("Done")
+                        }
+                    }
+                    MeasurePhase.Failed, MeasurePhase.Unavailable -> {
+                        Text(
+                            state.error ?: "Unavailable",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                            Text("Record again")
+                        }
                     }
                 }
-                MeasurePhase.Failed, MeasurePhase.Unavailable -> {
-                    Text(
-                        state.error ?: "Unavailable",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center,
-                    )
-                    Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
-                        Text("Record again")
-                    }
-                }
+            }
+            if (showHomeKeyHint) {
+                HomeKeyHint(Modifier.fillMaxSize())
             }
         }
     }
