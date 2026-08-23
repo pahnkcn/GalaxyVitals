@@ -97,6 +97,86 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
     }
 
+    @Test
+    fun stabilizingSensorDoesNotPublishBpm() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        harness.now = 100L
+        harness.sensor.emit(0, batch(sequence = 0))
+        harness.now = 2_101L
+        harness.sensor.emit(0, batch(sequence = 1, samples = syntheticQrs(seconds = 3, bpm = 72)))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Stabilizing sensor…")
+        assertThat(harness.coordinator.state.value.hrBpm).isNull()
+    }
+
+    @Test
+    fun recordingPublishesLiveBpmFromQrsTrain() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        harness.now = 100L
+        harness.sensor.emit(0, batch(sequence = 0))
+        harness.now = 4_101L
+        harness.sensor.emit(0, batch(sequence = 1))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+
+        val qrs = syntheticQrs(seconds = 3, bpm = 72)
+        var sequence = 2
+        var offset = 0
+        while (offset < qrs.size) {
+            val count = minOf(50, qrs.size - offset)
+            harness.now += 100L
+            harness.sensor.emit(
+                0,
+                batch(
+                    sequence = sequence,
+                    samples = qrs.copyOfRange(offset, offset + count),
+                    timestampStartMs = 2_000L + offset * 2L,
+                ),
+            )
+            sequence += 1
+            offset += count
+        }
+
+        val bpm = harness.coordinator.state.value.hrBpm
+        assertThat(bpm).isNotNull()
+        assertThat(kotlin.math.abs(bpm!! - 72)).isAtMost(8)
+    }
+
+    @Test
+    fun recordingPublishesLiveBpmFromPpgGreen() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        harness.now = 100L
+        harness.sensor.emit(0, batch(sequence = 0))
+        harness.now = 4_101L
+        harness.sensor.emit(0, batch(sequence = 1))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+
+        val ppg = syntheticPpg(seconds = 3, bpm = 68)
+        var sequence = 2
+        var offset = 0
+        while (offset < ppg.size) {
+            val count = minOf(50, ppg.size - offset)
+            harness.now += 100L
+            harness.sensor.emit(
+                0,
+                batch(
+                    sequence = sequence,
+                    samples = FloatArray(count) { 0.1f },
+                    timestampStartMs = 2_000L + offset * 2L,
+                    ppgGreen = ppg.copyOfRange(offset, offset + count),
+                ),
+            )
+            sequence += 1
+            offset += count
+        }
+
+        val bpm = harness.coordinator.state.value.hrBpm
+        assertThat(bpm).isNotNull()
+        assertThat(kotlin.math.abs(bpm!! - 68)).isAtMost(8)
+    }
+
     private class Harness {
         val sensor = FakeSensor()
         val recorder = EcgSessionRecorder()
@@ -176,14 +256,57 @@ class EcgMeasurementCoordinatorTest {
     }
 
     companion object {
-        private fun batch(sequence: Int, leadOff: Int = 0, valueMv: Float = 0.1f): EcgBatch = EcgBatch(
-            samplesMv = FloatArray(10) { valueMv },
-            sensorTimestampsMs = LongArray(10) { 1_000L + sequence * 20L + it * 2L },
-            sequence = sequence and 0xff,
-            leadOff = leadOff,
-            minThresholdMv = -5f,
-            maxThresholdMv = 5f,
-            sampleFlags = IntArray(10),
-        )
+        private fun batch(
+            sequence: Int,
+            leadOff: Int = 0,
+            valueMv: Float = 0.1f,
+            samples: FloatArray? = null,
+            timestampStartMs: Long? = null,
+            ppgGreen: IntArray? = null,
+        ): EcgBatch {
+            val values = samples ?: FloatArray(10) { valueMv }
+            val start = timestampStartMs ?: (1_000L + sequence * 20L)
+            return EcgBatch(
+                samplesMv = values,
+                sensorTimestampsMs = LongArray(values.size) { start + it * 2L },
+                sequence = sequence and 0xff,
+                leadOff = leadOff,
+                minThresholdMv = -5f,
+                maxThresholdMv = 5f,
+                sampleFlags = IntArray(values.size),
+                ppgGreen = ppgGreen,
+            )
+        }
+
+        private fun syntheticPpg(seconds: Int, bpm: Int, srHz: Int = 500): IntArray {
+            val n = seconds * srHz
+            val period = srHz * 60 / bpm
+            val out = IntArray(n)
+            val peak = period / 5
+            val sigma = period * 0.08
+            for (index in 0 until n) {
+                val t = index % period
+                val gauss = kotlin.math.exp(-((t - peak) * (t - peak)) / (2.0 * sigma * sigma))
+                out[index] = (12_000 + 4_000 * gauss).toInt()
+            }
+            return out
+        }
+
+        private fun syntheticQrs(seconds: Int, bpm: Int, srHz: Int = 500): FloatArray {
+            val n = seconds * srHz
+            val period = srHz * 60 / bpm
+            val out = FloatArray(n)
+            var peak = period / 2
+            while (peak < n) {
+                for (offset in -5..5) {
+                    val index = peak + offset
+                    if (index in 0 until n) {
+                        out[index] = (1.5 * kotlin.math.exp(-offset * offset / 6.0)).toFloat()
+                    }
+                }
+                peak += period
+            }
+            return out
+        }
     }
 }

@@ -329,6 +329,8 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         val samples = FloatArray(data.size)
         val timestamps = LongArray(data.size)
         val flags = IntArray(data.size)
+        val ppgGreen = IntArray(data.size)
+        var ppgMissing = 0
         data.forEachIndexed { index, point ->
             val value = point.getValue(ValueKey.EcgSet.ECG_MV)
             require(value.isFinite()) { "Non-finite Samsung ECG sample" }
@@ -340,6 +342,8 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                 sampleFlags = sampleFlags or EcgSampleFlags.CLIPPED
             }
             flags[index] = sampleFlags
+            val green = readPpgGreen(point)
+            if (green == null) ppgMissing += 1 else ppgGreen[index] = green
         }
         return EcgBatch(
             samplesMv = samples,
@@ -349,7 +353,14 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             minThresholdMv = minThreshold,
             maxThresholdMv = maxThreshold,
             sampleFlags = flags,
+            ppgGreen = if (ppgMissing == 0) ppgGreen else null,
         )
+    }
+
+    private fun readPpgGreen(point: DataPoint): Int? = try {
+        point.getValue(ValueKey.EcgSet.PPG_GREEN)
+    } catch (_: Exception) {
+        null
     }
 
     private fun unavailable(reason: String) = SensorAvailability(

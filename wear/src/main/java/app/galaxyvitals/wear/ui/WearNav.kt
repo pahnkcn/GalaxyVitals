@@ -82,7 +82,6 @@ fun WearRoot() {
                         MeasureScreen(
                             state = state,
                             onRetry = measureVm::retry,
-                            onCancel = measureVm::cancelRecording,
                             onDone = {
                                 backStack.removeLastOrNull()
                                 homeVm.refresh()

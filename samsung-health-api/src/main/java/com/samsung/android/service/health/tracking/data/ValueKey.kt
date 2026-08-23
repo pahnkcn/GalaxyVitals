@@ -7,7 +7,19 @@ class ValueKey<T> private constructor() {
             val LEAD_OFF = ValueKey<Int>()
 
             @JvmField
+            val SEQUENCE = ValueKey<Int>()
+
+            @JvmField
+            val PPG_GREEN = ValueKey<Int>()
+
+            @JvmField
             val ECG_MV = ValueKey<Float>()
+
+            @JvmField
+            val MAX_THRESHOLD_MV = ValueKey<Float>()
+
+            @JvmField
+            val MIN_THRESHOLD_MV = ValueKey<Float>()
         }
     }
 

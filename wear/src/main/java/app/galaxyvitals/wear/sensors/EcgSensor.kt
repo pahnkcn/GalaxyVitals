@@ -8,10 +8,12 @@ data class EcgBatch(
     val minThresholdMv: Float?,
     val maxThresholdMv: Float?,
     val sampleFlags: IntArray,
+    val ppgGreen: IntArray? = null,
 ) {
     init {
         require(samplesMv.size == sensorTimestampsMs.size)
         require(samplesMv.size == sampleFlags.size)
+        require(ppgGreen == null || ppgGreen.size == samplesMv.size)
         require(sequence in 0..255)
     }
 
