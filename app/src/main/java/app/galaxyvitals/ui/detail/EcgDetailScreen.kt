@@ -12,17 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +34,7 @@ import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSample
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.ui.components.EcgWaveform
+import app.galaxyvitals.ui.components.ScreenTopBar
 import app.galaxyvitals.ui.durationLabel
 import app.galaxyvitals.ui.findingRows
 import app.galaxyvitals.ui.hrLabel
@@ -52,7 +46,6 @@ import app.galaxyvitals.ui.theme.Amber
 import app.galaxyvitals.ui.theme.Danger
 import app.galaxyvitals.ui.theme.Mint
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EcgDetailScreen(
     session: EcgSession?,
@@ -84,19 +77,14 @@ fun EcgDetailScreen(
         )
     }
     Column(modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("ECG") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-                }
-            },
+        ScreenTopBar(
+            title = "ECG",
+            onBack = onBack,
             actions = {
                 if (session != null) {
                     TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
                 }
             },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
         )
         if (session == null) {
             Text("Recording missing", modifier = Modifier.padding(20.dp))
