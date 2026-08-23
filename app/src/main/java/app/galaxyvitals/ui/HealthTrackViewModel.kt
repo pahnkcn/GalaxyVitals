@@ -8,7 +8,7 @@ import app.galaxyvitals.GalaxyVitalsApp
 import app.galaxyvitals.data.userFacingImportError
 import app.galaxyvitals.data.wear.WearLinkStatus
 import app.galaxyvitals.domain.AnalysisStatus
-import app.galaxyvitals.analysis.AnalysisBundle
+import app.galaxyvitals.analysis.EcgAnalysisBundle
 import app.galaxyvitals.domain.EcgSample
 import app.galaxyvitals.domain.EcgSession
 import kotlinx.coroutines.CancellationException
@@ -121,12 +121,13 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
         sampleLoadJob = viewModelScope.launch {
             try {
                 val existing = repo.get(sessionId)
-                if (existing?.analysisStatus in setOf(
-                        AnalysisStatus.NONE,
-                        AnalysisStatus.PENDING,
-                        AnalysisStatus.FAILED,
-                    ) || (existing?.analysisBundleId != null &&
-                        existing.analysisBundleId != AnalysisBundle.CURRENT_COMPATIBILITY_ID)
+                if (existing != null && (
+                        existing.analysisStatus in setOf(
+                            AnalysisStatus.NONE,
+                            AnalysisStatus.PENDING,
+                            AnalysisStatus.FAILED,
+                        ) || existing.analysisBundleId != EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID
+                    )
                 ) {
                     repo.reanalyze(sessionId)
                 }

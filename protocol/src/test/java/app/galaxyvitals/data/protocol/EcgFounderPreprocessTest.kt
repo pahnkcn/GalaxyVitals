@@ -1,6 +1,9 @@
 package app.galaxyvitals.data.protocol
 
+import app.galaxyvitals.domain.CaptureSource
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.TimingTrust
+import app.galaxyvitals.domain.Wrist
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 import org.junit.Assert.assertThrows
@@ -10,6 +13,47 @@ import kotlin.math.abs
 import kotlin.math.sin
 
 class EcgFounderPreprocessTest {
+
+    @Test
+    fun effectivePolarityAppliesStoredSignOnlyWhenSamplesAreNotNormalized() {
+        assertThat(parsed(signFactor = 1, polarityNormalized = false).effectivePolarity())
+            .isEqualTo(1f)
+        assertThat(parsed(signFactor = -1, polarityNormalized = false).effectivePolarity())
+            .isEqualTo(-1f)
+        assertThat(parsed(signFactor = 1, polarityNormalized = true).effectivePolarity())
+            .isEqualTo(1f)
+        assertThat(parsed(signFactor = -1, polarityNormalized = true).effectivePolarity())
+            .isEqualTo(1f)
+    }
+
+    @Test
+    fun filteredWindowsRecoverFromCorrectableRawBaselineDrift() {
+        val srHz = 500
+        val count = 30 * srHz
+        val samples = List(count) { index ->
+            val timeSec = index.toDouble() / srHz
+            val rampMv = 1.2 * index / (count - 1).toDouble()
+            EcgSample(
+                relMs = index * 1000L / srHz,
+                valueMv = (0.65 * sin(2 * PI * 1.2 * timeSec) + rampMv).toFloat(),
+                hrBpm = 72,
+                sampleIndex = index,
+            )
+        }
+        val parsed = parsed(
+            samples = samples,
+            signFactor = -1,
+            polarityNormalized = true,
+        )
+
+        val rawQuality = SignalQualityAnalyzer.analyze(parsed)
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+
+        assertThat(rawQuality.flags).contains(QualityFlag.BASELINE_DRIFT)
+        assertThat(prepared.quality.flags).contains(QualityFlag.BASELINE_DRIFT)
+        assertThat(prepared.windows.size).isAtLeast(3)
+        assertThat(prepared.quality.usableForAnalysis).isTrue()
+    }
 
     @Test
     fun windowsFrom500HzAreTenSeconds() {
@@ -158,6 +202,25 @@ class EcgFounderPreprocessTest {
     }
 
     private fun FloatArray.average(): Double = sum().toDouble() / size
+
+    private fun parsed(
+        samples: List<EcgSample> = synthetic(seconds = 30, srHz = 500, hz = 1.2),
+        signFactor: Int,
+        polarityNormalized: Boolean,
+    ): ParsedEcgFile = EcgCsvParser.summarize(
+        sessionId = "preprocess-test",
+        srHz = 500,
+        unit = "mV",
+        tsStartMs = 1L,
+        wrist = if (signFactor < 0) Wrist.RIGHT else Wrist.LEFT,
+        signFactor = signFactor,
+        polarityNormalized = polarityNormalized,
+        watchInfo = "test",
+        samples = samples,
+        schemaVersion = 2,
+        captureSource = CaptureSource.HARDWARE,
+        timingTrust = TimingTrust.SENSOR,
+    )
 
     private fun synthetic(seconds: Int, srHz: Int, hz: Double): List<EcgSample> {
         val n = seconds * srHz

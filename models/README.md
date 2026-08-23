@@ -1,21 +1,17 @@
-# ECGFounder weights
+# ECG model artifacts
 
-Place the official MIT checkpoint here or at the repo root:
+The active phone runtime uses the direct NAO3 student model documented in
+[`nao3/README.md`](nao3/README.md). The SHA-bound FP32 reference is copied to
+`app/src/main/assets/ecg/ecg_nao3_student_fp32.tflite`; FP16 and INT8 are kept
+beside it under `nao3/converted/` for reproducible parity work but are not
+packaged as fallbacks.
 
-- `1_lead_ECGFounder.pth`
+`models/nao/` contains the older GeminiMan NAO-v2 files used only for APK
+comparison and preprocessing archaeology. They are not Android assets. The
+retired ECGFounder ONNX file is preserved locally at
+`models/archive/ecgfounder_1lead.onnx` and remains gitignored because of its
+size.
 
-Then convert it for the phone app:
-
-```bash
-py -3.12 tools/ecgfounder/export_ecgfounder.py --pth 1_lead_ECGFounder.pth
-```
-
-That writes FP32 ONNX to `app/src/main/assets/ecg/ecgfounder_1lead.onnx`
-(Android ORT CPU cannot run the dynamic-INT8 `ConvInteger` graph). The exporter
-pins the official 1-lead checkpoint SHA-256 and verifies ONNX schema plus
-PyTorch/ONNX Runtime numerical parity before copying the asset. For a separately
-trusted custom checkpoint, pass its digest with `--expected-sha256`.
-The raw `.pth` / `.onnx` files are gitignored because they are hundreds of megabytes.
-
-Source: https://huggingface.co/PKUDigitalHealth/ECGFounder
-License: MIT
+The old ECGFounder conversion/evaluation tools remain under `tools/ecgfounder/`
+for historical reproducibility; they are no longer part of the application
+runtime or release bundle.

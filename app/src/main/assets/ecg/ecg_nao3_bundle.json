@@ -1,0 +1,31 @@
+{
+  "schema": "app.galaxyvitals.ecg.nao3.bundle",
+  "version": 1,
+  "compatibility_id": "ecg-nao3-student-256hz-v1",
+  "default_variant": "fp32",
+  "input": {
+    "shape": [1, 7680, 1],
+    "dtype": "FLOAT32",
+    "sample_rate_hz": 256,
+    "duration_seconds": 30,
+    "normalization": "zscore_per_record",
+    "polarity": "effective_once"
+  },
+  "output": {
+    "shape": [1, 3],
+    "dtype": "FLOAT32",
+    "semantics": "logits",
+    "postprocess": "stable_softmax",
+    "labels": ["N", "A", "O"]
+  },
+  "artifacts": {
+    "model": {
+      "path": "ecg/ecg_nao3_student_fp32.tflite",
+      "sha256": "7400a2352c79275d5a4860a76a684cc0b6140e8385572de5a68027f7343a20ac"
+    },
+    "filters": {
+      "path": "ecg/ecg_nao3_filters_256hz.json",
+      "sha256": "0e894310042206048a13d109bfa34c3cb05bf7de6ebcb692039c526f7ffdcf6b"
+    }
+  }
+}

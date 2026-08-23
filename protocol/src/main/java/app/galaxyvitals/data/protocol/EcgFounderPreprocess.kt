@@ -41,19 +41,19 @@ object EcgFounderPreprocess {
         if (parsed.srHz !in SUPPORTED_INPUT_HZ) return PreparedRecording(emptyList(), baseQuality)
         val out = ArrayList<PreparedWindow>()
         val cleanRanges = ArrayList<LongRange>()
+        val polarity = parsed.effectivePolarity()
         baseQuality.segments.forEach { segment ->
             if (segment.endRelMs - segment.startRelMs < WINDOW_MS - 2L) return@forEach
             val oriented = FloatArray(segment.samples.size) { index ->
-                segment.samples[index].valueMv * parsed.signFactor
+                segment.samples[index].valueMv * polarity
             }
             val series = resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
             val filtered = filterBandpass(series)
             val hop = TARGET_HZ * (HOP_MS / 1000).toInt()
             var start = 0
             while (start + WINDOW_SAMPLES <= filtered.size) {
-                val rawSlice = series.copyOfRange(start, start + WINDOW_SAMPLES)
-                val windowFlags = SignalQualityAnalyzer.assessWindow(rawSlice, TARGET_HZ)
                 val slice = filtered.copyOfRange(start, start + WINDOW_SAMPLES)
+                val windowFlags = SignalQualityAnalyzer.assessWindow(slice, TARGET_HZ)
                 val startMs = segment.startRelMs + start * 1000L / TARGET_HZ
                 if (windowFlags.isEmpty()) {
                     out += PreparedWindow(zScore(slice), startMs, rms(slice), windowFlags)

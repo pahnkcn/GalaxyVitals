@@ -26,9 +26,10 @@ object EcgBeatAnalyzer {
         val panAll = ArrayList<Int>()
         val hamiltonAll = ArrayList<Int>()
         var targetOffset = 0
+        val polarity = parsed.effectivePolarity()
         prepared.quality.segments.forEach { segment ->
             val oriented = FloatArray(segment.samples.size) { index ->
-                segment.samples[index].valueMv * parsed.signFactor
+                segment.samples[index].valueMv * polarity
             }
             val resampled = EcgFounderPreprocess.resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
             val hasCleanWindow = cleanStarts.any { start ->

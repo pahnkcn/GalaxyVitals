@@ -3,8 +3,8 @@
 Open-source Android companion for Galaxy Watch ECG recordings.
 
 GalaxyVitals implements the wearable **Data Layer + gzip CSV** contract used to
-move ECG traces from a watch to a phone. The UI is original. It does not
-redistribute another vendor’s layouts, icons, or classification models.
+move ECG traces from a watch to a phone. The UI and runtime integration are
+original.
 
 **Not a medical device.** Readings are for personal tracking only. If you feel
 unwell, seek professional care.
@@ -15,7 +15,7 @@ unwell, seek professional care.
 - Wear Data Layer listener on `/ecg/session/{id}` (same app id + signing key)
 - `:wear` GalaxyVitals watch app (`applicationId app.galaxyvitals`) that records and pushes that contract
 - Waveform viewer, HR stats, history
-- On-device **ECGFounder 1-lead** rhythm screen (N / A / O) after each import or watch sync
+- On-device **N / A / O rhythm screen** after each import or watch sync
 - Architecture stub so blood pressure can be added later
 
 ## Live watch sync
@@ -49,18 +49,23 @@ Requires Android SDK 36. `local.properties` should set `sdk.dir`.
 
 ## Rhythm model
 
-The phone app runs [ECGFounder 1-lead](https://github.com/PKUDigitalHealth/ECGFounder) (MIT)
-locally through ONNX Runtime. Convert the Hugging Face checkpoint once:
+The phone runs the direct three-class NAO3 model locally through LiteRT. The
+hash-bound FP32 reference is the packaged default. The host-parity FP16 and
+rejected INT8 candidates remain under `models/nao3/` and are not packaged as
+runtime fallbacks until the quantized row passes target-device verification.
 
-```bash
-py -3.12 tools/ecgfounder/export_ecgfounder.py --pth 1_lead_ECGFounder.pth
-```
+Stored watch traces remain raw at 500 Hz. For rhythm analysis, the phone applies
+the recording polarity once, resamples to 256 Hz, applies the configured filter
+chain, z-scores the whole record, and center-fits it to 7,680 samples. The model
+returns logits in N / A / O order; the app applies stable softmax and reports the
+argmax model score only after the signal-quality gate.
 
-The ONNX asset is intentionally not committed; release builds fail fast until
-the verified exporter has provisioned it.
+The detail chart uses a separate display-only 0.5–40 Hz filter and visible-range
+scaling. Display processing never overwrites the stored or exported ECG.
 
-Watch traces stay at 500 Hz. The analyser cuts 10 s windows, applies the configured
-band-pass / notch / z-score pipeline, then maps the 150 outputs to N / A / O.
+Host invocation and FP16 numerical parity are verified. Android uses the FP32
+reference until quantized numerical behavior is validated on an ADB-connected
+phone; target-phone performance and delegate behavior remain unclaimed.
 
 **Not a medical device.** Treat AF flags as a prompt to see a clinician.
 

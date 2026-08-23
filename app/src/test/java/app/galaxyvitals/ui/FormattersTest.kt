@@ -9,6 +9,19 @@ import org.junit.Test
 
 class FormattersTest {
     @Test
+    fun roundsNominalThirtySecondCaptureDuration() {
+        val session = session(
+            status = AnalysisStatus.NONE,
+            label = null,
+            confidence = null,
+            findings = "",
+            durationSec = 29.998,
+        )
+
+        assertThat(session.durationLabel()).isEqualTo("30s")
+    }
+
+    @Test
     fun lowQualityDoesNotDisplayStaleRhythmDecision() {
         val session = session(
             status = AnalysisStatus.LOW_QUALITY,
@@ -40,13 +53,14 @@ class FormattersTest {
         label: String?,
         confidence: Float?,
         findings: String,
+        durationSec: Double = 1.0,
     ) = EcgSession(
         sessionId = "test",
         filePath = "test.csv.gz",
         tsStartMs = 0,
         srHz = 500,
         nSamples = 10,
-        durationSec = 1.0,
+        durationSec = durationSec,
         hrMedian = 70.0,
         hrMin = 68,
         hrMax = 72,

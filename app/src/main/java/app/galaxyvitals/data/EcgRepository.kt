@@ -3,12 +3,12 @@ package app.galaxyvitals.data
 import android.content.Context
 import android.net.Uri
 import android.util.AtomicFile
-import app.galaxyvitals.analysis.EcgFounderEngine
+import app.galaxyvitals.analysis.EcgRhythmEngine
 import app.galaxyvitals.data.local.AppDatabase
 import app.galaxyvitals.data.local.EcgSessionEntity
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgCsvWriter
-import app.galaxyvitals.data.protocol.EcgFounderLabels
+import app.galaxyvitals.data.protocol.EcgDisplayProcessor
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.data.protocol.ParsedEcgFile
 import app.galaxyvitals.domain.AnalysisStatus
@@ -30,7 +30,7 @@ import java.security.MessageDigest
 class EcgRepository(
     private val context: Context,
     db: AppDatabase,
-    private val engine: EcgFounderEngine,
+    private val ecgRhythmEngine: EcgRhythmEngine,
 ) {
     private val dao = db.ecgSessionDao()
     private val ingestMutex = Mutex()
@@ -49,7 +49,13 @@ class EcgRepository(
         val file = File(session.filePath)
         if (!file.exists()) return@withContext emptyList()
         try {
-            EcgCsvParser.parseFile(file, session.sessionId).samples
+            val parsed = EcgCsvParser.parseFile(file, session.sessionId)
+            EcgDisplayProcessor.filter(
+                samples = parsed.samples,
+                srHz = parsed.srHz,
+                signFactor = parsed.signFactor,
+                polarityNormalized = parsed.polarityNormalized,
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -225,13 +231,13 @@ class EcgRepository(
     }
 
     private fun analyze(entity: EcgSessionEntity, parsed: ParsedEcgFile): EcgSessionEntity {
-        val result = engine.analyze(parsed)
+        val result = ecgRhythmEngine.analyze(parsed)
         val decision = result.decision
         return entity.withAnalysis(
             status = result.status,
             naoLabel = decision?.label?.name,
             naoConfidence = decision?.confidence,
-            findings = decision?.let { EcgFounderLabels.encodeFindings(it.topFindings) }.orEmpty(),
+            findings = "",
             note = result.note,
             qualityStatus = result.quality?.status?.name ?: entity.qualityStatus,
             cleanCoveragePct = result.quality?.cleanCoveragePct ?: entity.cleanCoveragePct,
@@ -376,7 +382,9 @@ internal fun isSafeDemoCleanupCandidate(entity: EcgSessionEntity): Boolean =
 internal fun userFacingAnalysisError(error: Throwable): String {
     val raw = error.message.orEmpty()
     return when {
-        raw.contains("ConvInteger") || raw.contains("ORT_NOT_IMPLEMENTED") ->
+        raw.contains("NAO3", ignoreCase = true) ||
+            raw.contains("TensorFlowLite", ignoreCase = true) ||
+            raw.contains("LiteRT", ignoreCase = true) ->
             "Rhythm model could not run on this device."
         else -> "Analysis failed."
     }

@@ -7,6 +7,7 @@ import app.galaxyvitals.domain.EcgSession
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private fun formatDate(pattern: String, epochMs: Long): String =
     SimpleDateFormat(pattern, Locale.getDefault()).format(Date(epochMs))
@@ -18,7 +19,7 @@ fun EcgSession.timeLabel(): String = formatDate("HH:mm", tsStartMs)
 fun EcgSession.stampLabel(): String = formatDate("d MMM yyyy · HH:mm", tsStartMs)
 
 fun EcgSession.durationLabel(): String {
-    val total = durationSec.toInt().coerceAtLeast(0)
+    val total = if (durationSec.isFinite()) durationSec.roundToInt().coerceAtLeast(0) else 0
     val m = total / 60
     val s = total % 60
     return if (m > 0) "${m}m ${s}s" else "${s}s"

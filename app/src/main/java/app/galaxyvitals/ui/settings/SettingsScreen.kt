@@ -56,17 +56,22 @@ fun SettingsScreen(
         )
         Section(
             "Rhythm model",
-            "After each recording the phone runs ECGFounder 1-lead (MIT, 2025) locally. " +
-                "A small calibrated head reads its 150 findings as N / A / O: normal, " +
-                "atrial fibrillation, or other. Galaxy Watch strips are 500 Hz lead-I-like. " +
-                "This is a screen, not a diagnosis.",
+            "After each recording the phone runs an on-device N/A/O rhythm model locally. " +
+                "After the signal-quality check it screens the 30-second single-lead strip " +
+                "as normal, atrial fibrillation, or other rhythm. The displayed score is a " +
+                "model score, not a diagnosis.",
+        )
+        Section(
+            "Waveform display",
+            "The detail chart applies wrist orientation and a display-only 0.5–40 Hz filter " +
+                "for readability. The stored and exported ECG remains raw and unchanged.",
         )
         Section(
             "Disclaimer",
             "GalaxyVitals is not a medical device and does not diagnose conditions. " +
                 "If you feel unwell, seek professional care.",
         )
-        Section("License", "Apache License 2.0 · ECGFounder MIT · application id app.galaxyvitals")
+        Section("License", "Apache License 2.0 · application id app.galaxyvitals")
     }
 }
 

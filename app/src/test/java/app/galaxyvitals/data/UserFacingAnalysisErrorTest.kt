@@ -5,9 +5,9 @@ import org.junit.Test
 
 class UserFacingAnalysisErrorTest {
     @Test
-    fun convIntegerBecomesFriendlyMessage() {
+    fun nao3RuntimeFailureBecomesFriendlyMessage() {
         val err = IllegalStateException(
-            "Error code - ORT_NOT_IMPLEMENTED - message: Could not find an implementation for ConvInteger(10)",
+            "Unexpected NAO3 input shape: [1, 1, 7680]",
         )
         assertThat(userFacingAnalysisError(err)).isEqualTo("Rhythm model could not run on this device.")
     }

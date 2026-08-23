@@ -35,7 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.galaxyvitals.analysis.shortHelp
-import app.galaxyvitals.analysis.AnalysisBundle
+import app.galaxyvitals.analysis.EcgAnalysisBundle
 import app.galaxyvitals.data.protocol.NaoLabel
 import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSample
@@ -112,7 +112,7 @@ fun EcgDetailScreen(
             Spacer(Modifier.height(16.dp))
             AnalysisCard(session)
             if (session.analysisBundleId != null &&
-                session.analysisBundleId != AnalysisBundle.CURRENT_COMPATIBILITY_ID
+                session.analysisBundleId != EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID
             ) {
                 Text(
                     "This analysis is stale because the verified analysis bundle changed.",
@@ -134,7 +134,13 @@ fun EcgDetailScreen(
                 "Drag to pan · use + / – to zoom · ${session.srHz} Hz · ${session.unit}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                "Display filtered 0.5–40 Hz · stored ECG remains raw",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 16.dp),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatChip("Clean", "${session.cleanCoveragePct.toInt()}%", Modifier.weight(1f))
@@ -157,7 +163,7 @@ fun EcgDetailScreen(
             }
             Spacer(Modifier.height(20.dp))
             Text(
-                "Screening only. ECGFounder is an open model, not a medical device. " +
+                "Screening only. The on-device N/A/O rhythm model is not a medical device. " +
                     "A single-lead watch strip cannot replace a 12-lead ECG or a clinician.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -204,14 +210,12 @@ private fun AnalysisCard(session: EcgSession) {
             }
         }
         val body = when (session.analysisStatus) {
-            AnalysisStatus.PENDING -> "Running ECGFounder on this recording…"
+            AnalysisStatus.PENDING -> "Running the on-device N/A/O rhythm model on this recording…"
             AnalysisStatus.FAILED -> session.analysisNote.ifBlank { "Analysis failed." }
             AnalysisStatus.LOW_QUALITY -> session.analysisNote.ifBlank {
                 "The strip quality is too low for a rhythm result."
             }
-            AnalysisStatus.INDETERMINATE -> session.analysisNote.ifBlank {
-                "The model abstained because the score or window agreement was insufficient."
-            }
+            AnalysisStatus.INDETERMINATE -> session.analysisNote.ifBlank { "No rhythm result is available." }
             AnalysisStatus.OK -> nao?.shortHelp() ?: "Analysis complete."
             AnalysisStatus.NONE -> "No analysis yet."
         }

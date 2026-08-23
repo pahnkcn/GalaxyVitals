@@ -1,3 +1,4 @@
+import java.io.File
 import java.security.MessageDigest
 
 plugins {
@@ -53,28 +54,50 @@ android {
     }
 
     androidResources {
-        noCompress += "onnx"
+        noCompress += "tflite"
     }
 }
 
-val verifyEcgFounderModel by tasks.registering {
+val verifyEcgNao3Bundle by tasks.registering {
     group = "verification"
-    description = "Fails release builds when any ECG analysis-bundle artifact is absent or changed."
+    description = "Fails release builds when the hash-bound NAO3 bundle is absent or changed."
     doLast {
         val assetsRoot = file("src/main/assets").canonicalFile
-        val manifestFile = file("src/main/assets/ecg/analysis_bundle.json")
-        if (!manifestFile.isFile) throw GradleException("Missing ECG analysis_bundle.json")
-        @Suppress("UNCHECKED_CAST")
-        val manifest = groovy.json.JsonSlurper().parse(manifestFile) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val artifacts = manifest["artifacts"] as? Map<String, Map<String, String>>
-            ?: throw GradleException("Invalid ECG analysis bundle artifacts")
-        if (artifacts.keys != setOf("model", "labels", "filters", "calibrator", "thresholds")) {
-            throw GradleException("ECG analysis bundle must bind model, labels, filters, calibrator, and thresholds")
+        val manifestFile = file("src/main/assets/ecg/ecg_nao3_bundle.json").canonicalFile
+        if (!manifestFile.isFile) throw GradleException("Missing ECG ecg_nao3_bundle.json")
+        val manifest = groovy.json.JsonSlurper().parse(manifestFile) as? Map<*, *>
+            ?: throw GradleException("Invalid ECG NAO3 bundle")
+        if (manifest["schema"] != "app.galaxyvitals.ecg.nao3.bundle" ||
+            manifest["compatibility_id"] != "ecg-nao3-student-256hz-v1"
+        ) {
+            throw GradleException("Unexpected ECG NAO3 bundle contract")
         }
-        artifacts.forEach { (name, entry) ->
-            val artifact = file("src/main/assets/${entry["path"]}").canonicalFile
-            if (!artifact.path.startsWith(assetsRoot.path) || !artifact.isFile || artifact.length() == 0L) {
+        val artifacts = manifest["artifacts"] as? Map<*, *>
+            ?: throw GradleException("Invalid ECG analysis bundle artifacts")
+        if (artifacts.keys != setOf("model", "filters")) {
+            throw GradleException("ECG NAO3 bundle must bind exactly model and filters")
+        }
+        artifacts.forEach { (rawName, rawEntry) ->
+            val name = rawName as? String
+                ?: throw GradleException("Invalid ECG analysis artifact name")
+            val entry = rawEntry as? Map<*, *>
+                ?: throw GradleException("Invalid ECG analysis artifact: $name")
+            if (entry.keys != setOf("path", "sha256")) {
+                throw GradleException("Invalid ECG analysis artifact contract: $name")
+            }
+            val relativePath = entry["path"] as? String
+                ?: throw GradleException("Missing ECG analysis artifact path: $name")
+            val expectedSha256 = entry["sha256"] as? String
+                ?: throw GradleException("Missing ECG analysis artifact hash: $name")
+            if (!Regex("[0-9a-f]{64}").matches(expectedSha256)) {
+                throw GradleException("Invalid ECG analysis artifact hash: $name")
+            }
+            val artifact = File(assetsRoot, relativePath).canonicalFile
+            if (!artifact.toPath().startsWith(assetsRoot.toPath()) ||
+                artifact == assetsRoot ||
+                !artifact.isFile ||
+                artifact.length() == 0L
+            ) {
                 throw GradleException("Missing ECG analysis artifact: $name")
             }
             val digest = MessageDigest.getInstance("SHA-256")
@@ -89,7 +112,7 @@ val verifyEcgFounderModel by tasks.registering {
             val actual = digest.digest().joinToString("") { byte: Byte ->
                 (byte.toInt() and 0xff).toString(16).padStart(2, '0')
             }
-            if (actual != entry["sha256"]) {
+            if (actual != expectedSha256) {
                 throw GradleException("ECG analysis artifact hash mismatch: $name")
             }
         }
@@ -97,7 +120,7 @@ val verifyEcgFounderModel by tasks.registering {
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
-    dependsOn(verifyEcgFounderModel)
+    dependsOn(verifyEcgNao3Bundle)
 }
 
 dependencies {
@@ -122,7 +145,7 @@ dependencies {
     implementation(libs.play.services.wearable)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
-    implementation(libs.onnxruntime.android)
+    implementation(libs.litert)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
