@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import app.galaxyvitals.domain.EcgSampleFlags
 import com.samsung.android.service.health.tracking.ConnectionListener
@@ -35,6 +36,16 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     private var ecgTracker: HealthTracker? = null
     private var subscriptionEpoch = 0L
     private var activeSubscriptionEpoch = 0L
+    private val ppgLogLock = Any()
+    private var ppgLogWindowStartMs = 0L
+    private var ppgLogBatches = 0
+    private var ppgLogDecodedBatches = 0
+    private var ppgLogDroppedBatches = 0
+    private var ppgLogDecodedCount = 0
+    private var ppgLogOffsetMin = Int.MAX_VALUE
+    private var ppgLogOffsetMax = Int.MIN_VALUE
+    private var ppgLogTsMin = Long.MAX_VALUE
+    private var ppgLogTsMax = Long.MIN_VALUE
 
     override fun connect(onResult: (SensorAvailability) -> Unit) {
         val hasExistingConnection = synchronized(connectionLock) {
@@ -367,21 +378,67 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
     }
 
     private fun logPpgDecode(batchSize: Int, ppgGreen: PpgGreenBatch?) {
-        if (ppgGreen == null) {
-            Log.i(ECG_ACQUISITION_TAG, "ppg dropped batchSize=$batchSize")
-            return
+        val now = SystemClock.elapsedRealtime()
+        val aggregate: String? = synchronized(ppgLogLock) {
+            if (ppgLogWindowStartMs == 0L) ppgLogWindowStartMs = now
+            ppgLogBatches += 1
+            if (ppgGreen == null) {
+                ppgLogDroppedBatches += 1
+                Log.d(ECG_ACQUISITION_TAG, "ppg dropped batchSize=$batchSize")
+            } else {
+                ppgLogDecodedBatches += 1
+                ppgLogDecodedCount += ppgGreen.values.size
+                val offsets = ppgGreen.ecgSampleOffsets
+                if (offsets.isNotEmpty()) {
+                    val first = offsets.first()
+                    val last = offsets.last()
+                    if (first < ppgLogOffsetMin) ppgLogOffsetMin = first
+                    if (last > ppgLogOffsetMax) ppgLogOffsetMax = last
+                }
+                val timestamps = ppgGreen.sensorTimestampsMs
+                if (timestamps.isNotEmpty()) {
+                    var tsMin = timestamps[0]
+                    var tsMax = timestamps[0]
+                    for (index in 1 until timestamps.size) {
+                        val ts = timestamps[index]
+                        if (ts < tsMin) tsMin = ts
+                        if (ts > tsMax) tsMax = ts
+                    }
+                    if (tsMin < ppgLogTsMin) ppgLogTsMin = tsMin
+                    if (tsMax > ppgLogTsMax) ppgLogTsMax = tsMax
+                }
+            }
+            if (now - ppgLogWindowStartMs < PPG_LOG_INTERVAL_MS) {
+                null
+            } else {
+                formatPpgLogAggregate().also { resetPpgLogWindow(now) }
+            }
         }
-        val timestamps = ppgGreen.sensorTimestampsMs
-        val offsets = ppgGreen.ecgSampleOffsets
-        val tsMin = timestamps.minOrNull() ?: 0L
-        val tsMax = timestamps.maxOrNull() ?: 0L
-        val offsetSpan = if (offsets.isEmpty()) 0 else offsets.last() - offsets.first()
-        Log.i(
-            ECG_ACQUISITION_TAG,
-            "ppg decoded count=${ppgGreen.values.size} " +
-                "offsets=${offsets.joinToString(prefix = "[", postfix = "]")} " +
-                "tsMin=$tsMin tsMax=$tsMax tsSpan=${tsMax - tsMin} offsetSpan=$offsetSpan",
-        )
+        if (aggregate != null) Log.i(ECG_ACQUISITION_TAG, aggregate)
+    }
+
+    private fun formatPpgLogAggregate(): String {
+        val hasOffsets = ppgLogOffsetMin != Int.MAX_VALUE
+        val hasTs = ppgLogTsMin != Long.MAX_VALUE
+        val offsetSpan = if (hasOffsets) ppgLogOffsetMax - ppgLogOffsetMin else 0
+        val tsMin = if (hasTs) ppgLogTsMin else 0L
+        val tsMax = if (hasTs) ppgLogTsMax else 0L
+        return "ppg 1s batches=$ppgLogBatches decodedBatches=$ppgLogDecodedBatches " +
+            "droppedBatches=$ppgLogDroppedBatches count=$ppgLogDecodedCount " +
+            "offsets=${if (hasOffsets) "[$ppgLogOffsetMin..$ppgLogOffsetMax]" else "[]"} " +
+            "offsetSpan=$offsetSpan tsMin=$tsMin tsMax=$tsMax tsSpan=${tsMax - tsMin}"
+    }
+
+    private fun resetPpgLogWindow(now: Long) {
+        ppgLogWindowStartMs = now
+        ppgLogBatches = 0
+        ppgLogDecodedBatches = 0
+        ppgLogDroppedBatches = 0
+        ppgLogDecodedCount = 0
+        ppgLogOffsetMin = Int.MAX_VALUE
+        ppgLogOffsetMax = Int.MIN_VALUE
+        ppgLogTsMin = Long.MAX_VALUE
+        ppgLogTsMax = Long.MIN_VALUE
     }
 
     private fun unavailable(reason: String) = SensorAvailability(
@@ -401,5 +458,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
 
     companion object {
         private const val ECG_ACQUISITION_TAG = "EcgAcquisition"
+        private const val PPG_LOG_INTERVAL_MS = 1_000L
     }
 }

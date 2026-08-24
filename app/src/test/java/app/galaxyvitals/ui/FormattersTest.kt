@@ -36,6 +36,14 @@ class FormattersTest {
     }
 
     @Test
+    fun hrLabelRoundsMedianToNearestInt() {
+        assertThat(session(ecgHrMedian = 72.6).hrLabel()).isEqualTo("73")
+        assertThat(session(ecgHrMedian = 72.4).hrLabel()).isEqualTo("72")
+        assertThat(session(hrMedian = 71.6, ecgHrMedian = null).hrLabel()).isEqualTo("72")
+        assertThat(session(hrMedian = null, ecgHrMedian = null).hrLabel()).isEqualTo("—")
+    }
+
+    @Test
     fun okDecisionStillDisplays() {
         val session = session(
             status = AnalysisStatus.OK,
@@ -49,11 +57,13 @@ class FormattersTest {
     }
 
     private fun session(
-        status: AnalysisStatus,
-        label: String?,
-        confidence: Float?,
-        findings: String,
+        status: AnalysisStatus = AnalysisStatus.NONE,
+        label: String? = null,
+        confidence: Float? = null,
+        findings: String = "",
         durationSec: Double = 1.0,
+        hrMedian: Double? = 70.0,
+        ecgHrMedian: Double? = null,
     ) = EcgSession(
         sessionId = "test",
         filePath = "test.csv.gz",
@@ -61,7 +71,7 @@ class FormattersTest {
         srHz = 500,
         nSamples = 10,
         durationSec = durationSec,
-        hrMedian = 70.0,
+        hrMedian = hrMedian,
         hrMin = 68,
         hrMax = 72,
         hrCoveragePct = 100.0,
@@ -77,5 +87,6 @@ class FormattersTest {
         naoLabel = label,
         naoConfidence = confidence,
         findings = findings,
+        ecgHrMedian = ecgHrMedian,
     )
 }

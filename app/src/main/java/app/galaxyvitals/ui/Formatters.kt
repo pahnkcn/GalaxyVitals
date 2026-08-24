@@ -25,7 +25,7 @@ fun EcgSession.durationLabel(): String {
     return if (m > 0) "${m}m ${s}s" else "${s}s"
 }
 
-fun EcgSession.hrLabel(): String = (ecgHrMedian ?: hrMedian)?.let { "${it.toInt()}" } ?: "—"
+fun EcgSession.hrLabel(): String = (ecgHrMedian ?: hrMedian)?.let { "${it.roundToInt()}" } ?: "—"
 
 fun EcgSession.hrSourceLabel(): String =
     if (ecgHrMedian != null) "ECG-derived median bpm" else "legacy median bpm"

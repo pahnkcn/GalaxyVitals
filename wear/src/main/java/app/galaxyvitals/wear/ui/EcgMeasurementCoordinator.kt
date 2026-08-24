@@ -35,6 +35,7 @@ class EcgMeasurementCoordinator(
     private val watchInfo: () -> String,
     private val offBodyFactory: ((Boolean) -> Unit) -> OffBodyGate,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val transitionLogger: (String) -> Unit = { Log.i(LOG_TAG, it) },
@@ -54,6 +55,7 @@ class EcgMeasurementCoordinator(
     private var preflightTimeoutJob: Job? = null
     private var streamMonitorJob: Job? = null
     private var recordingTimerJob: Job? = null
+    private var liveBpmJob: Job? = null
     private var lastBatchAt = 0L
     private var contactSince = 0L
     private var recordingStartedAt = 0L
@@ -275,6 +277,8 @@ class EcgMeasurementCoordinator(
         recordingStartedAt = elapsedRealtime()
         bpmSmoother.reset()
         lastUiBpmAt = 0L
+        liveBpmJob?.cancel()
+        liveBpmJob = null
         transition(MeasurePhase.Recording, "RECORDING") {
             _state.value.copy(
                 phase = MeasurePhase.Recording,
@@ -321,23 +325,16 @@ class EcgMeasurementCoordinator(
         appendLive(batch)
         val waveformDue = now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS
         val bpmDue = now - lastUiBpmAt >= BPM_UI_INTERVAL_MS
-        if (waveformDue || bpmDue) {
-            var next = _state.value
-            if (waveformDue) {
-                val deltaMs = if (lastUiWaveformAt == 0L) {
-                    UI_WAVEFORM_INTERVAL_MS
-                } else {
-                    now - lastUiWaveformAt
-                }
-                lastUiWaveformAt = now
-                next = next.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
+        if (waveformDue) {
+            val deltaMs = if (lastUiWaveformAt == 0L) {
+                UI_WAVEFORM_INTERVAL_MS
+            } else {
+                now - lastUiWaveformAt
             }
-            if (bpmDue) {
-                lastUiBpmAt = now
-                next = publishLiveBpm(next, now)
-            }
-            _state.value = next
+            lastUiWaveformAt = now
+            _state.value = _state.value.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
         }
+        if (bpmDue) scheduleLiveBpm(now)
         if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) completeRecording()
     }
 
@@ -360,6 +357,8 @@ class EcgMeasurementCoordinator(
         streamMonitorJob = null
         recordingTimerJob?.cancel()
         recordingTimerJob = null
+        liveBpmJob?.cancel()
+        liveBpmJob = null
         cleanupAcquisition()
         transition(MeasurePhase.Saving, "SAVING") {
             _state.value.copy(phase = MeasurePhase.Saving, status = "Saving…", remainingSec = 0)
@@ -452,6 +451,8 @@ class EcgMeasurementCoordinator(
         streamMonitorJob = null
         recordingTimerJob?.cancel()
         recordingTimerJob = null
+        liveBpmJob?.cancel()
+        liveBpmJob = null
         cleanupAcquisition()
         recorder.cancel()
         if (releaseLease) releaseForegroundLease()
@@ -511,11 +512,44 @@ class EcgMeasurementCoordinator(
         liveEcgProcessor.append(batch)
     }
 
-    private fun publishLiveBpm(state: MeasureUiState, now: Long): MeasureUiState {
+    private fun scheduleLiveBpm(now: Long) {
+        lastUiBpmAt = now
+        val rawWindow = liveEcgProcessor.analysisSamples
+        val livePpg = liveEcgProcessor.livePpg
+        val signFactor = liveEcgProcessor.signFactor
+        val analysisSampleCount = liveEcgProcessor.analysisSampleCount
+        val id = attemptId
+        liveBpmJob?.cancel()
+        liveBpmJob = scope.launch(computeDispatcher) {
+            val estimated = LiveBpmEstimator.estimate(
+                rawWindow = rawWindow,
+                livePpg = livePpg,
+                signFactor = signFactor,
+                nowMs = now,
+            )
+            withContext(mainDispatcher) {
+                if (!isCurrent(id) || terminal) return@withContext
+                _state.value = publishLiveBpm(
+                    state = _state.value,
+                    now = now,
+                    estimated = estimated,
+                    analysisSampleCount = analysisSampleCount,
+                    ppgPointCount = livePpg.size,
+                )
+            }
+        }
+    }
+
+    private fun publishLiveBpm(
+        state: MeasureUiState,
+        now: Long,
+        estimated: BpmEstimate?,
+        analysisSampleCount: Int,
+        ppgPointCount: Int,
+    ): MeasureUiState {
         if (state.phase != MeasurePhase.Recording) {
             return state.copy(bpm = LiveBpmState(LiveBpmAvailability.COLLECTING))
         }
-        val estimated = liveEcgProcessor.estimate(now)
         if (estimated != null) {
             bpmLogger(
                 "publish source=${estimated.source} bSqi=${estimated.bSqi} " +
@@ -523,8 +557,7 @@ class EcgMeasurementCoordinator(
             )
         } else {
             bpmLogger(
-                "abstain analysisSamples=${liveEcgProcessor.analysisSampleCount} " +
-                    "ppgPoints=${liveEcgProcessor.livePpg.size}",
+                "abstain analysisSamples=$analysisSampleCount ppgPoints=$ppgPointCount",
             )
         }
         return state.copy(bpm = bpmSmoother.publish(now, estimated))

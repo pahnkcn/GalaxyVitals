@@ -324,6 +324,7 @@ class EcgMeasurementCoordinatorTest {
             watchInfo = { "watch" },
             offBodyFactory = { FakeOffBody() },
             mainDispatcher = Dispatchers.Unconfined,
+            computeDispatcher = Dispatchers.Unconfined,
             elapsedRealtime = { now },
             wallClock = { 1_700_000_000_000L + now },
             transitionLogger = {},
