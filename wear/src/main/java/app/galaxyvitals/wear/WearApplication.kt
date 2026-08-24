@@ -1,8 +1,11 @@
 package app.galaxyvitals.wear
 
+import android.app.Activity
 import android.app.Application
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
 import app.galaxyvitals.wear.capture.MeasureForegroundLeaseManager
+import app.galaxyvitals.wear.sensors.EcgSensor
+import app.galaxyvitals.wear.sensors.MeasurementSensorFactory
 import app.galaxyvitals.wear.sensors.SamsungEcgSensor
 import app.galaxyvitals.wear.store.WatchEcgStore
 import app.galaxyvitals.wear.store.WearPreferences
@@ -31,9 +34,13 @@ class WearContainer(app: Application) {
     val dataLayer = WatchDataLayer(app)
     val recorder = EcgSessionRecorder()
     val measureForegroundLeases = MeasureForegroundLeaseManager(app)
-    val samsungSensor = SamsungEcgSensor(app)
+    val ecgSensor: EcgSensor = MeasurementSensorFactory.create(app)
     private val storeChangesFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val storeChanges: SharedFlow<Unit> = storeChangesFlow.asSharedFlow()
+
+    fun attachEcgSensor(activity: Activity) {
+        (ecgSensor as? SamsungEcgSensor)?.attach(activity)
+    }
 
     fun notifyStoreChanged() {
         storeChangesFlow.tryEmit(Unit)

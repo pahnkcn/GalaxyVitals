@@ -27,7 +27,7 @@ class MainWearActivity : ComponentActivity() {
             }
         }.toTypedArray()
         if (savedInstanceState == null) permissionLauncher.launch(needed)
-        (application as WearApplication).container.samsungSensor.attach(this)
+        (application as WearApplication).container.attachEcgSensor(this)
         setContent {
             HealthTrackWearTheme {
                 WearRoot()

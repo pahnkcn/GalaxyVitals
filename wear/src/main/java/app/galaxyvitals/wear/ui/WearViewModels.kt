@@ -125,13 +125,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val sensorNote: StateFlow<String> = _sensorNote.asStateFlow()
 
     fun probeSensor() {
-        app.container.samsungSensor.connect { avail: SensorAvailability ->
+        app.container.ecgSensor.connect { avail: SensorAvailability ->
             _sensorNote.value = if (avail.ready) {
-                "Samsung ECG tracker ready"
+                avail.reason ?: "Samsung ECG tracker ready"
             } else {
                 avail.reason ?: "Samsung ECG is not available for this package."
             }
-            app.container.samsungSensor.disconnect()
+            app.container.ecgSensor.disconnect()
         }
     }
 
@@ -144,7 +144,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 class MeasureViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as WearApplication
     private val coordinator = EcgMeasurementCoordinator(
-        sensor = app.container.samsungSensor,
+        sensor = app.container.ecgSensor,
         recorder = app.container.recorder,
         scope = viewModelScope,
         persistenceScope = app.container.persistenceScope,
