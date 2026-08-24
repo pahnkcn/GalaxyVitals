@@ -1,5 +1,6 @@
 package app.galaxyvitals.wear.ui
 
+import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgCsvWriter
 import app.galaxyvitals.data.protocol.EcgWearContract
@@ -66,6 +67,18 @@ class WatchSessionBpmTest {
 
         val stored = session(hrMedian = 61.0, samples = syntheticQrs(seconds = 30, bpm = 110).toSamples())
         assertThat(WatchSessionBpm.withDisplayBpm(stored).hrMedian).isEqualTo(61.0)
+    }
+
+    @Test
+    fun displayBpmEqualsSharedAnalyzerRoundToInt() {
+        for (bpm in intArrayOf(40, 72, 120)) {
+            val parsed = parseHardwareV2(syntheticQrs(seconds = 30, bpm = bpm))
+            val expected = EcgBeatAnalyzer.analyze(parsed).bpmMedian?.roundToInt()
+            assertThat(parsed.hrMedian).isNull()
+            assertThat(WatchSessionBpm.displayBpm(parsed)).isEqualTo(expected)
+            assertThat(WatchSessionBpm.withDisplayBpm(parsed).hrMedian).isEqualTo(expected?.toDouble())
+            assertThat(WatchSessionBpm.historyLabel(parsed)).isEqualTo("$expected bpm")
+        }
     }
 
     private fun parseHardwareV2(values: FloatArray): ParsedEcgFile {

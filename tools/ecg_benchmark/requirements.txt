@@ -1,0 +1,4 @@
+neurokit2==0.2.13
+wfdb
+numpy
+scipy
