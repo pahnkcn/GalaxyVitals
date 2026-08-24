@@ -38,6 +38,7 @@ class EcgMeasurementCoordinator(
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val transitionLogger: (String) -> Unit = { Log.i(LOG_TAG, it) },
+    private val bpmLogger: (String) -> Unit = { Log.i(BPM_LOG_TAG, it) },
 ) : AutoCloseable {
     private val _state = MutableStateFlow(MeasureUiState())
     val state: StateFlow<MeasureUiState> = _state.asStateFlow()
@@ -61,11 +62,7 @@ class EcgMeasurementCoordinator(
     private var offBodyStarted = false
     private var lastUiWaveformAt = 0L
     private var lastUiBpmAt = 0L
-    private var liveHpPrev = Float.NaN
-    private var liveHpState = 0f
-    private var liveLpState = 0f
-    private val live = ArrayList<Float>(EcgWearContract.DEFAULT_SR_HZ * 3)
-    private val livePpg = ArrayList<Int>(EcgWearContract.DEFAULT_SR_HZ * 3)
+    internal val liveEcgProcessor = LiveEcgProcessor()
     private val bpmSmoother = LiveBpmSmoother()
 
     fun startHardware() {
@@ -209,7 +206,7 @@ class EcgMeasurementCoordinator(
                     phase = MeasurePhase.LeadOff,
                     status = "Touch the button",
                     liveMv = emptyList(),
-                    hrBpm = null,
+                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
             return
@@ -223,7 +220,7 @@ class EcgMeasurementCoordinator(
                     phase = MeasurePhase.LeadOff,
                     status = "Wear the watch snugly",
                     liveMv = emptyList(),
-                    hrBpm = null,
+                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
             return
@@ -243,7 +240,7 @@ class EcgMeasurementCoordinator(
                     phase = MeasurePhase.Ready,
                     status = if (settling) "Stabilizing sensor…" else "Hold still",
                     liveMv = publishedLive(),
-                    hrBpm = null,
+                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
             return
@@ -276,14 +273,16 @@ class EcgMeasurementCoordinator(
             return
         }
         recordingStartedAt = elapsedRealtime()
+        bpmSmoother.reset()
+        lastUiBpmAt = 0L
         transition(MeasurePhase.Recording, "RECORDING") {
             _state.value.copy(
                 phase = MeasurePhase.Recording,
                 status = "Recording",
                 remainingSec = 30,
                 sessionId = sessionId,
-                liveMv = live.toList(),
-                hrBpm = null,
+                liveMv = liveEcgProcessor.displaySamples,
+                bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 error = null,
             )
         }
@@ -320,9 +319,19 @@ class EcgMeasurementCoordinator(
         }
         val now = elapsedRealtime()
         appendLive(batch)
-        if (now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS) {
-            lastUiWaveformAt = now
-            _state.value = withLiveHeartRate(_state.value.copy(liveMv = live.toList()), now)
+        val waveformDue = now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS
+        val bpmDue = now - lastUiBpmAt >= BPM_UI_INTERVAL_MS
+        if (waveformDue || bpmDue) {
+            var next = _state.value
+            if (waveformDue) {
+                lastUiWaveformAt = now
+                next = next.copy(liveMv = liveEcgProcessor.displaySamples)
+            }
+            if (bpmDue) {
+                lastUiBpmAt = now
+                next = publishLiveBpm(next, now)
+            }
+            _state.value = next
         }
         if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) completeRecording()
     }
@@ -489,44 +498,31 @@ class EcgMeasurementCoordinator(
     }
 
     private fun resetLive() {
-        live.clear()
-        livePpg.clear()
-        liveHpPrev = Float.NaN
-        liveHpState = 0f
-        liveLpState = 0f
+        liveEcgProcessor.reset(EcgWearContract.signFactorFor(wrist()))
         bpmSmoother.reset()
     }
 
     private fun appendLive(batch: EcgBatch) {
-        batch.samplesMv.forEach { value ->
-            if (liveHpPrev.isNaN()) {
-                liveHpPrev = value
-                liveHpState = 0f
-                liveLpState = 0f
-                live.add(0f)
-                return@forEach
-            }
-            val highPass = LIVE_HP_ALPHA * (liveHpState + value - liveHpPrev)
-            liveHpState = highPass
-            liveHpPrev = value
-            liveLpState += LIVE_LP_ALPHA * (highPass - liveLpState)
-            live.add(liveLpState)
-        }
-        val keep = EcgWearContract.DEFAULT_SR_HZ * 3
-        if (live.size > keep) live.subList(0, live.size - keep).clear()
-        // Sparse PpgGreenBatch is not a dense 500 Hz stream. Until Task 3 rewires
-        // LiveBpmEstimator for sparse PPG corroboration, omit PPG from the estimator.
-        livePpg.clear()
+        liveEcgProcessor.append(batch)
     }
 
-    private fun withLiveHeartRate(state: MeasureUiState, now: Long = elapsedRealtime()): MeasureUiState {
-        if (state.phase != MeasurePhase.Recording) return state.copy(hrBpm = null)
-        val estimated = LiveBpmEstimator.estimateBpm(state.liveMv, livePpg)
-        val smoothed = bpmSmoother.publish(state.hrBpm, estimated)
-        val publishDue = state.hrBpm == null || now - lastUiBpmAt >= BPM_UI_INTERVAL_MS
-        if (!publishDue || smoothed == state.hrBpm) return state
-        lastUiBpmAt = now
-        return state.copy(hrBpm = smoothed)
+    private fun publishLiveBpm(state: MeasureUiState, now: Long): MeasureUiState {
+        if (state.phase != MeasurePhase.Recording) {
+            return state.copy(bpm = LiveBpmState(LiveBpmAvailability.COLLECTING))
+        }
+        val estimated = liveEcgProcessor.estimate(now)
+        if (estimated != null) {
+            bpmLogger(
+                "publish source=${estimated.source} bSqi=${estimated.bSqi} " +
+                    "rr=${estimated.rrCount} bpm=${estimated.bpm}",
+            )
+        } else {
+            bpmLogger(
+                "abstain analysisSamples=${liveEcgProcessor.analysisSampleCount} " +
+                    "ppgPoints=${liveEcgProcessor.livePpg.size}",
+            )
+        }
+        return state.copy(bpm = bpmSmoother.publish(now, estimated))
     }
 
     private fun publishedLive(): List<Float> {
@@ -535,7 +531,7 @@ class EcgMeasurementCoordinator(
             return _state.value.liveMv
         }
         lastUiWaveformAt = now
-        return live.toList()
+        return liveEcgProcessor.displaySamples
     }
 
     private fun isCurrent(id: Long): Boolean = id == attemptId
@@ -554,6 +550,7 @@ class EcgMeasurementCoordinator(
 
     companion object {
         private const val LOG_TAG = "EcgMeasurement"
+        private const val BPM_LOG_TAG = "EcgBpm"
         private const val CONNECT_TIMEOUT_MS = 3_500L
         private const val CONTACT_PREFLIGHT_TIMEOUT_MS = 15_000L
 
@@ -566,11 +563,9 @@ class EcgMeasurementCoordinator(
         private const val CONTACT_DEBOUNCE_MS = 1_000L
         private const val SENSOR_SETTLE_MS = 3_000L
         private const val PRE_RECORD_HOLD_MS = CONTACT_DEBOUNCE_MS + SENSOR_SETTLE_MS
-        private const val LIVE_HP_ALPHA = 0.9937605f
-        private const val LIVE_LP_ALPHA = 0.3344278f
         private const val STREAM_POLL_MS = 200L
         private const val RECORDING_DEADLINE_MS = 31_000L
         private const val UI_WAVEFORM_INTERVAL_MS = 100L
-        private const val BPM_UI_INTERVAL_MS = 1_500L
+        private const val BPM_UI_INTERVAL_MS = 1_000L
     }
 }

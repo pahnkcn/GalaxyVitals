@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -38,13 +39,20 @@ enum class MeasurePhase {
 data class MeasureUiState(
     val phase: MeasurePhase = MeasurePhase.Connecting,
     val status: String = "Connecting…",
-    val hrBpm: Int? = null,
     val remainingSec: Int = 30,
     val liveMv: List<Float> = emptyList(),
     val error: String? = null,
     val sessionId: String? = null,
     val samsungReady: Boolean = false,
-)
+    val bpm: LiveBpmState = LiveBpmState(LiveBpmAvailability.COLLECTING),
+) {
+    val hrBpm: Int?
+        get() = if (bpm.availability == LiveBpmAvailability.RELIABLE) {
+            bpm.estimate?.bpm?.roundToInt()
+        } else {
+            null
+        }
+}
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as WearApplication

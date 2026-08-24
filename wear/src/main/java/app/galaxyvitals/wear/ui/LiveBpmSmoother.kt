@@ -1,58 +1,87 @@
 package app.galaxyvitals.wear.ui
 
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
- * Follows live pulse smoothly instead of locking or flashing each estimate.
- * Beat-to-beat jitter is averaged; a large jump must repeat before the
- * displayed value snaps.
+ * Time-based live BPM smoother. Callers should re-evaluate about once per second.
+ * Small changes use EWMA; jumps over 12 BPM need a second candidate ≥ 900 ms later.
  */
 internal class LiveBpmSmoother {
     private var smoothed: Double? = null
-    private var pendingBpm: Int? = null
-    private var pendingCount = 0
+    private var displayed: BpmEstimate? = null
+    private var lastAcceptedAt: Long? = null
+    private var pendingBpm: Double? = null
+    private var pendingAt: Long? = null
 
     fun reset() {
         smoothed = null
+        displayed = null
+        lastAcceptedAt = null
         pendingBpm = null
-        pendingCount = 0
+        pendingAt = null
     }
 
-    fun publish(current: Int?, estimated: Int?): Int? {
-        if (estimated == null) return smoothed?.roundToInt() ?: current
+    fun publish(nowMs: Long, estimated: BpmEstimate?): LiveBpmState {
+        if (estimated == null) return onMissing(nowMs)
         val previous = smoothed
         if (previous == null) {
-            smoothed = estimated.toDouble()
-            return estimated
+            pendingBpm = null
+            pendingAt = null
+            return accept(nowMs, estimated, estimated.bpm)
         }
-        if (abs(estimated - previous) > LARGE_JUMP_BPM) {
+        if (abs(estimated.bpm - previous) > LARGE_JUMP_BPM) {
             val pending = pendingBpm
-            if (pending != null && abs(estimated - pending) <= CONFIRM_BPM) {
-                pendingCount += 1
-            } else {
-                pendingBpm = estimated
-                pendingCount = 1
-            }
-            if (pendingCount >= CONFIRM_COUNT) {
+            val pendingTime = pendingAt
+            if (pending != null &&
+                pendingTime != null &&
+                abs(estimated.bpm - pending) <= CONFIRM_BPM &&
+                nowMs - pendingTime >= CONFIRM_GAP_MS
+            ) {
                 pendingBpm = null
-                pendingCount = 0
-                smoothed = estimated.toDouble()
-                return estimated
+                pendingAt = null
+                return accept(nowMs, estimated, estimated.bpm)
             }
-            return previous.roundToInt()
+            if (pending == null || pendingTime == null || abs(estimated.bpm - pending) > CONFIRM_BPM) {
+                pendingBpm = estimated.bpm
+                pendingAt = nowMs
+            }
+            return LiveBpmState(LiveBpmAvailability.RELIABLE, displayed)
         }
         pendingBpm = null
-        pendingCount = 0
-        val next = previous + ALPHA * (estimated - previous)
-        smoothed = next
-        return next.roundToInt()
+        pendingAt = null
+        val next = previous + ALPHA * (estimated.bpm - previous)
+        return accept(nowMs, estimated, next)
+    }
+
+    private fun onMissing(nowMs: Long): LiveBpmState {
+        val acceptedAt = lastAcceptedAt
+        val current = displayed
+        if (smoothed == null || acceptedAt == null || current == null) {
+            return LiveBpmState(LiveBpmAvailability.COLLECTING)
+        }
+        if (nowMs - acceptedAt > STALE_MS) {
+            reset()
+            return LiveBpmState(
+                availability = LiveBpmAvailability.UNRELIABLE,
+                estimate = null,
+                reason = "stale",
+            )
+        }
+        return LiveBpmState(LiveBpmAvailability.RELIABLE, current)
+    }
+
+    private fun accept(nowMs: Long, estimated: BpmEstimate, bpm: Double): LiveBpmState {
+        smoothed = bpm
+        lastAcceptedAt = nowMs
+        displayed = estimated.copy(bpm = bpm, updatedAtElapsedMs = nowMs)
+        return LiveBpmState(LiveBpmAvailability.RELIABLE, displayed)
     }
 
     private companion object {
-        const val ALPHA = 0.12
+        const val ALPHA = 0.25
         const val LARGE_JUMP_BPM = 12.0
-        const val CONFIRM_BPM = 4
-        const val CONFIRM_COUNT = 2
+        const val CONFIRM_BPM = 4.0
+        const val CONFIRM_GAP_MS = 900L
+        const val STALE_MS = 3_000L
     }
 }

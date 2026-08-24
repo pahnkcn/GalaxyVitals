@@ -1,197 +1,214 @@
 package app.galaxyvitals.wear.ui
 
+import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
+import app.galaxyvitals.data.protocol.EcgBeatResult
 import app.galaxyvitals.data.protocol.EcgWearContract
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Live display BPM.
- *
- * Samsung `ECG_ON_DEMAND` delivers `PPG_GREEN` on the same tracker as `ECG_MV`.
- * Pulse-rate from that PPG is the primary live number. ECG R-peaks are only a
- * fallback when PPG is missing.
+ * Live BPM publish helper. ECG is the displayed source; sparse PPG only corroborates.
  */
 object LiveBpmEstimator {
-    fun estimateBpm(
-        samples: List<Float>,
-        ppgGreen: List<Int> = emptyList(),
+    fun estimate(
+        rawWindow: FloatArray,
+        livePpg: List<LivePpgPoint>,
+        signFactor: Int,
+        nowMs: Long,
         srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
-    ): Int? = estimateFromPpg(ppgGreen, srHz) ?: estimateFromEcg(samples, srHz)
-
-    private fun estimateFromPpg(ppg: List<Int>, srHz: Int): Int? {
-        if (srHz <= 0 || ppg.size < (srHz * MIN_SECONDS).toInt()) return null
-        val x = FloatArray(ppg.size) { ppg[it].toFloat() }
-        var min = Float.POSITIVE_INFINITY
-        var max = Float.NEGATIVE_INFINITY
-        for (value in x) {
-            if (value < min) min = value
-            if (value > max) max = value
-        }
-        if (!(max - min > MIN_PPG_SWING)) return null
-        val detrend = FloatArray(x.size)
-        val width = max(1, srHz / 2)
-        var sum = 0.0
-        for (index in x.indices) {
-            sum += x[index]
-            if (index >= width) sum -= x[index - width]
-            detrend[index] = x[index] - (sum / minOf(width, index + 1)).toFloat()
-        }
-        return pulseBpm(detrend, srHz)
+    ): BpmEstimate? {
+        val ecg = EcgBeatAnalyzer.analyzeWindow(rawWindow, srHz, signFactor)
+        return publish(ecg, estimateSparsePpgBpm(livePpg, srHz), nowMs)
     }
 
-    private fun pulseBpm(signal: FloatArray, srHz: Int): Int? {
-        val envelope = FloatArray(signal.size)
-        for (index in 1 until signal.size) {
-            val delta = signal[index] - signal[index - 1]
-            envelope[index] = if (delta > 0f) delta else 0f
+    fun publish(ecg: EcgBeatResult, ppgBpm: Double?, nowMs: Long): BpmEstimate? {
+        val bpmMedian = ecg.bpmMedian
+        if (bpmMedian == null || ecg.bSqi < 0.80) return null
+
+        if (ppgBpm != null) {
+            val allowedDiff = maxOf(5.0, bpmMedian * 0.08)
+            if (abs(ppgBpm - bpmMedian) > allowedDiff) return null
+            return BpmEstimate(
+                bpm = bpmMedian,
+                source = BpmSource.ECG_PPG_CORROBORATED,
+                bSqi = ecg.bSqi,
+                rrCount = ecg.matchedPeaks.size - 1,
+                updatedAtElapsedMs = nowMs,
+            )
         }
-        val integrated = movingAverage(envelope, max(1, (0.12 * srHz).toInt()))
-        val mean = integrated.average()
-        var variance = 0.0
-        for (value in integrated) {
-            val delta = value - mean
-            variance += delta * delta
-        }
-        val threshold = mean + 0.50 * sqrt(variance / integrated.size)
-        val refractory = (srHz * PPG_REFRACTORY_MS / 1_000).coerceAtLeast(1)
-        val peaks = ArrayList<Int>()
-        var index = 1
-        while (index < integrated.lastIndex) {
-            if (integrated[index] >= threshold &&
-                integrated[index] >= integrated[index - 1] &&
-                integrated[index] > integrated[index + 1]
-            ) {
-                if (peaks.isEmpty() || index - peaks.last() >= refractory) peaks += index
-                else if (integrated[index] > integrated[peaks.last()]) peaks[peaks.lastIndex] = index
-                index += refractory / 2
-                continue
-            }
-            index++
-        }
-        return bpmFromPeaks(peaks, srHz)
+
+        if (ecg.bSqi < 0.90) return null
+        return BpmEstimate(
+            bpm = bpmMedian,
+            source = BpmSource.ECG,
+            bSqi = ecg.bSqi,
+            rrCount = ecg.matchedPeaks.size - 1,
+            updatedAtElapsedMs = nowMs,
+        )
     }
 
-    private fun estimateFromEcg(samples: List<Float>, srHz: Int): Int? {
-        val upright = estimateOriented(samples, invert = false, srHz)
-        val inverted = estimateOriented(samples, invert = true, srHz)
-        return when {
-            upright == null -> inverted?.bpm
-            inverted == null -> upright.bpm
-            inverted.cv < upright.cv -> inverted.bpm
-            else -> upright.bpm
+    fun estimateSparsePpgBpm(
+        livePpg: List<LivePpgPoint>,
+        srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
+    ): Double? {
+        if (srHz <= 0 || livePpg.size < MIN_PPG_POINTS) return null
+        val runs = contiguousRuns(livePpg)
+        val upright = rrFromRuns(runs, srHz, invert = false)
+        val inverted = rrFromRuns(runs, srHz, invert = true)
+        val rrMs = when {
+            upright.size >= inverted.size && upright.size >= MIN_RR_COUNT -> upright
+            inverted.size >= MIN_RR_COUNT -> inverted
+            else -> return null
         }
+        val valid = rrMs.filter { it in MIN_RR_MS..MAX_RR_MS }
+        if (valid.size < MIN_RR_COUNT) return null
+        val sorted = valid.sorted()
+        val median = if (sorted.size % 2 == 1) {
+            sorted[sorted.size / 2]
+        } else {
+            (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
+        }
+        val bpm = 60_000.0 / median
+        return if (bpm in MIN_BPM.toDouble()..MAX_BPM.toDouble()) bpm else null
     }
 
-    private fun estimateOriented(samples: List<Float>, invert: Boolean, srHz: Int): Estimate? {
-        if (srHz <= 0 || samples.size < (srHz * MIN_SECONDS).toInt()) return null
-        val signed = FloatArray(samples.size) { index ->
-            if (invert) -samples[index] else samples[index]
-        }
-        val p99 = percentile(signed, 0.99f)
-        if (p99 < MIN_AMPLITUDE_MV) return null
-        val threshold = p99 * PEAK_FRACTION
-        val candidates = ArrayList<Int>()
-        for (index in 1 until signed.lastIndex) {
-            if (signed[index] >= threshold &&
-                signed[index] >= signed[index - 1] &&
-                signed[index] > signed[index + 1] &&
-                peakWidth(signed, index) >= MIN_PEAK_WIDTH
-            ) {
-                candidates += index
+    private fun contiguousRuns(points: List<LivePpgPoint>): List<List<LivePpgPoint>> {
+        if (points.isEmpty()) return emptyList()
+        val sorted = points.sortedBy { it.ecgSampleIndex }
+        val runs = ArrayList<List<LivePpgPoint>>()
+        var current = ArrayList<LivePpgPoint>(sorted.size)
+        current += sorted[0]
+        for (index in 1 until sorted.size) {
+            val delta = sorted[index].ecgSampleIndex - sorted[index - 1].ecgSampleIndex
+            if (delta in MIN_CADENCE_ECG..MAX_CADENCE_ECG) {
+                current += sorted[index]
+            } else {
+                if (current.size >= MIN_RUN_POINTS) runs += current
+                current = ArrayList()
+                current += sorted[index]
             }
         }
-        if (candidates.size < MIN_PEAKS) return null
-        candidates.sortByDescending { signed[it] }
-        val refractory = (srHz * ECG_REFRACTORY_MS / 1_000).coerceAtLeast(1)
-        val accepted = ArrayList<Int>()
-        for (index in candidates) {
-            if (accepted.none { abs(it - index) < refractory }) accepted += index
-        }
-        if (accepted.size < MIN_PEAKS) return null
-        accepted.sort()
-        val bpm = bpmFromPeaks(accepted, srHz) ?: return null
-        val intervals = ArrayList<Int>(accepted.size - 1)
-        for (peakIndex in 1 until accepted.size) {
-            val dt = accepted[peakIndex] - accepted[peakIndex - 1]
-            if (dt > 0) intervals += dt
-        }
-        if (intervals.size < MIN_INTERVALS) return null
-        val mean = intervals.average()
-        if (mean <= 0.0) return null
-        var variance = 0.0
-        intervals.forEach { sample ->
-            val delta = sample - mean
-            variance += delta * delta
-        }
-        return Estimate(bpm, sqrt(variance / intervals.size) / mean)
+        if (current.size >= MIN_RUN_POINTS) runs += current
+        return runs
     }
 
-    private fun bpmFromPeaks(peaks: List<Int>, srHz: Int): Int? {
-        if (peaks.size < MIN_PEAKS) return null
-        val intervals = ArrayList<Int>(peaks.size - 1)
-        for (peakIndex in 1 until peaks.size) {
-            val dt = peaks[peakIndex] - peaks[peakIndex - 1]
-            if (dt <= 0) continue
-            val bpm = srHz * 60 / dt
-            if (bpm in MIN_BPM..MAX_BPM) intervals += dt
+    private fun rrFromRuns(
+        runs: List<List<LivePpgPoint>>,
+        srHz: Int,
+        invert: Boolean,
+    ): List<Double> {
+        val rrMs = ArrayList<Double>()
+        for (run in runs) {
+            rrMs += rrFromRun(run, srHz, invert)
         }
-        if (intervals.size < MIN_INTERVALS) return null
-        intervals.sort()
-        val median = intervals[intervals.size / 2]
-        val consistent = intervals.filter { abs(it - median).toDouble() / median <= CONSISTENT_RR_FRACTION }
-        if (consistent.size < MIN_CONSISTENT) return null
-        val consistentMedian = consistent.sorted()[consistent.size / 2]
-        return (srHz * 60) / consistentMedian
+        return rrMs
     }
 
-    private fun movingAverage(values: FloatArray, width: Int): FloatArray {
+    private fun rrFromRun(run: List<LivePpgPoint>, srHz: Int, invert: Boolean): List<Double> {
+        if (run.size < MIN_RUN_POINTS) return emptyList()
+        val deltas = DoubleArray(run.size - 1) { index ->
+            (run[index + 1].ecgSampleIndex - run[index].ecgSampleIndex).toDouble()
+        }
+        val medianDelta = median(deltas)
+        if (medianDelta < MIN_CADENCE_ECG) return emptyList()
+        val fs = srHz / medianDelta
+        val sign = if (invert) -1f else 1f
+        val raw = FloatArray(run.size) { run[it].rawValue * sign }
+        val filtered = bandpass05To5(raw, fs)
+        val peaks = detectPeaks(filtered, run, fs, srHz)
+        if (peaks.size < MIN_RR_COUNT + 1) return emptyList()
+        val rr = ArrayList<Double>(peaks.size - 1)
+        for (index in 1 until peaks.size) {
+            val dtMs = (run[peaks[index]].ecgSampleIndex - run[peaks[index - 1]].ecgSampleIndex) * 1_000.0 / srHz
+            if (dtMs in MIN_RR_MS..MAX_RR_MS) rr += dtMs
+        }
+        return rr
+    }
+
+    private fun bandpass05To5(values: FloatArray, fs: Double): FloatArray {
+        val hpA = exp(-2.0 * Math.PI * HP_HZ / fs).toFloat()
+        val lpA = (1.0 - exp(-2.0 * Math.PI * LP_HZ / fs)).toFloat()
         val out = FloatArray(values.size)
-        var sum = 0.0
+        var prevX = values[0]
+        var prevHp = 0f
+        var prevLp = 0f
         for (index in values.indices) {
-            sum += values[index]
-            if (index >= width) sum -= values[index - width]
-            out[index] = (sum / minOf(width, index + 1)).toFloat()
+            val hp = hpA * (prevHp + values[index] - prevX)
+            prevX = values[index]
+            prevHp = hp
+            prevLp += lpA * (hp - prevLp)
+            out[index] = prevLp
         }
         return out
     }
 
-    private fun peakWidth(signed: FloatArray, index: Int): Int {
-        val floor = signed[index] * 0.2f
-        var width = 1
-        var cursor = index - 1
-        while (cursor >= 0 && signed[cursor] >= floor) {
-            width++
-            cursor--
+    private fun detectPeaks(
+        filtered: FloatArray,
+        run: List<LivePpgPoint>,
+        fs: Double,
+        srHz: Int,
+    ): List<Int> {
+        val warmup = max(1, (fs * WARMUP_SECONDS).toInt())
+        if (filtered.size <= warmup + 2) return emptyList()
+        var sum = 0.0
+        var sumSq = 0.0
+        val n = filtered.size - warmup
+        for (index in warmup until filtered.size) {
+            val value = filtered[index].toDouble()
+            sum += value
+            sumSq += value * value
         }
-        cursor = index + 1
-        while (cursor < signed.size && signed[cursor] >= floor) {
-            width++
-            cursor++
+        val mean = sum / n
+        val variance = max(0.0, sumSq / n - mean * mean)
+        val std = sqrt(variance)
+        if (std < MIN_PPG_STD) return emptyList()
+        val threshold = (mean + THRESHOLD_K * std).toFloat()
+        val minEcgInterval = (srHz * 60) / MAX_BPM
+        val peaks = ArrayList<Int>()
+        var index = max(warmup, 1)
+        while (index < filtered.lastIndex) {
+            val value = filtered[index]
+            if (value >= threshold &&
+                value >= filtered[index - 1] &&
+                value > filtered[index + 1]
+            ) {
+                if (peaks.isEmpty() ||
+                    run[index].ecgSampleIndex - run[peaks.last()].ecgSampleIndex >= minEcgInterval
+                ) {
+                    peaks += index
+                } else if (value > filtered[peaks.last()]) {
+                    peaks[peaks.lastIndex] = index
+                }
+                index += 1
+                continue
+            }
+            index += 1
         }
-        return width
+        return peaks
     }
 
-    private fun percentile(values: FloatArray, p: Float): Float {
+    private fun median(values: DoubleArray): Double {
+        if (values.isEmpty()) return 0.0
         val copy = values.copyOf()
         copy.sort()
-        val idx = ((copy.size - 1) * p).toInt().coerceIn(0, copy.lastIndex)
-        return copy[idx]
+        val mid = copy.size / 2
+        return if (copy.size % 2 == 1) copy[mid] else (copy[mid - 1] + copy[mid]) / 2.0
     }
 
-    private data class Estimate(val bpm: Int, val cv: Double)
-
-    private const val MIN_SECONDS = 2.0
-    private const val MIN_PEAKS = 4
-    private const val MIN_INTERVALS = 3
-    private const val MIN_CONSISTENT = 3
+    private const val MIN_PPG_POINTS = 20
+    private const val MIN_RUN_POINTS = 16
+    private const val MIN_CADENCE_ECG = 3L
+    private const val MAX_CADENCE_ECG = 7L
+    private const val MIN_RR_COUNT = 4
+    private const val MIN_RR_MS = 333.0
+    private const val MAX_RR_MS = 1_500.0
     private const val MIN_BPM = 40
     private const val MAX_BPM = 180
-    private const val ECG_REFRACTORY_MS = 450
-    private const val PPG_REFRACTORY_MS = 400
-    private const val MIN_AMPLITUDE_MV = 0.12f
-    private const val MIN_PPG_SWING = 50f
-    private const val PEAK_FRACTION = 0.55f
-    private const val MIN_PEAK_WIDTH = 5
-    private const val CONSISTENT_RR_FRACTION = 0.20
+    private const val HP_HZ = 0.5
+    private const val LP_HZ = 5.0
+    private const val WARMUP_SECONDS = 0.5
+    private const val THRESHOLD_K = 0.40
+    private const val MIN_PPG_STD = 5.0
 }
