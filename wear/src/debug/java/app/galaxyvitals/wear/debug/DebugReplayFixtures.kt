@@ -12,6 +12,10 @@ import kotlin.math.sin
 internal object DebugReplayFixtures {
     const val SAMPLE_RATE_HZ = 500
     const val SAMPLE_PERIOD_MS = 2L
+    /** Timestamp gap ~10 s from stream start (after 4 s hold, during recording). */
+    const val LEAD_OFF_GAP_AT_SAMPLE = 10 * SAMPLE_RATE_HZ
+    /** Lead-off ~24 s from stream start (still inside the 30 s capture). */
+    const val LEAD_OFF_CONTACT_AT_SAMPLE = 24 * SAMPLE_RATE_HZ
     val NAMES: Set<String> = Fixture.entries.map { it.id }.toSet()
 
     fun parseName(raw: String?): String? {
@@ -30,12 +34,12 @@ internal object DebugReplayFixtures {
         val samples = waveform(fixture, count)
         val sizes = partitionSizes(count)
         val gapAt = if (fixture == Fixture.LEAD_OFF_GAP) {
-            firstBatchStartAtOrAfter(sizes, count / 3)
+            eventBatchStart(sizes, count, LEAD_OFF_GAP_AT_SAMPLE)
         } else {
             -1
         }
         val leadOffAt = if (fixture == Fixture.LEAD_OFF_GAP) {
-            firstBatchStartAtOrAfter(sizes, (count * 2) / 3)
+            eventBatchStart(sizes, count, LEAD_OFF_CONTACT_AT_SAMPLE)
         } else {
             -1
         }
@@ -108,15 +112,14 @@ internal object DebugReplayFixtures {
         return sizes
     }
 
-    private fun firstBatchStartAtOrAfter(sizes: List<Int>, minStart: Int): Int {
+    private fun eventBatchStart(sizes: List<Int>, sampleCount: Int, minStart: Int): Int {
+        if (minStart >= sampleCount) return -1
         var start = 0
-        var lastStart = 0
         for (size in sizes) {
-            lastStart = start
             if (start >= minStart) return start
             start += size
         }
-        return lastStart
+        return -1
     }
 
     private fun waveform(fixture: Fixture, n: Int): FloatArray {

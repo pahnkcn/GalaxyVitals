@@ -54,13 +54,40 @@ class DebugReplayFixturesTest {
     }
 
     @Test
-    fun leadOffGap_setsLeadOffOrTimestampGap() {
-        val batches = DebugReplayFixtures.batches("lead_off_gap", sampleCount = 75)
-        val hasLeadOff = batches.any { it.leadOff != 0 }
-        val hasTimestampGap = batches.any { batch ->
-            batch.sampleFlags.any { flags -> flags and EcgSampleFlags.TIMESTAMP_GAP != 0 }
+    fun leadOffGap_placesGapAndLeadOffInsideCaptureWindow() {
+        val srHz = DebugReplayFixtures.SAMPLE_RATE_HZ
+        val batches = DebugReplayFixtures.batches(
+            "lead_off_gap",
+            sampleCount = srHz * 60,
+        )
+        var sampleIndex = 0
+        var gapAt: Int? = null
+        var leadOffAt: Int? = null
+        for (batch in batches) {
+            if (gapAt == null &&
+                batch.sampleFlags.any { flags -> flags and EcgSampleFlags.TIMESTAMP_GAP != 0 }
+            ) {
+                gapAt = sampleIndex
+            }
+            if (leadOffAt == null && batch.leadOff != 0) {
+                leadOffAt = sampleIndex
+            }
+            sampleIndex += batch.samplesMv.size
         }
-        assertThat(hasLeadOff || hasTimestampGap).isTrue()
+        assertThat(gapAt).isNotNull()
+        assertThat(leadOffAt).isNotNull()
+
+        val holdSamples = 4 * srHz
+        val captureEndSamples = holdSamples + 30 * srHz
+        assertThat(gapAt!!).isAtLeast(holdSamples)
+        assertThat(gapAt).isLessThan(captureEndSamples)
+        assertThat(leadOffAt!!).isAtLeast(holdSamples)
+        assertThat(leadOffAt).isLessThan(captureEndSamples)
+        assertThat(gapAt).isAtLeast(8 * srHz)
+        assertThat(gapAt).isAtMost(12 * srHz)
+        assertThat(leadOffAt).isAtLeast(20 * srHz)
+        assertThat(leadOffAt).isAtMost(28 * srHz)
+        assertThat(leadOffAt).isGreaterThan(gapAt)
         assertThat(batches.map { it.samplesMv.size }.toSet()).containsExactly(5, 10)
         assertThat(batches.any { it.ppgGreen != null }).isTrue()
     }
