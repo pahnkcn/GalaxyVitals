@@ -37,7 +37,6 @@ object EcgBeatAnalyzer {
     private const val TWAVE_MS = 360
     private const val SEARCHBACK_RR = 1.66
     private const val EWMA = 0.125
-    private const val SEARCHBACK_EWMA = 0.25
     private const val THRESHOLD_NOISE_WEIGHT = 0.25
     private const val LEARN_SECONDS = 2
 
@@ -46,14 +45,16 @@ object EcgBeatAnalyzer {
 
     fun analyze(parsed: ParsedEcgFile, prepared: PreparedRecording): EcgBeatResult {
         val cleanDurationMs = prepared.quality.cleanUnionMs
-        if (!prepared.quality.usableForAnalysis) {
+        if (parsed.srHz !in EcgFounderPreprocess.SUPPORTED_INPUT_HZ) {
             return emptyResult(
                 EcgBpmStatus.LOW_QUALITY,
                 "Signal quality is insufficient for ECG-derived BPM",
                 cleanDurationMs,
             )
         }
-        if (parsed.srHz !in EcgFounderPreprocess.SUPPORTED_INPUT_HZ) {
+        val enoughCoverage = prepared.quality.cleanWindowCount >= SignalQualityAnalyzer.MIN_CLEAN_WINDOWS &&
+            prepared.quality.cleanUnionMs >= SignalQualityAnalyzer.MIN_CLEAN_UNION_MS
+        if (!enoughCoverage) {
             return emptyResult(
                 EcgBpmStatus.LOW_QUALITY,
                 "Signal quality is insufficient for ECG-derived BPM",
@@ -193,15 +194,11 @@ object EcgBeatAnalyzer {
             return sum / (rr.size - from)
         }
 
-        fun accept(index: Int, value: Double, searchbackHit: Boolean) {
+        fun accept(index: Int, value: Double) {
             if (qrs.isNotEmpty()) rr += index - qrs.last()
             qrs += index
             qrsAmp += value
-            spki = if (searchbackHit) {
-                SEARCHBACK_EWMA * value + (1.0 - SEARCHBACK_EWMA) * spki
-            } else {
-                EWMA * value + (1.0 - EWMA) * spki
-            }
+            spki = EWMA * value + (1.0 - EWMA) * spki
             if (spki < npki) spki = npki
         }
 
@@ -228,7 +225,7 @@ object EcgBeatAnalyzer {
                 }
             }
             if (bestIndex < 0) return false
-            accept(bestIndex, bestValue, searchbackHit = true)
+            accept(bestIndex, bestValue)
             return true
         }
 
@@ -246,16 +243,16 @@ object EcgBeatAnalyzer {
             if (value >= thr) {
                 val last = qrs.lastOrNull()
                 if (twave > 0 && last != null && index - last <= twave && qrsAmp.isNotEmpty()) {
-                    val interval = index - last
-                    val fasterThanMaxBpm = interval < samplesForMs(MIN_RR_MS.toInt())
-                    val weakerThanQrs = value < 0.5 * qrsAmp.last()
-                    if (fasterThanMaxBpm || weakerThanQrs) {
+                    val previous = qrsAmp.last()
+                    val weakerThanQrs = value < 0.5 * previous
+                    val shallowerSlope = abs(slope(envelope, index)) <= 0.5 * abs(slope(envelope, last))
+                    if (weakerThanQrs || shallowerSlope) {
                         npki = EWMA * value + (1.0 - EWMA) * npki
                         cursor++
                         continue
                     }
                 }
-                accept(index, value, searchbackHit = false)
+                accept(index, value)
             } else if (value > noiseThr) {
                 npki = EWMA * value + (1.0 - EWMA) * npki
             }
@@ -266,6 +263,14 @@ object EcgBeatAnalyzer {
             }
         }
         return qrs.toIntArray()
+    }
+
+    private fun slope(envelope: FloatArray, peak: Int): Double {
+        val width = samplesForMs(75)
+        val from = (peak - width).coerceAtLeast(0)
+        val to = peak.coerceAtMost(envelope.lastIndex)
+        if (to <= from) return 0.0
+        return (envelope[to] - envelope[from]).toDouble() / (to - from)
     }
 
     private fun findLocalMaxima(envelope: FloatArray, startIndex: Int): IntArray {

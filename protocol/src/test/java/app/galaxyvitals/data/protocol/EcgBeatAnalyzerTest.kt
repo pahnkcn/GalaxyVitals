@@ -20,6 +20,16 @@ class EcgBeatAnalyzerTest {
     }
 
     @Test
+    fun analyzeWindowRecovers72BpmAt250Hz() {
+        assertWindowBpm(72.0, seconds = 16.0, tolerance = 3.0, srHz = 250)
+    }
+
+    @Test
+    fun analyzeWindowRecovers72BpmAt300Hz() {
+        assertWindowBpm(72.0, seconds = 16.0, tolerance = 3.0, srHz = 300)
+    }
+
+    @Test
     fun analyzeWindowRecovers40Bpm() {
         assertWindowBpm(40.0, seconds = 20.0, tolerance = 3.0)
     }
@@ -211,8 +221,33 @@ class EcgBeatAnalyzerTest {
         assertThat(result.cleanDurationMs).isAtLeast(20_000L)
     }
 
-    private fun assertWindowBpm(bpm: Double, seconds: Double = 12.0, tolerance: Double = 3.0) {
-        val result = EcgBeatAnalyzer.analyzeWindow(syntheticQrs(seconds, bpm), srHz = 500, signFactor = 1)
+    @Test
+    fun analyzeRecoversBpmOnGappedThirtySecondCaptureWithEnoughCleanWindows() {
+        val samples = gappedThirtySecondCapture(bpm = 72.0)
+        val parsed = parsedRecording(samples)
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+
+        assertThat(parsed.samples.any { it.flags and EcgSampleFlags.TIMESTAMP_GAP != 0 }).isTrue()
+        assertThat(prepared.quality.flags).contains(QualityFlag.TIMESTAMP_GAP)
+        assertThat(prepared.quality.usableForAnalysis).isFalse()
+        assertThat(prepared.quality.cleanWindowCount).isAtLeast(3)
+        assertThat(prepared.quality.cleanUnionMs).isAtLeast(20_000L)
+        assertThat(prepared.quality.segments.size).isAtLeast(2)
+
+        val result = EcgBeatAnalyzer.analyze(parsed)
+        assertThat(result.status).isNotEqualTo(EcgBpmStatus.LOW_QUALITY)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(72.0)
+        assertThat(result.cleanDurationMs).isAtLeast(20_000L)
+        val leftEnd = (prepared.quality.segments.first().endRelMs * 500L / 1_000L).toInt()
+        val rightStart = (prepared.quality.segments.last().startRelMs * 500L / 1_000L).toInt()
+        assertThat(result.primaryPeaks.any { it <= leftEnd }).isTrue()
+        assertThat(result.primaryPeaks.any { it >= rightStart + 500 }).isTrue()
+        assertThat(result.primaryPeaks.none { it in rightStart until rightStart + 500 }).isTrue()
+    }
+
+    private fun assertWindowBpm(bpm: Double, seconds: Double = 12.0, tolerance: Double = 3.0, srHz: Int = 500) {
+        val result = EcgBeatAnalyzer.analyzeWindow(syntheticQrs(seconds, bpm, srHz), srHz = srHz, signFactor = 1)
         assertThat(result.bpmMedian).isNotNull()
         assertThat(result.bpmMedian!!).isWithin(tolerance).of(bpm)
         assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
@@ -281,6 +316,20 @@ class EcgBeatAnalyzerTest {
 
     private fun FloatArray.toSamples(): List<EcgSample> = indices.map { index ->
         EcgSample(relMs = index * 2L, valueMv = this[index], hrBpm = null, sampleIndex = index)
+    }
+
+    private fun gappedThirtySecondCapture(bpm: Double): List<EcgSample> {
+        val values = syntheticQrs(seconds = 30.0, bpm = bpm)
+        val split = values.size / 2
+        return values.indices.map { index ->
+            EcgSample(
+                relMs = index * 2L,
+                valueMv = values[index],
+                hrBpm = null,
+                sampleIndex = index,
+                flags = if (index == split) EcgSampleFlags.TIMESTAMP_GAP else 0,
+            )
+        }
     }
 
     private fun parsedRecording(samples: List<EcgSample>): ParsedEcgFile = EcgCsvParser.summarize(
