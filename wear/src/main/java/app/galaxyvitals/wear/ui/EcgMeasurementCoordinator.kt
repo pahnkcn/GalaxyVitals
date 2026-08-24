@@ -205,7 +205,7 @@ class EcgMeasurementCoordinator(
                 _state.value.copy(
                     phase = MeasurePhase.LeadOff,
                     status = "Touch the button",
-                    liveMv = emptyList(),
+                    waveform = LiveWaveformFrame(),
                     bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
@@ -219,7 +219,7 @@ class EcgMeasurementCoordinator(
                 _state.value.copy(
                     phase = MeasurePhase.LeadOff,
                     status = "Wear the watch snugly",
-                    liveMv = emptyList(),
+                    waveform = LiveWaveformFrame(),
                     bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
@@ -239,7 +239,7 @@ class EcgMeasurementCoordinator(
                 _state.value.copy(
                     phase = MeasurePhase.Ready,
                     status = if (settling) "Stabilizing sensor…" else "Hold still",
-                    liveMv = publishedLive(),
+                    waveform = publishedWaveform(),
                     bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
@@ -281,7 +281,7 @@ class EcgMeasurementCoordinator(
                 status = "Recording",
                 remainingSec = 30,
                 sessionId = sessionId,
-                liveMv = liveEcgProcessor.displaySamples,
+                waveform = liveEcgProcessor.waveformFrame(0L),
                 bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 error = null,
             )
@@ -324,8 +324,9 @@ class EcgMeasurementCoordinator(
         if (waveformDue || bpmDue) {
             var next = _state.value
             if (waveformDue) {
+                val deltaMs = if (lastUiWaveformAt == 0L) now else now - lastUiWaveformAt
                 lastUiWaveformAt = now
-                next = next.copy(liveMv = liveEcgProcessor.displaySamples)
+                next = next.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
             }
             if (bpmDue) {
                 lastUiBpmAt = now
@@ -525,13 +526,15 @@ class EcgMeasurementCoordinator(
         return state.copy(bpm = bpmSmoother.publish(now, estimated))
     }
 
-    private fun publishedLive(): List<Float> {
+    private fun publishedWaveform(): LiveWaveformFrame {
         val now = elapsedRealtime()
-        if (now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS && _state.value.liveMv.isNotEmpty()) {
-            return _state.value.liveMv
+        val current = _state.value.waveform
+        if (now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS && current.points.isNotEmpty()) {
+            return current
         }
+        val deltaMs = if (lastUiWaveformAt == 0L) now else now - lastUiWaveformAt
         lastUiWaveformAt = now
-        return liveEcgProcessor.displaySamples
+        return liveEcgProcessor.waveformFrame(deltaMs)
     }
 
     private fun isCurrent(id: Long): Boolean = id == attemptId
@@ -565,7 +568,7 @@ class EcgMeasurementCoordinator(
         private const val PRE_RECORD_HOLD_MS = CONTACT_DEBOUNCE_MS + SENSOR_SETTLE_MS
         private const val STREAM_POLL_MS = 200L
         private const val RECORDING_DEADLINE_MS = 31_000L
-        private const val UI_WAVEFORM_INTERVAL_MS = 100L
+        private const val UI_WAVEFORM_INTERVAL_MS = 50L
         private const val BPM_UI_INTERVAL_MS = 1_000L
     }
 }

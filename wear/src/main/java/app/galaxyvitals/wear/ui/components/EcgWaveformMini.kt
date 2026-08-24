@@ -10,14 +10,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import app.galaxyvitals.data.protocol.EcgWaveformGeometry
+import app.galaxyvitals.wear.ui.LiveWaveformFrame
 import app.galaxyvitals.wear.ui.theme.GridLine
 import app.galaxyvitals.wear.ui.theme.Pulse
-import kotlin.math.max
-import kotlin.math.min
 
 @Composable
 fun EcgWaveformMini(
-    values: List<Float>,
+    frame: LiveWaveformFrame,
     modifier: Modifier = Modifier,
 ) {
     Canvas(
@@ -33,20 +33,24 @@ fun EcgWaveformMini(
         for (r in 0..4) {
             drawLine(GridLine, Offset(0f, h * r / 4f), Offset(w, h * r / 4f), strokeWidth = 1f)
         }
-        if (values.size < 2) return@Canvas
-        var minV = Float.POSITIVE_INFINITY
-        var maxV = Float.NEGATIVE_INFINITY
-        values.forEach {
-            minV = min(minV, it)
-            maxV = max(maxV, it)
-        }
-        val span = (maxV - minV).coerceAtLeast(0.4f)
-        val mid = (maxV + minV) / 2f
+        if (frame.points.size < 2) return@Canvas
+        val rendered = EcgWaveformGeometry.reduceM4(
+            frame.points,
+            physicalPixelWidth = size.width.toInt().coerceAtLeast(1),
+        )
+        if (rendered.isEmpty()) return@Canvas
         val path = Path()
-        values.forEachIndexed { index, sample ->
-            val x = w * index / (values.size - 1).coerceAtLeast(1)
-            val y = h / 2f - ((sample - mid) / span) * (h * 0.72f)
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        rendered.forEach { point ->
+            val xRatio = (
+                (point.sampleIndex - frame.firstSampleIndex).toDouble() /
+                    (frame.lastSampleIndex - frame.firstSampleIndex).coerceAtLeast(1L)
+                ).toFloat()
+            val x = size.width * xRatio
+            val y = size.height / 2f -
+                ((point.valueMv - frame.scale.centerMv) / frame.scale.halfRangeMv) *
+                (size.height * 0.39f)
+
+            if (point.startsNewSegment) path.moveTo(x, y) else path.lineTo(x, y)
         }
         drawPath(path, Pulse, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
     }

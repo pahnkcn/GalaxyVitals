@@ -1,6 +1,7 @@
 package app.galaxyvitals.ui.components
 
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.EcgSampleFlags
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 
@@ -17,10 +18,12 @@ class EcgWaveformReducerTest {
             )
         }
 
-        val reduced = reduceWaveform(samples, maxPoints = 320)
+        val reduced = reduceWaveform(samples, physicalPixelWidth = 320)
 
         assertThat(reduced.size).isAtMost(640)
-        assertThat(reduced).contains(samples[peakIndex])
+        val spike = reduced.single { it.valueMv == 4.5f }
+        assertThat(spike.sampleIndex).isEqualTo(peakIndex.toLong())
+        assertThat(spike.sampleIndex).isNotEqualTo(reduced.indexOf(spike).toLong())
     }
 
     @Test
@@ -32,9 +35,27 @@ class EcgWaveformReducerTest {
             sample(index = 3, value = -4f),
         )
 
-        val reduced = reduceWaveform(samples, maxPoints = 1)
+        val reduced = reduceWaveform(samples, physicalPixelWidth = 2)
 
-        assertThat(reduced.map { it.sampleIndex }).containsExactly(1, 3).inOrder()
+        assertThat(reduced.map { it.sampleIndex }).containsExactly(0L, 1L, 3L).inOrder()
+        assertThat(reduced.map { it.valueMv }).containsExactly(0f, 5f, -4f).inOrder()
+    }
+
+    @Test
+    fun mapsXFromSampleIndexAndKeepsGapSegments() {
+        val samples = listOf(
+            sample(index = 0, value = 0.2f),
+            sample(index = 1, value = 0.3f),
+            sample(index = 80, value = -0.2f, flags = EcgSampleFlags.TIMESTAMP_GAP),
+            sample(index = 81, value = -0.1f),
+        )
+
+        val points = toWaveformPoints(samples)
+        val reduced = reduceWaveform(samples, physicalPixelWidth = 8)
+
+        assertThat(points[2].startsNewSegment).isTrue()
+        assertThat(reduced.first { it.sampleIndex == 80L }.startsNewSegment).isTrue()
+        assertThat(reduced.map { it.sampleIndex }).containsAtLeast(0L, 80L).inOrder()
     }
 
     @Test
@@ -54,10 +75,11 @@ class EcgWaveformReducerTest {
         assertThat(bounds.span).isGreaterThan(0.5f)
     }
 
-    private fun sample(index: Int, value: Float) = EcgSample(
+    private fun sample(index: Int, value: Float, flags: Int = EcgSampleFlags.NONE) = EcgSample(
         relMs = index * 2L,
         valueMv = value,
         hrBpm = null,
         sampleIndex = index,
+        flags = flags,
     )
 }

@@ -23,20 +23,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import app.galaxyvitals.data.protocol.EcgWaveformGeometry
+import app.galaxyvitals.data.protocol.WaveformPoint
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.EcgSampleFlags
 import app.galaxyvitals.ui.theme.GridLine
 import app.galaxyvitals.ui.theme.HealthTrackTheme
 import app.galaxyvitals.ui.theme.Pulse
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Reduces dense waveform data without averaging away narrow QRS peaks.
- *
- * [maxPoints] is the number of time buckets. Each bucket contributes its
- * minimum and maximum value in their original chronological order, so the
- * result contains at most twice that many samples.
- */
 internal data class WaveformAmplitudeBounds(val mid: Float, val span: Float)
 
 /**
@@ -66,36 +62,19 @@ internal fun waveformAmplitudeBounds(
     )
 }
 
-internal fun reduceWaveform(samples: List<EcgSample>, maxPoints: Int): List<EcgSample> {
-    if (samples.isEmpty() || maxPoints <= 0) return emptyList()
-    if (samples.size.toLong() <= maxPoints.toLong() * 2L) return samples
-
-    val bucketCount = min(maxPoints, samples.size)
-    val reduced = ArrayList<EcgSample>(bucketCount * 2)
-    for (bucket in 0 until bucketCount) {
-        val start = (bucket.toLong() * samples.size / bucketCount).toInt()
-        val endExclusive = (((bucket + 1L) * samples.size) / bucketCount).toInt()
-            .coerceAtLeast(start + 1)
-        var minIndex = start
-        var maxIndex = start
-        for (index in (start + 1) until endExclusive) {
-            if (samples[index].valueMv < samples[minIndex].valueMv) minIndex = index
-            if (samples[index].valueMv > samples[maxIndex].valueMv) maxIndex = index
-        }
-        when {
-            minIndex == maxIndex -> reduced += samples[minIndex]
-            minIndex < maxIndex -> {
-                reduced += samples[minIndex]
-                reduced += samples[maxIndex]
-            }
-            else -> {
-                reduced += samples[maxIndex]
-                reduced += samples[minIndex]
-            }
-        }
+internal fun toWaveformPoints(samples: List<EcgSample>): List<WaveformPoint> {
+    val gapFlags = EcgSampleFlags.TIMESTAMP_GAP or EcgSampleFlags.SEQUENCE_GAP
+    return samples.mapIndexed { index, sample ->
+        WaveformPoint(
+            sampleIndex = sample.sampleIndex.toLong(),
+            valueMv = sample.valueMv,
+            startsNewSegment = index == 0 || sample.flags and gapFlags != 0,
+        )
     }
-    return reduced
 }
+
+internal fun reduceWaveform(samples: List<EcgSample>, physicalPixelWidth: Int): List<WaveformPoint> =
+    EcgWaveformGeometry.reduceM4(toWaveformPoints(samples), physicalPixelWidth)
 
 @Composable
 fun EcgWaveform(
@@ -151,14 +130,17 @@ fun EcgWaveform(
             val rendered = reduceWaveform(slice, w.toInt().coerceAtLeast(1))
             if (rendered.size < 2) return@Canvas
 
-            // Samples are a uniform fixed-rate stream, so x follows the sample
-            // index; relMs cannot be trusted because captured sensor timestamps
-            // are batch-quantized and would collapse many samples onto one x.
+            // Samples are a uniform fixed-rate stream, so x follows sampleIndex;
+            // relMs cannot be trusted because captured sensor timestamps are
+            // batch-quantized and would collapse many samples onto one x.
+            val firstSampleIndex = slice.first().sampleIndex.toLong()
+            val lastSampleIndex = slice.last().sampleIndex.toLong()
+            val indexSpan = (lastSampleIndex - firstSampleIndex).coerceAtLeast(1L)
             val path = Path()
-            rendered.forEachIndexed { index, sample ->
-                val x = w * index / (rendered.size - 1).coerceAtLeast(1)
-                val y = h / 2f - ((sample.valueMv - mid) / span) * (h * 0.78f)
-                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            rendered.forEach { point ->
+                val x = w * ((point.sampleIndex - firstSampleIndex).toDouble() / indexSpan).toFloat()
+                val y = h / 2f - ((point.valueMv - mid) / span) * (h * 0.78f)
+                if (point.startsNewSegment) path.moveTo(x, y) else path.lineTo(x, y)
             }
             drawPath(
                 path = path,
@@ -187,7 +169,7 @@ private fun EcgWaveformPreview() {
         val previewSamples = List(400) { i ->
             val t = i / 500.0
             val qrs = if (i % 80 in 38..42) 1.6f else 0f
-            EcgSample(i * 2L, (0.12f * kotlin.math.sin(t * 12).toFloat()) + qrs, 68)
+            EcgSample(i * 2L, (0.12f * kotlin.math.sin(t * 12).toFloat()) + qrs, 68, i)
         }
         EcgWaveform(samples = previewSamples)
     }

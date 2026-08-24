@@ -39,6 +39,8 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.recorder.isRecording).isFalse()
         assertThat(harness.coordinator.state.value.liveMv).isNotEmpty()
         assertThat(harness.coordinator.state.value.liveMv.maxOf { kotlin.math.abs(it) }).isLessThan(5f)
+        val preflight = harness.coordinator.state.value.waveform
+        assertThat(preflight.lastSampleIndex - preflight.firstSampleIndex).isEqualTo(1_499L)
 
         harness.now = 4_101L
         harness.sensor.emit(0, batch(sequence = 3))
@@ -241,8 +243,11 @@ class EcgMeasurementCoordinatorTest {
         startRecording(harness)
         streamQrs(harness, seconds = 12.0, bpm = 72, startSequence = 2)
 
+        val waveform = harness.coordinator.state.value.waveform
         assertThat(harness.coordinator.state.value.liveMv.size)
             .isEqualTo(LiveEcgProcessor.DISPLAY_WINDOW_SAMPLES)
+        assertThat(waveform.points.size).isEqualTo(LiveEcgProcessor.DISPLAY_WINDOW_SAMPLES)
+        assertThat(waveform.lastSampleIndex - waveform.firstSampleIndex).isEqualTo(1_499L)
         assertThat(harness.coordinator.liveEcgProcessor.analysisSamples.size)
             .isEqualTo(LiveEcgProcessor.ANALYSIS_WINDOW_SAMPLES)
         assertThat(harness.coordinator.state.value.hrBpm).isNotNull()

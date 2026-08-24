@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.galaxyvitals.data.protocol.ParsedEcgFile
+import app.galaxyvitals.data.protocol.WaveformPoint
+import app.galaxyvitals.data.protocol.WaveformScale
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.WearApplication
 import app.galaxyvitals.wear.sensors.OffBodyMonitor
@@ -36,16 +38,26 @@ enum class MeasurePhase {
     Failed,
 }
 
+data class LiveWaveformFrame(
+    val points: List<WaveformPoint> = emptyList(),
+    val firstSampleIndex: Long = -1_499L,
+    val lastSampleIndex: Long = 0L,
+    val scale: WaveformScale = WaveformScale.Default,
+)
+
 data class MeasureUiState(
     val phase: MeasurePhase = MeasurePhase.Connecting,
     val status: String = "Connecting…",
     val remainingSec: Int = 30,
-    val liveMv: List<Float> = emptyList(),
     val error: String? = null,
     val sessionId: String? = null,
     val samsungReady: Boolean = false,
     val bpm: LiveBpmState = LiveBpmState(LiveBpmAvailability.COLLECTING),
+    val waveform: LiveWaveformFrame = LiveWaveformFrame(),
 ) {
+    val liveMv: List<Float>
+        get() = waveform.points.map { it.valueMv }
+
     val hrBpm: Int?
         get() = if (bpm.availability == LiveBpmAvailability.RELIABLE) {
             bpm.estimate?.bpm?.roundToInt()

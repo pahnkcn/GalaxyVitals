@@ -33,6 +33,7 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import app.galaxyvitals.wear.ui.components.EcgWaveformMini
 import app.galaxyvitals.wear.ui.components.HomeKeyHint
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 @Composable
@@ -80,8 +81,8 @@ fun MeasureScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                         )
-                        if (state.liveMv.size >= 2) {
-                            EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+                        if (state.waveform.points.size >= 2) {
+                            EcgWaveformMini(state.waveform, Modifier.fillMaxWidth())
                         }
                     }
                     MeasurePhase.Recording -> RecordingReadout(state, Modifier.weight(1f))
@@ -140,9 +141,9 @@ private fun RecordingReadout(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LiveHeartRateReadout(state.hrBpm)
+        LiveHeartRateReadout(state.bpm)
         Spacer(Modifier.weight(1f))
-        EcgWaveformMini(state.liveMv, Modifier.fillMaxWidth())
+        EcgWaveformMini(state.waveform, Modifier.fillMaxWidth())
         Spacer(Modifier.weight(1f))
         Text(
             "%02d".format(state.remainingSec),
@@ -154,10 +155,15 @@ private fun RecordingReadout(
 }
 
 @Composable
-private fun LiveHeartRateReadout(bpm: Int?) {
-    val pulseBpm = ((bpm ?: 72).coerceIn(45, 160) / 6) * 6
+private fun LiveHeartRateReadout(bpm: LiveBpmState) {
+    val estimate = bpm.estimate
     val scale = remember { Animatable(1f) }
-    LaunchedEffect(pulseBpm) {
+    LaunchedEffect(estimate?.bpm) {
+        if (estimate == null) {
+            scale.snapTo(1f)
+            return@LaunchedEffect
+        }
+        val pulseBpm = (estimate.bpm.roundToInt().coerceIn(45, 160) / 6) * 6
         val beatMs = (60_000f / pulseBpm).toInt().coerceIn(375, 1_334)
         val systole = (beatMs * 0.18f).toInt().coerceAtLeast(70)
         val diastole = (beatMs * 0.22f).toInt().coerceAtLeast(80)
@@ -188,7 +194,7 @@ private fun LiveHeartRateReadout(bpm: Int?) {
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            text = bpm?.let { "$it bpm" } ?: "— bpm",
+            text = estimate?.bpm?.roundToInt()?.let { "$it bpm" } ?: "— bpm",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
             textAlign = TextAlign.Center,
