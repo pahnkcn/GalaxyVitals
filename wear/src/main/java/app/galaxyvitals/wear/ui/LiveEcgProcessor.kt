@@ -54,7 +54,6 @@ class LiveEcgProcessor(
     var nextEcgSampleIndex: Long = 0L
         private set
     private var lastSequence = -1
-    private var lastTimestampMs = -1L
 
     val displaySamples: List<Float> get() = display.map { it.valueMv }
 
@@ -75,7 +74,6 @@ class LiveEcgProcessor(
         ppgPoints.clear()
         nextEcgSampleIndex = 0L
         lastSequence = -1
-        lastTimestampMs = -1L
         displayFilter.reset()
         scale = WaveformScale.Default
     }
@@ -90,19 +88,14 @@ class LiveEcgProcessor(
                 )
             }
         }
-        val expectedPeriodMs = 1_000L / srHz
         val sequenceBreak = lastSequence >= 0 &&
             batch.sequence != ((lastSequence + 1) and 0xff)
         val gapFlags = EcgSampleFlags.TIMESTAMP_GAP or EcgSampleFlags.SEQUENCE_GAP
         for (index in batch.samplesMv.indices) {
-            val timestamp = batch.sensorTimestampsMs[index]
             val flags = batch.sampleFlags[index]
             var startsNew = display.isEmpty()
             if (index == 0 && sequenceBreak) startsNew = true
             if (flags and gapFlags != 0) startsNew = true
-            if (lastTimestampMs >= 0L && timestamp - lastTimestampMs > expectedPeriodMs * 2L) {
-                startsNew = true
-            }
             if (startsNew) displayFilter.reset()
             analysis += batch.samplesMv[index]
             display += WaveformPoint(
@@ -110,7 +103,6 @@ class LiveEcgProcessor(
                 valueMv = displayFilter.filter(batch.samplesMv[index] * signFactor),
                 startsNewSegment = startsNew,
             )
-            lastTimestampMs = timestamp
         }
         lastSequence = batch.sequence
         nextEcgSampleIndex += batch.samplesMv.size

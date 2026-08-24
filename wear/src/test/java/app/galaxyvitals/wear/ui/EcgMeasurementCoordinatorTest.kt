@@ -238,6 +238,55 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun samsungBatchTimestampsStayOneDisplaySegmentAndKeepCausalFilter() {
+        val uniform = LiveEcgProcessor()
+        val samsung = LiveEcgProcessor()
+        val batchCount = 8
+        val batchSize = 10
+        val values = FloatArray(batchCount * batchSize) { index ->
+            140f + 0.8f * sin(2 * PI * 5.0 * index / 500.0).toFloat()
+        }
+        for (batchIndex in 0 until batchCount) {
+            val start = batchIndex * batchSize
+            val chunk = values.copyOfRange(start, start + batchSize)
+            val sequence = batchIndex
+            uniform.append(
+                batch(
+                    sequence = sequence,
+                    samples = chunk,
+                    timestampStartMs = 1_000L + start * 2L,
+                ),
+            )
+            val batchTs = 1_000L + batchIndex * 20L
+            samsung.append(
+                EcgBatch(
+                    samplesMv = chunk,
+                    sensorTimestampsMs = LongArray(batchSize) { batchTs },
+                    sequence = sequence and 0xff,
+                    leadOff = 0,
+                    minThresholdMv = -5f,
+                    maxThresholdMv = 5f,
+                    sampleFlags = IntArray(batchSize),
+                ),
+            )
+        }
+
+        val samsungPoints = samsung.waveformFrame(50L).points
+        val uniformValues = uniform.waveformFrame(50L).points.map { it.valueMv }
+        assertThat(samsungPoints.count { it.startsNewSegment }).isEqualTo(1)
+        assertThat(samsungPoints.first().startsNewSegment).isTrue()
+        assertThat(samsungPoints.drop(1).none { it.startsNewSegment }).isTrue()
+        assertThat(samsungPoints).hasSize(uniformValues.size)
+        samsungPoints.indices.forEach { index ->
+            assertThat(samsungPoints[index].valueMv).isWithin(1e-5f).of(uniformValues[index])
+        }
+        val laterBatchStarts = (1 until batchCount).map {
+            kotlin.math.abs(samsungPoints[it * batchSize].valueMv)
+        }
+        assertThat(laterBatchStarts.maxOrNull()!!).isGreaterThan(0.2f)
+    }
+
+    @Test
     fun displayWindowCapsAt1500AndAnalysisWindowCapsAt5000() {
         val harness = Harness()
         startRecording(harness)

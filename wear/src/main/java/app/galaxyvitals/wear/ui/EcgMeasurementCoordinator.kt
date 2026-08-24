@@ -324,7 +324,11 @@ class EcgMeasurementCoordinator(
         if (waveformDue || bpmDue) {
             var next = _state.value
             if (waveformDue) {
-                val deltaMs = if (lastUiWaveformAt == 0L) now else now - lastUiWaveformAt
+                val deltaMs = if (lastUiWaveformAt == 0L) {
+                    UI_WAVEFORM_INTERVAL_MS
+                } else {
+                    now - lastUiWaveformAt
+                }
                 lastUiWaveformAt = now
                 next = next.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
             }
@@ -532,7 +536,7 @@ class EcgMeasurementCoordinator(
         if (now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS && current.points.isNotEmpty()) {
             return current
         }
-        val deltaMs = if (lastUiWaveformAt == 0L) now else now - lastUiWaveformAt
+        val deltaMs = if (lastUiWaveformAt == 0L) UI_WAVEFORM_INTERVAL_MS else now - lastUiWaveformAt
         lastUiWaveformAt = now
         return liveEcgProcessor.waveformFrame(deltaMs)
     }
