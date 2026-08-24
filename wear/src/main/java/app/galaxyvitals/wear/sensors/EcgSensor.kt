@@ -14,6 +14,30 @@ data class PpgGreenBatch(
             require(ecgSampleOffsets[i - 1] < ecgSampleOffsets[i])
         }
     }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PpgGreenBatch) return false
+        return nominalSampleRateHz == other.nominalSampleRateHz &&
+            values.contentEquals(other.values) &&
+            ecgSampleOffsets.contentEquals(other.ecgSampleOffsets) &&
+            sensorTimestampsMs.contentEquals(other.sensorTimestampsMs)
+    }
+
+    override fun hashCode(): Int {
+        var result = values.contentHashCode()
+        result = 31 * result + ecgSampleOffsets.contentHashCode()
+        result = 31 * result + sensorTimestampsMs.contentHashCode()
+        result = 31 * result + nominalSampleRateHz
+        return result
+    }
+
+    override fun toString(): String =
+        "PpgGreenBatch(" +
+            "values=${values.contentToString()}, " +
+            "ecgSampleOffsets=${ecgSampleOffsets.contentToString()}, " +
+            "sensorTimestampsMs=${sensorTimestampsMs.contentToString()}, " +
+            "nominalSampleRateHz=$nominalSampleRateHz)"
 }
 
 data class EcgBatch(
@@ -36,6 +60,42 @@ data class EcgBatch(
     }
 
     val contactValid: Boolean get() = leadOff == 0
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is EcgBatch) return false
+        return sequence == other.sequence &&
+            leadOff == other.leadOff &&
+            minThresholdMv == other.minThresholdMv &&
+            maxThresholdMv == other.maxThresholdMv &&
+            samplesMv.contentEquals(other.samplesMv) &&
+            sensorTimestampsMs.contentEquals(other.sensorTimestampsMs) &&
+            sampleFlags.contentEquals(other.sampleFlags) &&
+            ppgGreen == other.ppgGreen
+    }
+
+    override fun hashCode(): Int {
+        var result = samplesMv.contentHashCode()
+        result = 31 * result + sensorTimestampsMs.contentHashCode()
+        result = 31 * result + sequence
+        result = 31 * result + leadOff
+        result = 31 * result + (minThresholdMv?.hashCode() ?: 0)
+        result = 31 * result + (maxThresholdMv?.hashCode() ?: 0)
+        result = 31 * result + sampleFlags.contentHashCode()
+        result = 31 * result + (ppgGreen?.hashCode() ?: 0)
+        return result
+    }
+
+    override fun toString(): String =
+        "EcgBatch(" +
+            "samplesMv=${samplesMv.contentToString()}, " +
+            "sensorTimestampsMs=${sensorTimestampsMs.contentToString()}, " +
+            "sequence=$sequence, " +
+            "leadOff=$leadOff, " +
+            "minThresholdMv=$minThresholdMv, " +
+            "maxThresholdMv=$maxThresholdMv, " +
+            "sampleFlags=${sampleFlags.contentToString()}, " +
+            "ppgGreen=$ppgGreen)"
 }
 
 enum class EcgSensorErrorCode {

@@ -92,4 +92,30 @@ class SamsungPpgGreenDecoderTest {
         )
         assertThat(decoded).isNull()
     }
+
+    @Test
+    fun ppgGreenBatch_contentEqualityAndHashCode() {
+        val left = PpgGreenBatch(
+            values = intArrayOf(100, 200),
+            ecgSampleOffsets = intArrayOf(0, 5),
+            sensorTimestampsMs = longArrayOf(1_000L, 1_010L),
+            nominalSampleRateHz = 100,
+        )
+        val right = PpgGreenBatch(
+            values = intArrayOf(100, 200),
+            ecgSampleOffsets = intArrayOf(0, 5),
+            sensorTimestampsMs = longArrayOf(1_000L, 1_010L),
+            nominalSampleRateHz = 100,
+        )
+        val different = PpgGreenBatch(
+            values = intArrayOf(100, 201),
+            ecgSampleOffsets = intArrayOf(0, 5),
+            sensorTimestampsMs = longArrayOf(1_000L, 1_010L),
+            nominalSampleRateHz = 100,
+        )
+
+        assertThat(left).isEqualTo(right)
+        assertThat(left.hashCode()).isEqualTo(right.hashCode())
+        assertThat(left).isNotEqualTo(different)
+    }
 }
