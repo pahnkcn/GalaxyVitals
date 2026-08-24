@@ -1,6 +1,8 @@
 package app.galaxyvitals.wear.ui
 
+import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
 import app.galaxyvitals.data.protocol.ParsedEcgFile
+import kotlin.math.roundToInt
 
 /**
  * Watch history/home BPM.
@@ -13,10 +15,7 @@ object WatchSessionBpm {
     fun displayBpm(parsed: ParsedEcgFile): Int? {
         parsed.hrMedian?.toInt()?.let { return it }
         if (parsed.samples.isEmpty()) return null
-        return LiveBpmEstimator.estimateBpm(
-            samples = parsed.samples.map { it.valueMv },
-            srHz = parsed.srHz,
-        )
+        return EcgBeatAnalyzer.analyze(parsed).bpmMedian?.roundToInt()
     }
 
     fun historyLabel(parsed: ParsedEcgFile): String =

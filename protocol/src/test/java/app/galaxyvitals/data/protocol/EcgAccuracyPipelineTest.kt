@@ -159,11 +159,12 @@ class EcgAccuracyPipelineTest {
                 signal[index] = (1.5 * kotlin.math.exp(-offset * offset / 6.0)).toFloat()
             }
         }
-        val pan = EcgBeatAnalyzer.detectPanTompkins(signal, 500)
-        val hamilton = EcgBeatAnalyzer.detectHamilton(signal, 500)
-        assertThat(pan.size).isAtLeast(8)
-        assertThat(hamilton.size).isAtLeast(8)
-        assertThat(kotlin.math.abs(pan.size - hamilton.size)).isAtMost(2)
+        val result = EcgBeatAnalyzer.analyzeWindow(signal, srHz = 500, signFactor = 1)
+        assertThat(result.primaryPeaks.size).isAtLeast(8)
+        assertThat(result.secondaryPeaks.size).isAtLeast(8)
+        assertThat(kotlin.math.abs(result.primaryPeaks.size - result.secondaryPeaks.size)).isAtMost(2)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(60.0)
     }
 
     @Test

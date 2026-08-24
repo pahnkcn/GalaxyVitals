@@ -10,12 +10,13 @@ import app.galaxyvitals.domain.Wrist
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.roundToInt
 import org.junit.Test
 
 class WatchSessionBpmTest {
     @Test
     fun hardwareV2FileWithEmptyHrColumnStillDisplaysEcgDerivedBpm() {
-        val qrs = syntheticQrs(seconds = 5, bpm = 72)
+        val qrs = syntheticQrs(seconds = 30, bpm = 72)
         val parsed = parseHardwareV2(qrs)
 
         assertThat(parsed.hrMedian).isNull()
@@ -29,7 +30,7 @@ class WatchSessionBpmTest {
 
     @Test
     fun prefersStoredHrMedianWhenPresent() {
-        val parsed = session(hrMedian = 64.0, samples = syntheticQrs(seconds = 5, bpm = 110).toSamples())
+        val parsed = session(hrMedian = 64.0, samples = syntheticQrs(seconds = 30, bpm = 110).toSamples())
 
         assertThat(WatchSessionBpm.displayBpm(parsed)).isEqualTo(64)
         assertThat(WatchSessionBpm.historyLabel(parsed)).isEqualTo("64 bpm")
@@ -45,7 +46,7 @@ class WatchSessionBpmTest {
 
     @Test
     fun homeCardDoesNotClaimNoRecordingsWhenLatestHasNoStoredHr() {
-        val qrs = syntheticQrs(seconds = 5, bpm = 80)
+        val qrs = syntheticQrs(seconds = 30, bpm = 80)
         val parsed = parseHardwareV2(qrs)
         val bpm = WatchSessionBpm.displayBpm(parsed)
 
@@ -59,11 +60,11 @@ class WatchSessionBpmTest {
 
     @Test
     fun withDisplayBpmCachesDerivedMedianWithoutOverwritingStoredHr() {
-        val derived = WatchSessionBpm.withDisplayBpm(parseHardwareV2(syntheticQrs(seconds = 5, bpm = 72)))
+        val derived = WatchSessionBpm.withDisplayBpm(parseHardwareV2(syntheticQrs(seconds = 30, bpm = 72)))
         assertThat(derived.hrMedian).isNotNull()
         assertThat(abs(derived.hrMedian!! - 72.0)).isAtMost(4.0)
 
-        val stored = session(hrMedian = 61.0, samples = syntheticQrs(seconds = 5, bpm = 110).toSamples())
+        val stored = session(hrMedian = 61.0, samples = syntheticQrs(seconds = 30, bpm = 110).toSamples())
         assertThat(WatchSessionBpm.withDisplayBpm(stored).hrMedian).isEqualTo(61.0)
     }
 
@@ -108,19 +109,35 @@ class WatchSessionBpmTest {
 
     private fun syntheticQrs(seconds: Int, bpm: Int, srHz: Int = EcgWearContract.DEFAULT_SR_HZ): FloatArray {
         val n = seconds * srHz
-        val period = srHz * 60 / bpm
-        val out = FloatArray(n)
-        var peak = period / 2
+        val out = DoubleArray(n)
+        val period = srHz * 60.0 / bpm
+        var peak = period * 0.5
         while (peak < n) {
-            for (offset in -5..5) {
-                val index = peak + offset
-                if (index in 0 until n) {
-                    out[index] = (1.5 * exp(-offset * offset / 6.0)).toFloat()
-                }
-            }
+            val r = peak.roundToInt()
+            addGaussian(out, r - (0.18 * srHz).roundToInt(), 0.12, 0.035 * srHz)
+            addGaussian(out, r - (0.025 * srHz).roundToInt(), -0.15, 0.008 * srHz)
+            addGaussian(out, r, 1.20, 0.010 * srHz)
+            addGaussian(out, r + (0.025 * srHz).roundToInt(), -0.28, 0.010 * srHz)
+            addGaussian(out, r + (0.22 * srHz).roundToInt(), 0.30, 0.045 * srHz)
             peak += period
         }
-        return out
+        for (index in out.indices) {
+            val t = index.toDouble() / srHz
+            out[index] += 0.04 * kotlin.math.sin(2 * kotlin.math.PI * 0.25 * t)
+        }
+        return FloatArray(n) { out[it].toFloat() }
+    }
+
+    private fun addGaussian(out: DoubleArray, center: Int, amplitude: Double, sigma: Double) {
+        if (sigma <= 0.0) return
+        val radius = (sigma * 4.0).roundToInt().coerceAtLeast(1)
+        val twoSigmaSq = 2.0 * sigma * sigma
+        for (offset in -radius..radius) {
+            val index = center + offset
+            if (index in out.indices) {
+                out[index] += amplitude * exp(-(offset * offset) / twoSigmaSq)
+            }
+        }
     }
 
     private companion object {
