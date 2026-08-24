@@ -1,3 +1,6 @@
+# Isolated worktrees
+.worktrees/
+
 # Gradle / Android Studio
 .gradle/
 **/build/

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import app.galaxyvitals.domain.EcgSampleFlags
 import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
@@ -329,8 +330,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         val samples = FloatArray(data.size)
         val timestamps = LongArray(data.size)
         val flags = IntArray(data.size)
-        val ppgGreen = IntArray(data.size)
-        var ppgMissing = 0
         data.forEachIndexed { index, point ->
             val value = point.getValue(ValueKey.EcgSet.ECG_MV)
             require(value.isFinite()) { "Non-finite Samsung ECG sample" }
@@ -342,9 +341,13 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
                 sampleFlags = sampleFlags or EcgSampleFlags.CLIPPED
             }
             flags[index] = sampleFlags
-            val green = readPpgGreen(point)
-            if (green == null) ppgMissing += 1 else ppgGreen[index] = green
         }
+        val ppgGreen = SamsungPpgGreenDecoder.decode(
+            batchSize = data.size,
+            timestampAt = { data[it].timestamp },
+            valueAt = { readPpgGreen(data[it]) },
+        )
+        logPpgDecode(batchSize = data.size, ppgGreen = ppgGreen)
         return EcgBatch(
             samplesMv = samples,
             sensorTimestampsMs = timestamps,
@@ -353,7 +356,7 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             minThresholdMv = minThreshold,
             maxThresholdMv = maxThreshold,
             sampleFlags = flags,
-            ppgGreen = if (ppgMissing == 0) ppgGreen else null,
+            ppgGreen = ppgGreen,
         )
     }
 
@@ -361,6 +364,24 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         point.getValue(ValueKey.EcgSet.PPG_GREEN)
     } catch (_: Exception) {
         null
+    }
+
+    private fun logPpgDecode(batchSize: Int, ppgGreen: PpgGreenBatch?) {
+        if (ppgGreen == null) {
+            Log.i(ECG_ACQUISITION_TAG, "ppg dropped batchSize=$batchSize")
+            return
+        }
+        val timestamps = ppgGreen.sensorTimestampsMs
+        val offsets = ppgGreen.ecgSampleOffsets
+        val tsMin = timestamps.minOrNull() ?: 0L
+        val tsMax = timestamps.maxOrNull() ?: 0L
+        val offsetSpan = if (offsets.isEmpty()) 0 else offsets.last() - offsets.first()
+        Log.i(
+            ECG_ACQUISITION_TAG,
+            "ppg decoded count=${ppgGreen.values.size} " +
+                "offsets=${offsets.joinToString(prefix = "[", postfix = "]")} " +
+                "tsMin=$tsMin tsMax=$tsMax tsSpan=${tsMax - tsMin} offsetSpan=$offsetSpan",
+        )
     }
 
     private fun unavailable(reason: String) = SensorAvailability(
@@ -377,4 +398,8 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
         val service: HealthTrackingService?,
         val listeners: ListenerHandles,
     )
+
+    companion object {
+        private const val ECG_ACQUISITION_TAG = "EcgAcquisition"
+    }
 }

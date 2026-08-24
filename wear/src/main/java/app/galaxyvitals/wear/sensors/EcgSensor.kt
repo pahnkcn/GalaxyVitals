@@ -1,5 +1,21 @@
 package app.galaxyvitals.wear.sensors
 
+data class PpgGreenBatch(
+    val values: IntArray,
+    val ecgSampleOffsets: IntArray,
+    val sensorTimestampsMs: LongArray,
+    val nominalSampleRateHz: Int = 100,
+) {
+    init {
+        require(values.size == ecgSampleOffsets.size)
+        require(values.size == sensorTimestampsMs.size)
+        require(nominalSampleRateHz > 0)
+        for (i in 1 until ecgSampleOffsets.size) {
+            require(ecgSampleOffsets[i - 1] < ecgSampleOffsets[i])
+        }
+    }
+}
+
 data class EcgBatch(
     val samplesMv: FloatArray,
     val sensorTimestampsMs: LongArray,
@@ -8,13 +24,15 @@ data class EcgBatch(
     val minThresholdMv: Float?,
     val maxThresholdMv: Float?,
     val sampleFlags: IntArray,
-    val ppgGreen: IntArray? = null,
+    val ppgGreen: PpgGreenBatch? = null,
 ) {
     init {
         require(samplesMv.size == sensorTimestampsMs.size)
         require(samplesMv.size == sampleFlags.size)
-        require(ppgGreen == null || ppgGreen.size == samplesMv.size)
         require(sequence in 0..255)
+        ppgGreen?.ecgSampleOffsets?.forEach {
+            require(it in samplesMv.indices)
+        }
     }
 
     val contactValid: Boolean get() = leadOff == 0

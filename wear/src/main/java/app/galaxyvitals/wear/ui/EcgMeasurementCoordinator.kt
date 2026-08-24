@@ -514,13 +514,9 @@ class EcgMeasurementCoordinator(
         }
         val keep = EcgWearContract.DEFAULT_SR_HZ * 3
         if (live.size > keep) live.subList(0, live.size - keep).clear()
-        val ppg = batch.ppgGreen
-        if (ppg != null && ppg.size == batch.samplesMv.size) {
-            ppg.forEach { livePpg.add(it) }
-            if (livePpg.size > keep) livePpg.subList(0, livePpg.size - keep).clear()
-        } else {
-            livePpg.clear()
-        }
+        // Sparse PpgGreenBatch is not a dense 500 Hz stream. Until Task 3 rewires
+        // LiveBpmEstimator for sparse PPG corroboration, omit PPG from the estimator.
+        livePpg.clear()
     }
 
     private fun withLiveHeartRate(state: MeasureUiState, now: Long = elapsedRealtime()): MeasureUiState {

@@ -7,6 +7,7 @@ import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSubscription
 import app.galaxyvitals.wear.sensors.OffBodyGate
+import app.galaxyvitals.wear.sensors.PpgGreenBatch
 import app.galaxyvitals.wear.sensors.SensorAvailability
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
@@ -156,6 +157,9 @@ class EcgMeasurementCoordinatorTest {
 
     @Test
     fun recordingPublishesLiveBpmFromPpgGreen() {
+        // Task 1: sparse PpgGreenBatch is not fed into LiveBpmEstimator as dense 500 Hz.
+        // Task 3 restores sparse-PPG corroboration; until then this only asserts compile-safe
+        // sparse PPG batches still allow QRS-based live BPM.
         val harness = Harness()
         harness.coordinator.startHardware()
         harness.now = 100L
@@ -164,19 +168,36 @@ class EcgMeasurementCoordinatorTest {
         harness.sensor.emit(0, batch(sequence = 1))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
 
-        val ppg = syntheticPpg(seconds = 3, bpm = 68)
+        val qrs = syntheticQrs(seconds = 3, bpm = 72)
         var sequence = 2
         var offset = 0
-        while (offset < ppg.size) {
-            val count = minOf(50, ppg.size - offset)
+        while (offset < qrs.size) {
+            val count = minOf(50, qrs.size - offset)
             harness.now += 100L
+            val samples = qrs.copyOfRange(offset, offset + count)
+            val ppgOffsets = when {
+                samples.size >= 10 -> intArrayOf(0, 5)
+                samples.size >= 5 -> intArrayOf(0)
+                else -> intArrayOf()
+            }
+            val ppg = if (ppgOffsets.isEmpty()) {
+                null
+            } else {
+                PpgGreenBatch(
+                    values = IntArray(ppgOffsets.size) { 12_000 },
+                    ecgSampleOffsets = ppgOffsets,
+                    sensorTimestampsMs = LongArray(ppgOffsets.size) { index ->
+                        2_000L + (offset + ppgOffsets[index]) * 2L
+                    },
+                )
+            }
             harness.sensor.emit(
                 0,
                 batch(
                     sequence = sequence,
-                    samples = FloatArray(count) { 0.1f },
+                    samples = samples,
                     timestampStartMs = 2_000L + offset * 2L,
-                    ppgGreen = ppg.copyOfRange(offset, offset + count),
+                    ppgGreen = ppg,
                 ),
             )
             sequence += 1
@@ -185,7 +206,7 @@ class EcgMeasurementCoordinatorTest {
 
         val bpm = harness.coordinator.state.value.hrBpm
         assertThat(bpm).isNotNull()
-        assertThat(kotlin.math.abs(bpm!! - 68)).isAtMost(8)
+        assertThat(kotlin.math.abs(bpm!! - 72)).isAtMost(8)
     }
 
     private class Harness {
@@ -273,7 +294,7 @@ class EcgMeasurementCoordinatorTest {
             valueMv: Float = 0.1f,
             samples: FloatArray? = null,
             timestampStartMs: Long? = null,
-            ppgGreen: IntArray? = null,
+            ppgGreen: PpgGreenBatch? = null,
         ): EcgBatch {
             val values = samples ?: FloatArray(10) { valueMv }
             val start = timestampStartMs ?: (1_000L + sequence * 20L)
@@ -287,20 +308,6 @@ class EcgMeasurementCoordinatorTest {
                 sampleFlags = IntArray(values.size),
                 ppgGreen = ppgGreen,
             )
-        }
-
-        private fun syntheticPpg(seconds: Int, bpm: Int, srHz: Int = 500): IntArray {
-            val n = seconds * srHz
-            val period = srHz * 60 / bpm
-            val out = IntArray(n)
-            val peak = period / 5
-            val sigma = period * 0.08
-            for (index in 0 until n) {
-                val t = index % period
-                val gauss = kotlin.math.exp(-((t - peak) * (t - peak)) / (2.0 * sigma * sigma))
-                out[index] = (12_000 + 4_000 * gauss).toInt()
-            }
-            return out
         }
 
         private fun syntheticQrs(seconds: Int, bpm: Int, srHz: Int = 500): FloatArray {
