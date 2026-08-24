@@ -21,6 +21,12 @@ internal class LiveBpmSmoother {
         pendingAt = null
     }
 
+    fun seed(nowMs: Long, estimated: BpmEstimate): LiveBpmState {
+        pendingBpm = null
+        pendingAt = null
+        return accept(nowMs, estimated, estimated.bpm)
+    }
+
     fun publish(nowMs: Long, estimated: BpmEstimate?): LiveBpmState {
         if (estimated == null) return onMissing(nowMs)
         val previous = smoothed

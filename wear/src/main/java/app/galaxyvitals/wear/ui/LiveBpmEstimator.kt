@@ -18,14 +18,21 @@ object LiveBpmEstimator {
         signFactor: Int,
         nowMs: Long,
         srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
+        epoch: BpmEpoch = BpmEpoch.CAPTURE,
     ): BpmEstimate? {
         val ecg = EcgBeatAnalyzer.analyzeWindow(rawWindow, srHz, signFactor)
-        return publish(ecg, estimateSparsePpgBpm(livePpg, srHz), nowMs)
+        return publish(ecg, estimateSparsePpgBpm(livePpg, srHz), nowMs, epoch)
     }
 
-    fun publish(ecg: EcgBeatResult, ppgBpm: Double?, nowMs: Long): BpmEstimate? {
+    fun publish(
+        ecg: EcgBeatResult,
+        ppgBpm: Double?,
+        nowMs: Long,
+        epoch: BpmEpoch = BpmEpoch.CAPTURE,
+    ): BpmEstimate? {
         val bpmMedian = ecg.bpmMedian
-        if (bpmMedian == null || ecg.bSqi < 0.80) return null
+        val rrCount = ecg.matchedPeaks.size - 1
+        if (bpmMedian == null || ecg.bSqi < 0.80 || rrCount < MIN_RR_COUNT) return null
 
         if (ppgBpm != null) {
             val allowedDiff = maxOf(5.0, bpmMedian * 0.08)
@@ -33,8 +40,9 @@ object LiveBpmEstimator {
             return BpmEstimate(
                 bpm = bpmMedian,
                 source = BpmSource.ECG_PPG_CORROBORATED,
+                epoch = epoch,
                 bSqi = ecg.bSqi,
-                rrCount = ecg.matchedPeaks.size - 1,
+                rrCount = rrCount,
                 updatedAtElapsedMs = nowMs,
             )
         }
@@ -43,8 +51,9 @@ object LiveBpmEstimator {
         return BpmEstimate(
             bpm = bpmMedian,
             source = BpmSource.ECG,
+            epoch = epoch,
             bSqi = ecg.bSqi,
-            rrCount = ecg.matchedPeaks.size - 1,
+            rrCount = rrCount,
             updatedAtElapsedMs = nowMs,
         )
     }

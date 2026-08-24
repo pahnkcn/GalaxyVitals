@@ -70,11 +70,15 @@ fun MeasureScreen(
                     MeasurePhase.Connecting, MeasurePhase.Warmup -> {
                         CircularProgressIndicator()
                     }
-                    MeasurePhase.Ready, MeasurePhase.LeadOff -> {
+                    MeasurePhase.Ready, MeasurePhase.LeadOff, MeasurePhase.CalculatingBpm,
+                    MeasurePhase.StartingCapture,
+                    -> {
                         Text(
                             when {
                                 showHomeKeyHint -> "Top button"
                                 state.phase == MeasurePhase.LeadOff -> "Keep the watch snug"
+                                state.phase == MeasurePhase.CalculatingBpm -> "Keep still"
+                                state.phase == MeasurePhase.StartingCapture -> "Keep still"
                                 else -> "Hold still"
                             },
                             style = MaterialTheme.typography.bodySmall,
@@ -194,7 +198,7 @@ private fun LiveHeartRateReadout(bpm: LiveBpmState) {
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            text = estimate?.bpm?.roundToInt()?.let { "$it bpm" } ?: "— bpm",
+            text = estimate?.bpm?.roundToInt()?.let { "$it bpm" } ?: "Calculating heart rate…",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
             textAlign = TextAlign.Center,

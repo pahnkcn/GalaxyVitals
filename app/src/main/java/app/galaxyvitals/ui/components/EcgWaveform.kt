@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -73,8 +74,16 @@ internal fun toWaveformPoints(samples: List<EcgSample>): List<WaveformPoint> {
     }
 }
 
-internal fun reduceWaveform(samples: List<EcgSample>, physicalPixelWidth: Int): List<WaveformPoint> =
-    EcgWaveformGeometry.reduceM4(toWaveformPoints(samples), physicalPixelWidth)
+internal fun reduceWaveform(samples: List<EcgSample>, physicalPixelWidth: Int): List<WaveformPoint> {
+    val points = toWaveformPoints(samples)
+    if (points.isEmpty()) return emptyList()
+    return EcgWaveformGeometry.reduceM4(
+        points,
+        physicalPixelWidth,
+        firstSampleIndex = points.first().sampleIndex,
+        lastSampleIndex = points.last().sampleIndex,
+    )
+}
 
 @Composable
 fun EcgWaveform(
@@ -136,17 +145,26 @@ fun EcgWaveform(
             val firstSampleIndex = slice.first().sampleIndex.toLong()
             val lastSampleIndex = slice.last().sampleIndex.toLong()
             val indexSpan = (lastSampleIndex - firstSampleIndex).coerceAtLeast(1L)
+            val strokeWidth = 3f
             val path = Path()
             rendered.forEach { point ->
                 val x = w * ((point.sampleIndex - firstSampleIndex).toDouble() / indexSpan).toFloat()
-                val y = h / 2f - ((point.valueMv - mid) / span) * (h * 0.78f)
+                val y = EcgWaveformGeometry.mapYToCanvas(
+                    valueMv = point.valueMv,
+                    centerMv = mid,
+                    halfRangeMv = (span / 2f).coerceAtLeast(0.2f),
+                    heightPx = h,
+                    strokeWidthPx = strokeWidth,
+                )
                 if (point.startsNewSegment) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(
-                path = path,
-                color = Pulse,
-                style = Stroke(width = 3f, cap = StrokeCap.Round),
-            )
+            clipRect(0f, 0f, w, h) {
+                drawPath(
+                    path = path,
+                    color = Pulse,
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                )
+            }
         }
         if (interactive) {
             Row(

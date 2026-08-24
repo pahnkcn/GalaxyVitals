@@ -32,6 +32,8 @@ enum class MeasurePhase {
     Warmup,
     Ready,
     LeadOff,
+    CalculatingBpm,
+    StartingCapture,
     Recording,
     Saving,
     Success,

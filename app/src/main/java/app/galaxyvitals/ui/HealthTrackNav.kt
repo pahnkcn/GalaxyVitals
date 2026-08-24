@@ -1,5 +1,8 @@
 package app.galaxyvitals.ui
 
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
@@ -9,6 +12,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -28,6 +32,9 @@ import app.galaxyvitals.ui.detail.EcgDetailScreen
 import app.galaxyvitals.ui.history.HistoryScreen
 import app.galaxyvitals.ui.home.HomeScreen
 import app.galaxyvitals.ui.settings.SettingsScreen
+
+internal fun ownsPhoneTopBar(route: Route): Boolean =
+    route is Route.EcgDetail || route is Route.BloodPressure
 
 sealed interface Route {
     data object Home : Route
@@ -54,6 +61,7 @@ fun HealthTrackRoot(
     val backStack = remember { mutableStateListOf<Route>(Route.Home) }
     val current = backStack.last()
     val showBar = current is Route.Home || current is Route.History || current is Route.Settings
+    val ownsTopBar = ownsPhoneTopBar(current)
     val home by viewModel.home.collectAsStateWithLifecycle()
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
     val detailSamples by viewModel.detailSamples.collectAsStateWithLifecycle()
@@ -67,6 +75,13 @@ fun HealthTrackRoot(
 
     Scaffold(
         modifier = modifier,
+        contentWindowInsets = if (ownsTopBar) {
+            ScaffoldDefaults.contentWindowInsets.only(
+                WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+            )
+        } else {
+            ScaffoldDefaults.contentWindowInsets
+        },
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             if (showBar) {
@@ -90,7 +105,9 @@ fun HealthTrackRoot(
     ) { padding ->
         NavDisplay(
             backStack = backStack,
-            modifier = Modifier.padding(padding),
+            modifier = Modifier
+                .padding(padding)
+                .consumeWindowInsets(padding),
             onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
             entryProvider = { key ->
                 when (key) {

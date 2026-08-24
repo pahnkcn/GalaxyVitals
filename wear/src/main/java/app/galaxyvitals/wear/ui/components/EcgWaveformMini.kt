@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
 import app.galaxyvitals.data.protocol.EcgWaveformGeometry
 import app.galaxyvitals.wear.ui.LiveWaveformFrame
@@ -34,9 +35,12 @@ fun EcgWaveformMini(
             drawLine(GridLine, Offset(0f, h * r / 4f), Offset(w, h * r / 4f), strokeWidth = 1f)
         }
         if (frame.points.size < 2) return@Canvas
+        val strokeWidth = 2.5f
         val rendered = EcgWaveformGeometry.reduceM4(
             frame.points,
             physicalPixelWidth = size.width.toInt().coerceAtLeast(1),
+            firstSampleIndex = frame.firstSampleIndex,
+            lastSampleIndex = frame.lastSampleIndex,
         )
         if (rendered.isEmpty()) return@Canvas
         val path = Path()
@@ -46,12 +50,17 @@ fun EcgWaveformMini(
                     (frame.lastSampleIndex - frame.firstSampleIndex).coerceAtLeast(1L)
                 ).toFloat()
             val x = size.width * xRatio
-            val y = size.height / 2f -
-                ((point.valueMv - frame.scale.centerMv) / frame.scale.halfRangeMv) *
-                (size.height * 0.39f)
-
+            val y = EcgWaveformGeometry.mapYToCanvas(
+                valueMv = point.valueMv,
+                centerMv = frame.scale.centerMv,
+                halfRangeMv = frame.scale.halfRangeMv,
+                heightPx = size.height,
+                strokeWidthPx = strokeWidth,
+            )
             if (point.startsNewSegment) path.moveTo(x, y) else path.lineTo(x, y)
         }
-        drawPath(path, Pulse, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
+        clipRect(0f, 0f, size.width, size.height) {
+            drawPath(path, Pulse, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+        }
     }
 }

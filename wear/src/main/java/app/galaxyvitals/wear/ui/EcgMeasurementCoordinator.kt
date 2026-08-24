@@ -52,10 +52,9 @@ class EcgMeasurementCoordinator(
     private var offBody: OffBodyGate? = null
     private var foregroundLease: AutoCloseable? = null
     private var connectTimeoutJob: Job? = null
-    private var preflightTimeoutJob: Job? = null
     private var streamMonitorJob: Job? = null
     private var recordingTimerJob: Job? = null
-    private var liveBpmJob: Job? = null
+    private var bpmWorkerJob: Job? = null
     private var lastBatchAt = 0L
     private var contactSince = 0L
     private var recordingStartedAt = 0L
@@ -63,7 +62,20 @@ class EcgMeasurementCoordinator(
     private var sensorDisconnected = true
     private var offBodyStarted = false
     private var lastUiWaveformAt = 0L
-    private var lastUiBpmAt = 0L
+    private var lastBpmScheduleAt = 0L
+    private var lastLoggedPhase: MeasurePhase? = null
+    private var lastLoggedCode: String? = null
+    private var streamGeneration = 0L
+    private var sensorRun = SensorRun.PREFLIGHT
+    private var settledWindowStarted = false
+    private var preflightBpmSeed: BpmEstimate? = null
+    private var captureBpmConfirmed = false
+    private var preflightAbsoluteDeadline = 0L
+    private var contactWaitDeadline = 0L
+    private var bpmAfterContactDeadline = 0L
+    private var captureBpmDeadline = 0L
+    private val bpmLock = Any()
+    private var pendingBpmSnapshot: BpmSnapshot? = null
     internal val liveEcgProcessor = LiveEcgProcessor()
     private val bpmSmoother = LiveBpmSmoother()
 
@@ -103,7 +115,19 @@ class EcgMeasurementCoordinator(
         contactSince = 0L
         recordingStartedAt = 0L
         lastUiWaveformAt = 0L
-        lastUiBpmAt = 0L
+        lastBpmScheduleAt = 0L
+        lastLoggedPhase = null
+        lastLoggedCode = null
+        streamGeneration += 1
+        sensorRun = SensorRun.PREFLIGHT
+        settledWindowStarted = false
+        preflightBpmSeed = null
+        captureBpmConfirmed = false
+        preflightAbsoluteDeadline = 0L
+        contactWaitDeadline = 0L
+        bpmAfterContactDeadline = 0L
+        captureBpmDeadline = 0L
+        synchronized(bpmLock) { pendingBpmSnapshot = null }
         resetLive()
         transition(MeasurePhase.Connecting, "CONNECTING") {
             MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
@@ -116,7 +140,7 @@ class EcgMeasurementCoordinator(
         }
         try {
             sensor.connect { availability ->
-                dispatch(id) {
+                dispatchAttempt(id) {
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     if (!availability.ready) {
@@ -139,6 +163,10 @@ class EcgMeasurementCoordinator(
     }
 
     private fun startPreflight(id: Long) {
+        val now = elapsedRealtime()
+        sensorRun = SensorRun.PREFLIGHT
+        preflightAbsoluteDeadline = now + PREFLIGHT_ABSOLUTE_DEADLINE_MS
+        contactWaitDeadline = now + CONTACT_WAIT_MS
         transition(MeasurePhase.Warmup, "PREFLIGHT") {
             _state.value.copy(
                 phase = MeasurePhase.Warmup,
@@ -149,8 +177,8 @@ class EcgMeasurementCoordinator(
         }
         try {
             offBody = offBodyFactory { blocked ->
-                dispatch(id) {
-                    if (blocked && _state.value.phase == MeasurePhase.Recording) {
+                dispatchAttempt(id) {
+                    if (blocked && _state.value.phase in CAPTURE_PHASES) {
                         failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
                     }
                 }
@@ -158,30 +186,37 @@ class EcgMeasurementCoordinator(
                 it.start()
                 offBodyStarted = true
             }
-            val createdSubscription = sensor.startEcg(
-                onError = { error -> dispatch(id) { handleSensorError(error) } },
-                onBatch = { batch -> dispatch(id) { handleBatch(batch) } },
-            )
-            if (!isCurrent(id) || terminal) {
-                createdSubscription.close()
-                return
-            }
-            subscription = createdSubscription
+            startEcgListener(id)
         } catch (error: RuntimeException) {
             failTerminal("START_FAILED", "Recording failed", error.message ?: "ECG listener could not start.")
             return
         }
         lastBatchAt = elapsedRealtime()
-        restartPreflightTimeout()
         streamMonitorJob = scope.launch(mainDispatcher) {
             while (isCurrent(id) && !terminal) {
                 delay(STREAM_POLL_MS)
-                if (lastBatchAt > 0L && elapsedRealtime() - lastBatchAt > EcgWearContract.ECG_STALL_MS) {
+                val ticked = elapsedRealtime()
+                if (lastBatchAt > 0L && ticked - lastBatchAt > EcgWearContract.ECG_STALL_MS) {
                     failTerminal("STREAM_STALLED", "Recording failed", "ECG sensor stopped sending data.")
                     return@launch
                 }
+                checkDeadlines(ticked)
             }
         }
+    }
+
+    private fun startEcgListener(id: Long) {
+        streamGeneration += 1
+        val gen = streamGeneration
+        val createdSubscription = sensor.startEcg(
+            onError = { error -> dispatch(id, gen) { handleSensorError(error) } },
+            onBatch = { batch -> dispatch(id, gen) { handleBatch(batch) } },
+        )
+        if (!isCurrent(id) || terminal || gen != streamGeneration) {
+            createdSubscription.close()
+            return
+        }
+        subscription = createdSubscription
     }
 
     private fun handleBatch(batch: EcgBatch) {
@@ -191,71 +226,130 @@ class EcgMeasurementCoordinator(
             failTerminal("INVALID_BATCH", "Recording failed", "Samsung returned an invalid ECG batch.")
             return
         }
+        checkDeadlines(lastBatchAt)
+        if (terminal) return
         when (_state.value.phase) {
-            MeasurePhase.Warmup, MeasurePhase.Ready, MeasurePhase.LeadOff -> handlePreflightBatch(batch)
-            MeasurePhase.Recording -> recordBatch(batch)
+            MeasurePhase.Warmup, MeasurePhase.Ready, MeasurePhase.LeadOff,
+            MeasurePhase.CalculatingBpm,
+            -> handlePreflightBatch(batch)
+            MeasurePhase.StartingCapture, MeasurePhase.Recording -> handleCaptureBatch(batch)
             else -> Unit
         }
     }
 
     private fun handlePreflightBatch(batch: EcgBatch) {
         if (!batch.contactValid) {
-            contactSince = 0L
-            resetLive()
-            restartPreflightTimeout()
-            transition(MeasurePhase.LeadOff, "CONTACT_LOST_PREFLIGHT") {
-                _state.value.copy(
-                    phase = MeasurePhase.LeadOff,
-                    status = "Touch the button",
-                    waveform = LiveWaveformFrame(),
-                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                )
-            }
+            onPreflightContactLost("CONTACT_LOST_PREFLIGHT", "Touch the button")
             return
         }
         if (offBody?.isBlocked() == true) {
-            contactSince = 0L
-            resetLive()
-            restartPreflightTimeout()
-            transition(MeasurePhase.LeadOff, "OFF_BODY_PREFLIGHT") {
-                _state.value.copy(
-                    phase = MeasurePhase.LeadOff,
-                    status = "Wear the watch snugly",
-                    waveform = LiveWaveformFrame(),
-                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                )
-            }
+            onPreflightContactLost("OFF_BODY_PREFLIGHT", "Wear the watch snugly")
             return
         }
         val now = elapsedRealtime()
         if (contactSince == 0L) {
             contactSince = now
-            preflightTimeoutJob?.cancel()
-            preflightTimeoutJob = null
+            bpmAfterContactDeadline = now + BPM_AFTER_CONTACT_MS
         }
-        appendLive(batch)
         val heldMs = now - contactSince
+        if (heldMs < CONTACT_DEBOUNCE_MS) {
+            liveEcgProcessor.append(batch)
+            if (_state.value.phase != MeasurePhase.Ready || _state.value.status != "Hold still") {
+                transition(MeasurePhase.Ready, "CONTACT_DEBOUNCE") {
+                    _state.value.copy(
+                        phase = MeasurePhase.Ready,
+                        status = "Hold still",
+                        bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+                    )
+                }
+            }
+            publishWaveformIfDue(now)
+            return
+        }
+        if (!settledWindowStarted) {
+            liveEcgProcessor.beginSettledWindow(EcgWearContract.signFactorFor(wrist()))
+            settledWindowStarted = true
+        }
+        liveEcgProcessor.append(batch)
         if (heldMs < PRE_RECORD_HOLD_MS) {
-            val settling = heldMs >= CONTACT_DEBOUNCE_MS
-            transition(MeasurePhase.Ready, if (settling) "SENSOR_SETTLE" else "CONTACT_DEBOUNCE") {
+            if (_state.value.status != "Stabilizing sensor…") {
+                transition(MeasurePhase.Ready, "SENSOR_SETTLE") {
+                    _state.value.copy(
+                        phase = MeasurePhase.Ready,
+                        status = "Stabilizing sensor…",
+                        bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+                    )
+                }
+            }
+            publishWaveformIfDue(now)
+            return
+        }
+        if (_state.value.phase != MeasurePhase.CalculatingBpm) {
+            transition(MeasurePhase.CalculatingBpm, "CALCULATING_BPM") {
                 _state.value.copy(
-                    phase = MeasurePhase.Ready,
-                    status = if (settling) "Stabilizing sensor…" else "Hold still",
-                    waveform = publishedWaveform(),
+                    phase = MeasurePhase.CalculatingBpm,
+                    status = "Calculating heart rate…",
                     bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
                 )
             }
-            return
         }
-        beginRecording()
-        // The hold-completing batch is intentionally not recorded. The existing
-        // subscription remains active and capture begins with the next Samsung batch.
+        publishWaveformIfDue(now)
+        requestBpmAnalysis(now, BpmEpoch.PREFLIGHT)
     }
 
-    private fun beginRecording() {
-        if (_state.value.phase == MeasurePhase.Recording || terminal) return
-        preflightTimeoutJob?.cancel()
-        preflightTimeoutJob = null
+    private fun onPreflightContactLost(code: String, status: String) {
+        contactSince = 0L
+        settledWindowStarted = false
+        bpmAfterContactDeadline = 0L
+        contactWaitDeadline = elapsedRealtime() + CONTACT_WAIT_MS
+        resetLive()
+        if (_state.value.phase != MeasurePhase.LeadOff || _state.value.status != status) {
+            transition(MeasurePhase.LeadOff, code) {
+                _state.value.copy(
+                    phase = MeasurePhase.LeadOff,
+                    status = status,
+                    waveform = LiveWaveformFrame(),
+                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+                )
+            }
+        }
+    }
+
+    private fun handleCaptureBatch(batch: EcgBatch) {
+        if (!batch.contactValid) {
+            failTerminal("CONTACT_LOSS", "Recording failed", "ECG contact was lost.")
+            return
+        }
+        if (offBody?.isBlocked() == true) {
+            failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
+            return
+        }
+        val now = elapsedRealtime()
+        if (_state.value.phase == MeasurePhase.StartingCapture) {
+            if (!beginRecording()) return
+        }
+        liveEcgProcessor.append(batch)
+        try {
+            recorder.addEcg(batch)
+        } catch (error: Exception) {
+            failTerminal("CAPTURE_INVALID", "Recording failed", error.message ?: "Invalid ECG signal.")
+            return
+        }
+        publishWaveformIfDue(now)
+        requestBpmAnalysis(now, BpmEpoch.CAPTURE)
+        if (!captureBpmConfirmed && captureBpmDeadline > 0L && now >= captureBpmDeadline) {
+            failTerminal(
+                "CAPTURE_BPM_TIMEOUT",
+                "Recording failed",
+                "Signal unstable. Please try again.",
+            )
+            return
+        }
+        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) completeRecording()
+    }
+
+    private fun beginRecording(): Boolean {
+        if (_state.value.phase == MeasurePhase.Recording || terminal) return false
         val sessionId = "${wallClock()}-$attemptId"
         val selectedWrist = wrist()
         try {
@@ -272,13 +366,18 @@ class EcgMeasurementCoordinator(
                 "Recording failed",
                 error.message ?: "Health foreground service could not start.",
             )
-            return
+            return false
         }
-        recordingStartedAt = elapsedRealtime()
-        bpmSmoother.reset()
-        lastUiBpmAt = 0L
-        liveBpmJob?.cancel()
-        liveBpmJob = null
+        val now = elapsedRealtime()
+        recordingStartedAt = now
+        captureBpmDeadline = now + CAPTURE_BPM_DEADLINE_MS
+        captureBpmConfirmed = false
+        val seed = preflightBpmSeed
+        val bpmState = if (seed != null) {
+            bpmSmoother.seed(now, seed)
+        } else {
+            LiveBpmState(LiveBpmAvailability.COLLECTING)
+        }
         transition(MeasurePhase.Recording, "RECORDING") {
             _state.value.copy(
                 phase = MeasurePhase.Recording,
@@ -286,7 +385,7 @@ class EcgMeasurementCoordinator(
                 remainingSec = 30,
                 sessionId = sessionId,
                 waveform = liveEcgProcessor.waveformFrame(0L),
-                bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+                bpm = bpmState,
                 error = null,
             )
         }
@@ -296,7 +395,10 @@ class EcgMeasurementCoordinator(
                 val elapsed = elapsedRealtime() - recordingStartedAt
                 val left = ((EcgWearContract.MEASURE_DURATION_MS - elapsed + 999L) / 1000L)
                     .toInt().coerceAtLeast(0)
-                _state.value = _state.value.copy(remainingSec = left)
+                val current = _state.value
+                if (current.remainingSec != left) {
+                    _state.value = current.copy(remainingSec = left)
+                }
                 if (elapsed > RECORDING_DEADLINE_MS) {
                     failTerminal(
                         "INCOMPLETE_CAPTURE",
@@ -308,34 +410,34 @@ class EcgMeasurementCoordinator(
                 delay(STREAM_POLL_MS)
             }
         }
+        return true
     }
 
-    private fun recordBatch(batch: EcgBatch) {
-        if (!batch.contactValid) {
-            failTerminal("CONTACT_LOSS", "Recording failed", "ECG contact was lost.")
-            return
-        }
-        try {
-            recorder.addEcg(batch)
-        } catch (error: Exception) {
-            failTerminal("CAPTURE_INVALID", "Recording failed", error.message ?: "Invalid ECG signal.")
-            return
-        }
+    private fun startCapture(seed: BpmEstimate) {
+        if (terminal || _state.value.phase != MeasurePhase.CalculatingBpm) return
+        preflightBpmSeed = seed
         val now = elapsedRealtime()
-        appendLive(batch)
-        val waveformDue = now - lastUiWaveformAt >= UI_WAVEFORM_INTERVAL_MS
-        val bpmDue = now - lastUiBpmAt >= BPM_UI_INTERVAL_MS
-        if (waveformDue) {
-            val deltaMs = if (lastUiWaveformAt == 0L) {
-                UI_WAVEFORM_INTERVAL_MS
-            } else {
-                now - lastUiWaveformAt
-            }
-            lastUiWaveformAt = now
-            _state.value = _state.value.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
+        transition(MeasurePhase.StartingCapture, "STARTING_CAPTURE") {
+            _state.value.copy(
+                phase = MeasurePhase.StartingCapture,
+                status = "Starting capture…",
+                bpm = bpmSmoother.seed(now, seed),
+            )
         }
-        if (bpmDue) scheduleLiveBpm(now)
-        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) completeRecording()
+        subscription?.close()
+        subscription = null
+        sensorRun = SensorRun.CAPTURE
+        lastBatchAt = elapsedRealtime()
+        bpmWorkerJob?.cancel()
+        bpmWorkerJob = null
+        synchronized(bpmLock) { pendingBpmSnapshot = null }
+        lastBpmScheduleAt = 0L
+        liveEcgProcessor.beginCaptureWindow(EcgWearContract.signFactorFor(wrist()))
+        try {
+            startEcgListener(attemptId)
+        } catch (error: RuntimeException) {
+            failTerminal("START_FAILED", "Recording failed", error.message ?: "ECG listener could not start.")
+        }
     }
 
     private fun completeRecording() {
@@ -357,8 +459,8 @@ class EcgMeasurementCoordinator(
         streamMonitorJob = null
         recordingTimerJob?.cancel()
         recordingTimerJob = null
-        liveBpmJob?.cancel()
-        liveBpmJob = null
+        bpmWorkerJob?.cancel()
+        bpmWorkerJob = null
         cleanupAcquisition()
         transition(MeasurePhase.Saving, "SAVING") {
             _state.value.copy(phase = MeasurePhase.Saving, status = "Saving…", remainingSec = 0)
@@ -366,7 +468,7 @@ class EcgMeasurementCoordinator(
         val info = watchInfo()
         persistenceScope.launch {
             try {
-                val recorded = withContext(Dispatchers.Default) { recorder.finish(snapshot, info) }
+                val recorded = withContext(computeDispatcher) { recorder.finish(snapshot, info) }
                 save(recorded.sessionId, recorded.gzip)
                 val pushed = try {
                     pushToPhone(recorded.sessionId, recorded.gzip)
@@ -445,14 +547,13 @@ class EcgMeasurementCoordinator(
     private fun cleanupAttempt(releaseLease: Boolean) {
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
-        preflightTimeoutJob?.cancel()
-        preflightTimeoutJob = null
         streamMonitorJob?.cancel()
         streamMonitorJob = null
         recordingTimerJob?.cancel()
         recordingTimerJob = null
-        liveBpmJob?.cancel()
-        liveBpmJob = null
+        bpmWorkerJob?.cancel()
+        bpmWorkerJob = null
+        synchronized(bpmLock) { pendingBpmSnapshot = null }
         cleanupAcquisition()
         recorder.cancel()
         if (releaseLease) releaseForegroundLease()
@@ -482,24 +583,57 @@ class EcgMeasurementCoordinator(
         foregroundLease = null
     }
 
-    private fun dispatch(id: Long, event: () -> Unit) {
+    private fun dispatchAttempt(id: Long, event: () -> Unit) {
         scope.launch(mainDispatcher) {
             if (isCurrent(id) && !terminal) event()
         }
     }
 
-    private fun restartPreflightTimeout() {
-        val id = attemptId
-        preflightTimeoutJob?.cancel()
-        preflightTimeoutJob = scope.launch(mainDispatcher) {
-            delay(CONTACT_PREFLIGHT_TIMEOUT_MS)
-            if (isCurrent(id) && !terminal && _state.value.phase != MeasurePhase.Recording) {
-                failTerminal(
-                    "CONTACT_TIMEOUT",
-                    "Recording failed",
-                    "ECG contact was not detected in time. Adjust the watch and try again.",
-                )
-            }
+    private fun dispatch(id: Long, generation: Long, event: () -> Unit) {
+        scope.launch(mainDispatcher) {
+            if (isCurrent(id) && generation == streamGeneration && !terminal) event()
+        }
+    }
+
+    private fun checkDeadlines(now: Long) {
+        if (terminal) return
+        if (sensorRun != SensorRun.PREFLIGHT) return
+        val phase = _state.value.phase
+        if (phase in setOf(
+                MeasurePhase.StartingCapture,
+                MeasurePhase.Recording,
+                MeasurePhase.Saving,
+                MeasurePhase.Success,
+            )
+        ) {
+            return
+        }
+        if (preflightAbsoluteDeadline > 0L && now >= preflightAbsoluteDeadline) {
+            failTerminal(
+                "PREFLIGHT_DEADLINE",
+                "Recording failed",
+                "ECG contact was not detected in time. Adjust the watch and try again.",
+            )
+            return
+        }
+        if (contactSince == 0L && contactWaitDeadline > 0L && now >= contactWaitDeadline) {
+            failTerminal(
+                "CONTACT_TIMEOUT",
+                "Recording failed",
+                "ECG contact was not detected in time. Adjust the watch and try again.",
+            )
+            return
+        }
+        if (contactSince > 0L &&
+            preflightBpmSeed == null &&
+            bpmAfterContactDeadline > 0L &&
+            now >= bpmAfterContactDeadline
+        ) {
+            failTerminal(
+                "BPM_PREFLIGHT_TIMEOUT",
+                "Recording failed",
+                "Could not measure heart rate. Please try again.",
+            )
         }
     }
 
@@ -508,70 +642,83 @@ class EcgMeasurementCoordinator(
         bpmSmoother.reset()
     }
 
-    private fun appendLive(batch: EcgBatch) {
-        liveEcgProcessor.append(batch)
-    }
-
-    private fun scheduleLiveBpm(now: Long) {
-        lastUiBpmAt = now
-        val rawWindow = liveEcgProcessor.analysisSamples
-        val livePpg = liveEcgProcessor.livePpg
-        val signFactor = liveEcgProcessor.signFactor
-        val analysisSampleCount = liveEcgProcessor.analysisSampleCount
+    private fun requestBpmAnalysis(now: Long, epoch: BpmEpoch) {
+        val snapshot = BpmSnapshot(
+            rawWindow = liveEcgProcessor.analysisSamples,
+            livePpg = liveEcgProcessor.livePpg,
+            signFactor = liveEcgProcessor.signFactor,
+            analysisSampleCount = liveEcgProcessor.analysisSampleCount,
+            now = now,
+            epoch = epoch,
+        )
+        synchronized(bpmLock) { pendingBpmSnapshot = snapshot }
+        val workerActive = bpmWorkerJob?.isActive == true
+        if (workerActive) return
+        if (lastBpmScheduleAt != 0L && now - lastBpmScheduleAt < BPM_UI_INTERVAL_MS) return
+        lastBpmScheduleAt = now
         val id = attemptId
-        liveBpmJob?.cancel()
-        liveBpmJob = scope.launch(computeDispatcher) {
-            val estimated = LiveBpmEstimator.estimate(
-                rawWindow = rawWindow,
-                livePpg = livePpg,
-                signFactor = signFactor,
-                nowMs = now,
-            )
-            withContext(mainDispatcher) {
-                if (!isCurrent(id) || terminal) return@withContext
-                _state.value = publishLiveBpm(
-                    state = _state.value,
-                    now = now,
-                    estimated = estimated,
-                    analysisSampleCount = analysisSampleCount,
-                    ppgPointCount = livePpg.size,
+        val gen = streamGeneration
+        bpmWorkerJob = scope.launch(computeDispatcher) {
+            while (true) {
+                val snap = synchronized(bpmLock) {
+                    val taken = pendingBpmSnapshot
+                    pendingBpmSnapshot = null
+                    taken
+                } ?: break
+                val estimated = LiveBpmEstimator.estimate(
+                    rawWindow = snap.rawWindow,
+                    livePpg = snap.livePpg,
+                    signFactor = snap.signFactor,
+                    nowMs = snap.now,
+                    epoch = snap.epoch,
                 )
+                withContext(mainDispatcher) {
+                    if (!isCurrent(id) || gen != streamGeneration || terminal) return@withContext
+                    onBpmEstimate(snap, estimated)
+                }
             }
         }
     }
 
-    private fun publishLiveBpm(
-        state: MeasureUiState,
-        now: Long,
-        estimated: BpmEstimate?,
-        analysisSampleCount: Int,
-        ppgPointCount: Int,
-    ): MeasureUiState {
-        if (state.phase != MeasurePhase.Recording) {
-            return state.copy(bpm = LiveBpmState(LiveBpmAvailability.COLLECTING))
-        }
+    private fun onBpmEstimate(snapshot: BpmSnapshot, estimated: BpmEstimate?) {
+        val phase = _state.value.phase
         if (estimated != null) {
             bpmLogger(
-                "publish source=${estimated.source} bSqi=${estimated.bSqi} " +
+                "publish epoch=${estimated.epoch} source=${estimated.source} bSqi=${estimated.bSqi} " +
                     "rr=${estimated.rrCount} bpm=${estimated.bpm}",
             )
-        } else {
+        } else if (phase == MeasurePhase.Recording || phase == MeasurePhase.CalculatingBpm) {
             bpmLogger(
-                "abstain analysisSamples=$analysisSampleCount ppgPoints=$ppgPointCount",
+                "abstain epoch=${snapshot.epoch} analysisSamples=${snapshot.analysisSampleCount} " +
+                    "ppgPoints=${snapshot.livePpg.size}",
             )
         }
-        return state.copy(bpm = bpmSmoother.publish(now, estimated))
+        if (phase == MeasurePhase.CalculatingBpm &&
+            estimated != null &&
+            estimated.epoch == BpmEpoch.PREFLIGHT &&
+            estimated.rrCount >= 4
+        ) {
+            startCapture(estimated)
+            return
+        }
+        if (phase != MeasurePhase.Recording) return
+        if (snapshot.epoch != BpmEpoch.CAPTURE) return
+        if (estimated != null) {
+            if (!captureBpmConfirmed) {
+                captureBpmConfirmed = true
+                captureBpmDeadline = 0L
+            }
+            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
+        } else if (captureBpmConfirmed) {
+            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
+        }
     }
 
-    private fun publishedWaveform(): LiveWaveformFrame {
-        val now = elapsedRealtime()
-        val current = _state.value.waveform
-        if (now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS && current.points.isNotEmpty()) {
-            return current
-        }
+    private fun publishWaveformIfDue(now: Long) {
+        if (lastUiWaveformAt != 0L && now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS) return
         val deltaMs = if (lastUiWaveformAt == 0L) UI_WAVEFORM_INTERVAL_MS else now - lastUiWaveformAt
         lastUiWaveformAt = now
-        return liveEcgProcessor.waveformFrame(deltaMs)
+        _state.value = _state.value.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
     }
 
     private fun isCurrent(id: Long): Boolean = id == attemptId
@@ -582,30 +729,40 @@ class EcgMeasurementCoordinator(
         state: () -> MeasureUiState,
     ) {
         _state.value = state()
-        transitionLogger(
-            "attempt=$attemptId phase=${phase.name} code=$code samples=${recorder.sampleCount} " +
-                "elapsedMs=${(elapsedRealtime() - attemptStartedAt).coerceAtLeast(0L)}",
-        )
+        if (phase != lastLoggedPhase || code != lastLoggedCode) {
+            lastLoggedPhase = phase
+            lastLoggedCode = code
+            transitionLogger(
+                "attempt=$attemptId phase=${phase.name} code=$code samples=${recorder.sampleCount} " +
+                    "elapsedMs=${(elapsedRealtime() - attemptStartedAt).coerceAtLeast(0L)}",
+            )
+        }
     }
+
+    private data class BpmSnapshot(
+        val rawWindow: FloatArray,
+        val livePpg: List<LivePpgPoint>,
+        val signFactor: Int,
+        val analysisSampleCount: Int,
+        val now: Long,
+        val epoch: BpmEpoch,
+    )
 
     companion object {
         private const val LOG_TAG = "EcgMeasurement"
         private const val BPM_LOG_TAG = "EcgBpm"
         private const val CONNECT_TIMEOUT_MS = 3_500L
-        private const val CONTACT_PREFLIGHT_TIMEOUT_MS = 15_000L
-
-        /**
-         * Finger contact must stay valid this long, then the electrode is
-         * allowed to polarize before the 30 s capture clock starts. Samsung
-         * `ECG_MV` still carries a ~10 mV startup wander if recording begins
-         * on the first lead-on sample; GeminiMan uses a dedicated warmup.
-         */
+        private const val CONTACT_WAIT_MS = 10_000L
+        private const val BPM_AFTER_CONTACT_MS = 15_000L
+        private const val PREFLIGHT_ABSOLUTE_DEADLINE_MS = 25_000L
+        private const val CAPTURE_BPM_DEADLINE_MS = 12_000L
         private const val CONTACT_DEBOUNCE_MS = 1_000L
         private const val SENSOR_SETTLE_MS = 3_000L
         private const val PRE_RECORD_HOLD_MS = CONTACT_DEBOUNCE_MS + SENSOR_SETTLE_MS
         private const val STREAM_POLL_MS = 200L
         private const val RECORDING_DEADLINE_MS = 31_000L
-        private const val UI_WAVEFORM_INTERVAL_MS = 50L
+        private const val UI_WAVEFORM_INTERVAL_MS = 100L
         private const val BPM_UI_INTERVAL_MS = 1_000L
+        private val CAPTURE_PHASES = setOf(MeasurePhase.StartingCapture, MeasurePhase.Recording)
     }
 }

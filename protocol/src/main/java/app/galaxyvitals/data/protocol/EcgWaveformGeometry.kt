@@ -23,14 +23,42 @@ object EcgWaveformGeometry {
     fun reduceM4(
         points: List<WaveformPoint>,
         physicalPixelWidth: Int,
+        firstSampleIndex: Long,
+        lastSampleIndex: Long,
     ): List<WaveformPoint> {
         if (points.isEmpty()) return emptyList()
         val bucketCount = (physicalPixelWidth / 2).coerceAtLeast(1)
-        val reduced = ArrayList<WaveformPoint>(min(points.size, bucketCount * 4 * 4))
-        for (segment in splitSegments(points)) {
-            reduceSegment(segment, bucketCount, reduced)
+        val maxPoints = bucketCount * 4
+        val inDomain = points.filter {
+            it.sampleIndex in firstSampleIndex..lastSampleIndex
         }
-        return reduced
+        if (inDomain.isEmpty()) return emptyList()
+        val selected = selectSegments(splitSegments(inDomain), bucketCount)
+        val spans = LongArray(selected.size) { index ->
+            val segment = selected[index]
+            (segment.last().sampleIndex - segment.first().sampleIndex).coerceAtLeast(1L)
+        }
+        val allocated = allocateBuckets(spans, bucketCount)
+        val reduced = ArrayList<WaveformPoint>(min(inDomain.size, maxPoints))
+        for (index in selected.indices) {
+            val buckets = allocated[index]
+            if (buckets > 0) reduceSegment(selected[index], buckets, reduced)
+        }
+        return if (reduced.size <= maxPoints) reduced else reduced.take(maxPoints)
+    }
+
+    fun mapYToCanvas(
+        valueMv: Float,
+        centerMv: Float,
+        halfRangeMv: Float,
+        heightPx: Float,
+        strokeWidthPx: Float,
+    ): Float {
+        val range = halfRangeMv.coerceAtLeast(1e-6f)
+        val y = heightPx / 2f - ((valueMv - centerMv) / range) * (heightPx / 2f)
+        val pad = (strokeWidthPx / 2f).coerceAtLeast(0f)
+        val maxY = (heightPx - pad).coerceAtLeast(pad)
+        return y.coerceIn(pad, maxY)
     }
 
     fun nextScale(
@@ -53,6 +81,51 @@ object EcgWaveformGeometry {
         }
         val center = previous.centerMv + alpha * (median - previous.centerMv)
         return WaveformScale(centerMv = center, halfRangeMv = halfRange)
+    }
+
+    private fun selectSegments(
+        segments: List<List<WaveformPoint>>,
+        maxSegments: Int,
+    ): List<List<WaveformPoint>> {
+        if (segments.size <= maxSegments) return segments
+        val keep = segments.mapIndexed { index, segment ->
+            val span = (segment.last().sampleIndex - segment.first().sampleIndex).coerceAtLeast(1L)
+            IndexedValue(index, span)
+        }
+            .sortedWith(compareByDescending<IndexedValue<Long>> { it.value }.thenBy { it.index })
+            .take(maxSegments)
+            .map { it.index }
+            .toHashSet()
+        return segments.filterIndexed { index, _ -> index in keep }
+    }
+
+    private fun allocateBuckets(spans: LongArray, bucketCount: Int): IntArray {
+        val allocated = IntArray(spans.size)
+        if (spans.isEmpty() || bucketCount <= 0) return allocated
+        val total = spans.sum()
+        if (total <= 0L) {
+            allocated[0] = bucketCount
+            return allocated
+        }
+        var assigned = 0
+        val remainders = LongArray(spans.size)
+        for (index in spans.indices) {
+            val product = spans[index] * bucketCount
+            allocated[index] = (product / total).toInt()
+            remainders[index] = product % total
+            assigned += allocated[index]
+        }
+        val order = remainders.indices.sortedWith(
+            compareByDescending<Int> { remainders[it] }.thenBy { it },
+        )
+        var leftover = bucketCount - assigned
+        var cursor = 0
+        while (leftover > 0 && order.isNotEmpty()) {
+            allocated[order[cursor % order.size]] += 1
+            leftover -= 1
+            cursor += 1
+        }
+        return allocated
     }
 
     private fun splitSegments(points: List<WaveformPoint>): List<List<WaveformPoint>> {

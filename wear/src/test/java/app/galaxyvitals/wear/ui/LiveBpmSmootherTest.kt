@@ -91,9 +91,23 @@ class LiveBpmSmootherTest {
         assertThat(state.estimate).isNull()
     }
 
-    private fun estimate(bpm: Double, nowMs: Long) = BpmEstimate(
+    @Test
+    fun seedShowsPreflightBpmImmediately() {
+        val smoother = LiveBpmSmoother()
+        val seeded = smoother.seed(nowMs = 4_000L, estimated = estimate(72.0, 4_000L, BpmEpoch.PREFLIGHT))
+        assertThat(seeded.availability).isEqualTo(LiveBpmAvailability.RELIABLE)
+        assertThat(seeded.estimate?.bpm?.roundToInt()).isEqualTo(72)
+        assertThat(seeded.estimate?.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
+    }
+
+    private fun estimate(
+        bpm: Double,
+        nowMs: Long,
+        epoch: BpmEpoch = BpmEpoch.CAPTURE,
+    ) = BpmEstimate(
         bpm = bpm,
         source = BpmSource.ECG,
+        epoch = epoch,
         bSqi = 1.0,
         rrCount = 8,
         updatedAtElapsedMs = nowMs,

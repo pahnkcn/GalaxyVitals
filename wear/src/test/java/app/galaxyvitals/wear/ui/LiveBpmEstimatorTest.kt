@@ -77,6 +77,25 @@ class LiveBpmEstimatorTest {
     }
 
     @Test
+    fun publishRequiresAtLeastFourRrIntervals() {
+        val short = beatResult(bpm = 72.0, bSqi = 0.95, matched = 4)
+        assertThat(LiveBpmEstimator.publish(short, ppgBpm = null, nowMs = 1L)).isNull()
+
+        val enough = beatResult(bpm = 72.0, bSqi = 0.95, matched = 5)
+        val estimate = LiveBpmEstimator.publish(enough, ppgBpm = null, nowMs = 1L)
+        assertThat(estimate).isNotNull()
+        assertThat(estimate!!.rrCount).isEqualTo(4)
+        assertThat(estimate.epoch).isEqualTo(BpmEpoch.CAPTURE)
+    }
+
+    @Test
+    fun publishKeepsRequestedEpoch() {
+        val ecg = beatResult(bpm = 72.0, bSqi = 0.95, matched = 8)
+        val estimate = LiveBpmEstimator.publish(ecg, ppgBpm = null, nowMs = 2L, epoch = BpmEpoch.PREFLIGHT)
+        assertThat(estimate!!.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
+    }
+
+    @Test
     fun ecgOnlyRequiresBsqiAtLeast90() {
         val mid = beatResult(bpm = 72.0, bSqi = 0.89, matched = 8)
         assertThat(LiveBpmEstimator.publish(mid, ppgBpm = null, nowMs = 1L)).isNull()

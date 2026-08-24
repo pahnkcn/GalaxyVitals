@@ -13,9 +13,14 @@ enum class BpmSource {
     ECG_PPG_CORROBORATED,
 }
 
+enum class SensorRun { PREFLIGHT, CAPTURE }
+
+enum class BpmEpoch { PREFLIGHT, CAPTURE }
+
 data class BpmEstimate(
     val bpm: Double,
     val source: BpmSource,
+    val epoch: BpmEpoch,
     val bSqi: Double,
     val rrCount: Int,
     val updatedAtElapsedMs: Long,
@@ -78,6 +83,14 @@ class LiveEcgProcessor(
         scale = WaveformScale.Default
     }
 
+    fun beginSettledWindow(signFactor: Int) {
+        reset(signFactor)
+    }
+
+    fun beginCaptureWindow(signFactor: Int) {
+        reset(signFactor)
+    }
+
     fun append(batch: EcgBatch) {
         val batchStartIndex = nextEcgSampleIndex
         batch.ppgGreen?.let { ppg ->
@@ -130,13 +143,15 @@ class LiveEcgProcessor(
         )
     }
 
-    fun estimate(nowMs: Long): BpmEstimate? = LiveBpmEstimator.estimate(
-        rawWindow = analysisSamples,
-        livePpg = livePpg,
-        signFactor = signFactor,
-        nowMs = nowMs,
-        srHz = srHz,
-    )
+    fun estimate(nowMs: Long, epoch: BpmEpoch = BpmEpoch.CAPTURE): BpmEstimate? =
+        LiveBpmEstimator.estimate(
+            rawWindow = analysisSamples,
+            livePpg = livePpg,
+            signFactor = signFactor,
+            nowMs = nowMs,
+            srHz = srHz,
+            epoch = epoch,
+        )
 
     private fun trim() {
         val extraDisplay = display.size - DISPLAY_WINDOW_SAMPLES

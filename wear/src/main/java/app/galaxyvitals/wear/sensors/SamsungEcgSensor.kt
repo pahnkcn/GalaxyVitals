@@ -384,7 +384,6 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             ppgLogBatches += 1
             if (ppgGreen == null) {
                 ppgLogDroppedBatches += 1
-                Log.d(ECG_ACQUISITION_TAG, "ppg dropped batchSize=$batchSize")
             } else {
                 ppgLogDecodedBatches += 1
                 ppgLogDecodedCount += ppgGreen.values.size
