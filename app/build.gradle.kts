@@ -116,10 +116,43 @@ val verifyEcgNao3Bundle by tasks.registering {
                 throw GradleException("ECG analysis artifact hash mismatch: $name")
             }
         }
+
+        val filtersFile = file("src/main/assets/ecg/ecg_nao3_filters_256hz.json").canonicalFile
+        if (!filtersFile.isFile) {
+            throw GradleException("Missing ECG ecg_nao3_filters_256hz.json")
+        }
+        val filters = groovy.json.JsonSlurper().parse(filtersFile) as? Map<*, *>
+            ?: throw GradleException("Invalid ECG NAO3 filters JSON")
+        val sos = filters["sos"] as? List<*>
+            ?: throw GradleException("ECG NAO3 filters missing sos array")
+        if (sos.size != 5) {
+            throw GradleException("ECG NAO3 filters sos must have exactly 5 rows, found ${sos.size}")
+        }
+        sos.forEachIndexed { index, rawRow ->
+            val row = rawRow as? List<*>
+                ?: throw GradleException("ECG NAO3 filters sos row $index is not an array")
+            if (row.size != 6) {
+                throw GradleException(
+                    "ECG NAO3 filters sos row $index must have exactly 6 coefficients, found ${row.size}",
+                )
+            }
+            row.forEachIndexed { coeffIndex, rawCoeff ->
+                val number = rawCoeff as? Number
+                    ?: throw GradleException(
+                        "ECG NAO3 filters sos[$index][$coeffIndex] is not a number",
+                    )
+                val value = number.toDouble()
+                if (!value.isFinite()) {
+                    throw GradleException(
+                        "ECG NAO3 filters sos[$index][$coeffIndex] is not finite: $value",
+                    )
+                }
+            }
+        }
     }
 }
 
-tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(verifyEcgNao3Bundle)
 }
 

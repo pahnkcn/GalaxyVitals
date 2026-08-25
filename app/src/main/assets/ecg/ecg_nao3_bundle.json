@@ -25,7 +25,7 @@
     },
     "filters": {
       "path": "ecg/ecg_nao3_filters_256hz.json",
-      "sha256": "0e894310042206048a13d109bfa34c3cb05bf7de6ebcb692039c526f7ffdcf6b"
+      "sha256": "1c72ace362fdff4ce0dd8d3ac0cbc7e898300a0b866fb53ef48cdc6e6d95dd52"
     }
   }
 }
