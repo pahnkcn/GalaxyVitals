@@ -40,6 +40,7 @@ class EcgMeasurementCoordinator(
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val transitionLogger: (String) -> Unit = { Log.i(LOG_TAG, it) },
     private val bpmLogger: (String) -> Unit = { Log.i(BPM_LOG_TAG, it) },
+    private val acquisitionLogger: (String) -> Unit = { Log.i(ACQ_LOG_TAG, it) },
 ) : AutoCloseable {
     private val _state = MutableStateFlow(MeasureUiState())
     val state: StateFlow<MeasureUiState> = _state.asStateFlow()
@@ -74,6 +75,9 @@ class EcgMeasurementCoordinator(
     private var contactWaitDeadline = 0L
     private var bpmAfterContactDeadline = 0L
     private var captureBpmDeadline = 0L
+    private var captureContactSince = 0L
+    private var captureContactDeadline = 0L
+    private var lastAcquisitionLogAt = 0L
     private val bpmLock = Any()
     private var pendingBpmSnapshot: BpmSnapshot? = null
     internal val liveEcgProcessor = LiveEcgProcessor()
@@ -127,6 +131,9 @@ class EcgMeasurementCoordinator(
         contactWaitDeadline = 0L
         bpmAfterContactDeadline = 0L
         captureBpmDeadline = 0L
+        captureContactSince = 0L
+        captureContactDeadline = 0L
+        lastAcquisitionLogAt = 0L
         synchronized(bpmLock) { pendingBpmSnapshot = null }
         resetLive()
         transition(MeasurePhase.Connecting, "CONNECTING") {
@@ -232,7 +239,8 @@ class EcgMeasurementCoordinator(
             MeasurePhase.Warmup, MeasurePhase.Ready, MeasurePhase.LeadOff,
             MeasurePhase.CalculatingBpm,
             -> handlePreflightBatch(batch)
-            MeasurePhase.StartingCapture, MeasurePhase.Recording -> handleCaptureBatch(batch)
+            MeasurePhase.StartingCapture -> handleStartingCaptureBatch(batch)
+            MeasurePhase.Recording -> handleRecordingBatch(batch)
             else -> Unit
         }
     }
@@ -315,7 +323,43 @@ class EcgMeasurementCoordinator(
         }
     }
 
-    private fun handleCaptureBatch(batch: EcgBatch) {
+    private fun handleStartingCaptureBatch(batch: EcgBatch) {
+        logCaptureBatch(batch)
+        if (!batch.contactValid) {
+            captureContactSince = 0L
+            if (_state.value.status != "Touch the button") {
+                transition(MeasurePhase.StartingCapture, "CAPTURE_CONTACT_LOST") {
+                    _state.value.copy(
+                        phase = MeasurePhase.StartingCapture,
+                        status = "Touch the button",
+                    )
+                }
+            }
+            return
+        }
+        if (offBody?.isBlocked() == true) {
+            failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
+            return
+        }
+        val now = elapsedRealtime()
+        if (captureContactSince == 0L) {
+            captureContactSince = now
+        }
+        if (_state.value.status != "Starting capture…") {
+            transition(MeasurePhase.StartingCapture, "CAPTURE_CONTACT_DEBOUNCE") {
+                _state.value.copy(
+                    phase = MeasurePhase.StartingCapture,
+                    status = "Starting capture…",
+                )
+            }
+        }
+        if (now - captureContactSince < CONTACT_DEBOUNCE_MS) return
+        if (!beginRecording()) return
+        handleRecordingBatch(batch, alreadyLogged = true)
+    }
+
+    private fun handleRecordingBatch(batch: EcgBatch, alreadyLogged: Boolean = false) {
+        if (!alreadyLogged) logCaptureBatch(batch)
         if (!batch.contactValid) {
             failTerminal("CONTACT_LOSS", "Recording failed", "ECG contact was lost.")
             return
@@ -325,9 +369,6 @@ class EcgMeasurementCoordinator(
             return
         }
         val now = elapsedRealtime()
-        if (_state.value.phase == MeasurePhase.StartingCapture) {
-            if (!beginRecording()) return
-        }
         liveEcgProcessor.append(batch)
         try {
             recorder.addEcg(batch)
@@ -417,6 +458,8 @@ class EcgMeasurementCoordinator(
         if (terminal || _state.value.phase != MeasurePhase.CalculatingBpm) return
         preflightBpmSeed = seed
         val now = elapsedRealtime()
+        captureContactSince = 0L
+        captureContactDeadline = now + CONTACT_WAIT_MS
         transition(MeasurePhase.StartingCapture, "STARTING_CAPTURE") {
             _state.value.copy(
                 phase = MeasurePhase.StartingCapture,
@@ -597,10 +640,19 @@ class EcgMeasurementCoordinator(
 
     private fun checkDeadlines(now: Long) {
         if (terminal) return
+        if (_state.value.phase == MeasurePhase.StartingCapture) {
+            if (captureContactDeadline > 0L && now >= captureContactDeadline) {
+                failTerminal(
+                    "CAPTURE_CONTACT_TIMEOUT",
+                    "Recording failed",
+                    "ECG contact was not detected in time. Keep touching the button and try again.",
+                )
+            }
+            return
+        }
         if (sensorRun != SensorRun.PREFLIGHT) return
         val phase = _state.value.phase
         if (phase in setOf(
-                MeasurePhase.StartingCapture,
                 MeasurePhase.Recording,
                 MeasurePhase.Saving,
                 MeasurePhase.Success,
@@ -721,6 +773,19 @@ class EcgMeasurementCoordinator(
         _state.value = _state.value.copy(waveform = liveEcgProcessor.waveformFrame(deltaMs))
     }
 
+    private fun logCaptureBatch(batch: EcgBatch) {
+        val phase = _state.value.phase
+        val now = lastBatchAt
+        val force = phase == MeasurePhase.StartingCapture || batch.leadOff != 0
+        if (!force && lastAcquisitionLogAt != 0L && now - lastAcquisitionLogAt < 1_000L) return
+        lastAcquisitionLogAt = now
+        acquisitionLogger(
+            "phase=${phase.name} leadOff=${batch.leadOff} sequence=${batch.sequence} " +
+                "batchSize=${batch.samplesMv.size} generation=$streamGeneration " +
+                "samples=${recorder.sampleCount}",
+        )
+    }
+
     private fun isCurrent(id: Long): Boolean = id == attemptId
 
     private inline fun transition(
@@ -751,6 +816,7 @@ class EcgMeasurementCoordinator(
     companion object {
         private const val LOG_TAG = "EcgMeasurement"
         private const val BPM_LOG_TAG = "EcgBpm"
+        private const val ACQ_LOG_TAG = "EcgAcquisition"
         private const val CONNECT_TIMEOUT_MS = 3_500L
         private const val CONTACT_WAIT_MS = 10_000L
         private const val BPM_AFTER_CONTACT_MS = 15_000L

@@ -25,6 +25,31 @@ class DebugReplayFixturesTest {
         assertThat(DebugReplayFixtures.parseName("")).isNull()
         assertThat(DebugReplayFixtures.parseName(null)).isNull()
         assertThat(DebugReplayFixtures.parseName("CLEAN_72")).isNull()
+        assertThat(DebugReplayFixtures.parseName("hardware")).isNull()
+    }
+
+    @Test
+    fun parseDebugReplayCommand_selectsHardwareKnownFixtureOrLeavesUnchanged() {
+        assertThat(parseDebugReplayCommand("hardware"))
+            .isEqualTo(DebugReplayCommand.UseHardware)
+        assertThat(parseDebugReplayCommand(" hardware "))
+            .isEqualTo(DebugReplayCommand.UseHardware)
+        for (name in DebugReplayFixtures.NAMES) {
+            assertThat(parseDebugReplayCommand(name))
+                .isEqualTo(DebugReplayCommand.SetFixture(name))
+        }
+        assertThat(parseDebugReplayCommand("lead_off_gap"))
+            .isEqualTo(DebugReplayCommand.SetFixture("lead_off_gap"))
+        assertThat(parseDebugReplayCommand("not_a_fixture"))
+            .isEqualTo(DebugReplayCommand.Unchanged)
+        assertThat(parseDebugReplayCommand("Hardware"))
+            .isEqualTo(DebugReplayCommand.Unchanged)
+        assertThat(parseDebugReplayCommand("CLEAN_72"))
+            .isEqualTo(DebugReplayCommand.Unchanged)
+        assertThat(parseDebugReplayCommand(""))
+            .isEqualTo(DebugReplayCommand.Unchanged)
+        assertThat(parseDebugReplayCommand(null))
+            .isEqualTo(DebugReplayCommand.Unchanged)
     }
 
     @Test

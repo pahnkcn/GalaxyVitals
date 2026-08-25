@@ -13,6 +13,7 @@ class ReleaseMeasurementSensorFactoryTest {
         assertThat(source).doesNotContain("DebugReplay")
         assertThat(source).doesNotContain("fixture")
         assertThat(source).doesNotContain("SharedPreferences")
+        assertThat(source).doesNotContain("sensor backend=replay")
     }
 
     private fun releaseFactoryFile(): File {

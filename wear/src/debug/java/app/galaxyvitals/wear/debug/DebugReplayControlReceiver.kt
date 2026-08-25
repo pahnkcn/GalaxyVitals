@@ -17,7 +17,14 @@ import android.util.Log
  * adb shell am broadcast -n app.galaxyvitals/app.galaxyvitals.wear.debug.DebugReplayControlReceiver -a app.galaxyvitals.DEBUG_ECG_REPLAY --es fixture clean_72
  * adb shell am force-stop app.galaxyvitals
  * adb shell am start -n app.galaxyvitals/app.galaxyvitals.wear.MainWearActivity
- * adb logcat -s EcgAcquisition EcgBpm EcgGraph
+ * adb logcat -s EcgAcquisition EcgMeasurement EcgBpm
+ * ```
+ *
+ * Switch back to Samsung hardware (requires app restart; EcgSensor is created once):
+ * ```
+ * adb shell am broadcast -n app.galaxyvitals/app.galaxyvitals.wear.debug.DebugReplayControlReceiver -a app.galaxyvitals.DEBUG_ECG_REPLAY --es fixture hardware
+ * adb shell am force-stop app.galaxyvitals
+ * adb shell am start -n app.galaxyvitals/app.galaxyvitals.wear.MainWearActivity
  * ```
  */
 class DebugReplayControlReceiver : BroadcastReceiver() {
@@ -25,13 +32,19 @@ class DebugReplayControlReceiver : BroadcastReceiver() {
         val action = intent.action
         if (action != null && action != ACTION) return
         val raw = intent.getStringExtra(EXTRA_FIXTURE)
-        val parsed = DebugReplayFixtures.parseName(raw)
-        if (parsed == null) {
-            Log.i(TAG, "replay fixture ignored name=$raw")
-            return
+        when (val command = parseDebugReplayCommand(raw)) {
+            DebugReplayCommand.UseHardware -> {
+                val cleared = DebugReplayPreferences.clearFixture(context)
+                Log.i(TAG, "replay fixture cleared hardware=true changed=$cleared")
+            }
+            is DebugReplayCommand.SetFixture -> {
+                DebugReplayPreferences.setFixtureName(context, command.name)
+                Log.i(TAG, "replay fixture set name=${command.name}")
+            }
+            DebugReplayCommand.Unchanged -> {
+                Log.i(TAG, "replay fixture ignored name=$raw")
+            }
         }
-        DebugReplayPreferences.setFixtureName(context, parsed)
-        Log.i(TAG, "replay fixture set name=$parsed")
     }
 
     companion object {

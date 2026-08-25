@@ -21,4 +21,11 @@ internal object DebugReplayPreferences {
             .putString(KEY_FIXTURE, parsed)
             .commit()
     }
+
+    fun clearFixture(context: Context): Boolean {
+        val prefs = context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (!prefs.contains(KEY_FIXTURE)) return false
+        return prefs.edit().remove(KEY_FIXTURE).commit()
+    }
 }

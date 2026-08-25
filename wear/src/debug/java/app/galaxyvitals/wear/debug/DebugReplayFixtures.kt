@@ -9,6 +9,19 @@ import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
+internal sealed interface DebugReplayCommand {
+    data object UseHardware : DebugReplayCommand
+    data class SetFixture(val name: String) : DebugReplayCommand
+    data object Unchanged : DebugReplayCommand
+}
+
+internal fun parseDebugReplayCommand(raw: String?): DebugReplayCommand {
+    val name = raw?.trim().orEmpty()
+    if (name == "hardware") return DebugReplayCommand.UseHardware
+    val fixture = DebugReplayFixtures.parseName(name)
+    return if (fixture != null) DebugReplayCommand.SetFixture(fixture) else DebugReplayCommand.Unchanged
+}
+
 internal object DebugReplayFixtures {
     const val SAMPLE_RATE_HZ = 500
     const val SAMPLE_PERIOD_MS = 2L

@@ -49,8 +49,8 @@ fun MeasureScreen(
         onDispose { view.keepScreenOn = previousKeepScreenOn }
     }
 
-    val showHomeKeyHint = state.phase == MeasurePhase.LeadOff &&
-        state.status == "Touch the button"
+    val showHomeKeyHint = state.status == "Touch the button" &&
+        (state.phase == MeasurePhase.LeadOff || state.phase == MeasurePhase.StartingCapture)
     ScreenScaffold { contentPadding ->
         Box(Modifier.fillMaxSize()) {
             Column(
