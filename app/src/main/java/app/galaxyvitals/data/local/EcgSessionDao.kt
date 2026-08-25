@@ -24,6 +24,17 @@ interface EcgSessionDao {
     )
     suspend fun getDemoCleanupCandidates(): List<EcgSessionEntity>
 
+    @Query(
+        """
+        SELECT * FROM ecg_sessions
+        WHERE analysisStatus IN ('NONE', 'PENDING')
+           OR analysisBundleId IS NULL
+           OR analysisBundleId != :currentBundleId
+        ORDER BY tsStartMs DESC
+        """,
+    )
+    suspend fun listStaleSessions(currentBundleId: String): List<EcgSessionEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: EcgSessionEntity)
 

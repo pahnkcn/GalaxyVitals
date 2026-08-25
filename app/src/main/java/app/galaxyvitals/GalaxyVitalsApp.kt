@@ -20,6 +20,7 @@ class GalaxyVitalsApp : Application() {
             // Do not acknowledge the watch here: only the listener can first delete the
             // corresponding replicated DataItem and knows the original remote session ID.
             container.ecgRepository.ingestPendingInbox()
+            container.ecgRepository.reanalyzeStaleSessions()
         }
     }
 }

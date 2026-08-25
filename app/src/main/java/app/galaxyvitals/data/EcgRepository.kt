@@ -184,6 +184,25 @@ class EcgRepository(
         }
     }
 
+    suspend fun reanalyzeStaleSessions(): Int = withContext(Dispatchers.IO) {
+        ingestMutex.withLock {
+            val stale = dao.listStaleSessions(EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID)
+            for (row in stale) {
+                dao.upsert(row.copy(analysisStatus = AnalysisStatus.PENDING.name))
+                val file = File(row.filePath)
+                val analysed = try {
+                    if (!file.exists()) throw IllegalStateException("ECG waveform is missing")
+                    val parsed = EcgCsvParser.parseFile(file, row.sessionId)
+                    analyze(row, parsed)
+                } catch (err: Exception) {
+                    failedAnalysis(row, err)
+                }
+                dao.upsert(analysed)
+            }
+            stale.size
+        }
+    }
+
     suspend fun delete(sessionId: String) = withContext(Dispatchers.IO) {
         ingestMutex.withLock {
             val entity = dao.get(sessionId)
