@@ -56,6 +56,20 @@ class FormattersTest {
         assertThat(session.naoConfidenceLabel()).isEqualTo("91%")
     }
 
+    @Test
+    fun failedAnalysisStillShowsEcgBpmOnHistory() {
+        val session = session(
+            status = AnalysisStatus.FAILED,
+            label = null,
+            confidence = null,
+            findings = "",
+            ecgHrMedian = 81.2,
+        )
+
+        assertThat(session.hrLabel()).isEqualTo("81")
+        assertThat(session.naoTitle()).isEqualTo("Not analysed")
+    }
+
     private fun session(
         status: AnalysisStatus = AnalysisStatus.NONE,
         label: String? = null,

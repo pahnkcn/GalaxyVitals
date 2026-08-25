@@ -3,7 +3,10 @@ package app.galaxyvitals.data
 import android.content.Context
 import android.net.Uri
 import android.util.AtomicFile
+import android.util.Log
+import app.galaxyvitals.analysis.EcgAnalysisBundle
 import app.galaxyvitals.analysis.EcgRhythmEngine
+import app.galaxyvitals.analysis.ModelFailureStage
 import app.galaxyvitals.data.local.AppDatabase
 import app.galaxyvitals.data.local.EcgSessionEntity
 import app.galaxyvitals.data.protocol.EcgCsvParser
@@ -232,6 +235,14 @@ class EcgRepository(
 
     private fun analyze(entity: EcgSessionEntity, parsed: ParsedEcgFile): EcgSessionEntity {
         val result = ecgRhythmEngine.analyze(parsed)
+        if (result.status == AnalysisStatus.FAILED) {
+            val error = result.cause ?: IllegalStateException(result.note)
+            Log.e(
+                "GalaxyVitalsEcg",
+                analysisFailureLogMessage(result.failureStage, result.analysisBundleId, error),
+                result.cause,
+            )
+        }
         val decision = result.decision
         return entity.withAnalysis(
             status = result.status,
@@ -247,14 +258,25 @@ class EcgRepository(
         )
     }
 
-    private fun failedAnalysis(entity: EcgSessionEntity, error: Exception): EcgSessionEntity =
-        entity.withAnalysis(
+    private fun failedAnalysis(entity: EcgSessionEntity, error: Exception): EcgSessionEntity {
+        Log.e(
+            "GalaxyVitalsEcg",
+            analysisFailureLogMessage(
+                stage = null,
+                bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
+                error = error,
+            ),
+            error,
+        )
+        return entity.withAnalysis(
             status = AnalysisStatus.FAILED,
             naoLabel = null,
             naoConfidence = null,
             findings = "",
             note = userFacingAnalysisError(error),
+            analysisBundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
         )
+    }
 
     private fun writeCanonical(dest: File, parsed: ParsedEcgFile) {
         writeAtomic(
@@ -389,3 +411,28 @@ internal fun userFacingAnalysisError(error: Throwable): String {
         else -> "Analysis failed."
     }
 }
+
+internal fun analysisFailureLogMessage(
+    stage: ModelFailureStage?,
+    bundleId: String?,
+    error: Throwable,
+): String {
+    val sanitized = sanitizeAnalysisLogText(error.message.orEmpty())
+    return buildString {
+        append("ECG analysis failed")
+        append(" stage=").append(stage?.name ?: "UNKNOWN")
+        append(" bundle=").append(bundleId ?: "none")
+        append(" error=").append(error.javaClass.simpleName)
+        if (sanitized.isNotEmpty()) {
+            append(": ").append(sanitized)
+        }
+    }
+}
+
+private val WAVEFORM_LEAK = Regex("""(?i)-?\d+(?:\.\d+)?\s*mV|millivolts?""")
+
+private fun sanitizeAnalysisLogText(raw: String): String =
+    WAVEFORM_LEAK.replace(raw, "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(240)

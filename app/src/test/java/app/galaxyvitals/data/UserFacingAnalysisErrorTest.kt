@@ -1,5 +1,7 @@
 package app.galaxyvitals.data
 
+import app.galaxyvitals.analysis.EcgAnalysisBundle
+import app.galaxyvitals.analysis.ModelFailureStage
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 
@@ -44,5 +46,21 @@ class UserFacingAnalysisErrorTest {
             .isEqualTo("That file has invalid ECG metadata.")
         assertThat(userFacingImportError(IllegalStateException("Invalid gzip ECG data")))
             .isEqualTo("That file is not a valid gzip ECG.")
+    }
+
+    @Test
+    fun analysisFailureLogMessageIncludesStageAndBundleWithoutMillivolts() {
+        val error = IllegalStateException("preprocess failed at 0.12mV")
+        val message = analysisFailureLogMessage(
+            stage = ModelFailureStage.INFERENCE,
+            bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
+            error = error,
+        )
+
+        assertThat(message).contains(ModelFailureStage.INFERENCE.name)
+        assertThat(message).contains(EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID)
+        assertThat(message).contains(error.javaClass.simpleName)
+        assertThat(message).doesNotContain("0.12mV")
+        assertThat(message).doesNotContain("mV")
     }
 }
