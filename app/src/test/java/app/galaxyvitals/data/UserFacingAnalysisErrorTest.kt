@@ -50,7 +50,8 @@ class UserFacingAnalysisErrorTest {
 
     @Test
     fun analysisFailureLogMessageIncludesStageAndBundleWithoutMillivolts() {
-        val error = IllegalStateException("preprocess failed at 0.12mV")
+        val leak = "0.12mV,1.3,csv row..."
+        val error = IllegalStateException(leak)
         val message = analysisFailureLogMessage(
             stage = ModelFailureStage.INFERENCE,
             bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
@@ -60,7 +61,34 @@ class UserFacingAnalysisErrorTest {
         assertThat(message).contains(ModelFailureStage.INFERENCE.name)
         assertThat(message).contains(EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID)
         assertThat(message).contains(error.javaClass.simpleName)
+        assertThat(message).doesNotContain(leak)
         assertThat(message).doesNotContain("0.12mV")
+        assertThat(message).doesNotContain("1.3")
+        assertThat(message).doesNotContain("csv row")
         assertThat(message).doesNotContain("mV")
+    }
+
+    @Test
+    fun analysisFailureLogThrowableKeepsStackWithoutOriginalMessage() {
+        val leak = "0.12mV,1.3,csv row..."
+        val error = IllegalStateException(leak)
+        val logged = analysisFailureLogThrowable(
+            stage = ModelFailureStage.INFERENCE,
+            bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
+            error = error,
+        )
+        val printed = logged.stackTraceToString()
+        val expected = analysisFailureLogMessage(
+            stage = ModelFailureStage.INFERENCE,
+            bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
+            error = error,
+        )
+
+        assertThat(logged.message).isEqualTo(expected)
+        assertThat(logged.cause).isNotNull()
+        assertThat(logged.cause!!.stackTrace).isEqualTo(error.stackTrace)
+        assertThat(printed).doesNotContain(leak)
+        assertThat(printed).doesNotContain("0.12mV")
+        assertThat(printed).doesNotContain("csv row")
     }
 }

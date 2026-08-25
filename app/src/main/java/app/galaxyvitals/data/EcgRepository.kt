@@ -29,6 +29,7 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.IdentityHashMap
 
 class EcgRepository(
     private val context: Context,
@@ -237,11 +238,7 @@ class EcgRepository(
         val result = ecgRhythmEngine.analyze(parsed)
         if (result.status == AnalysisStatus.FAILED) {
             val error = result.cause ?: IllegalStateException(result.note)
-            Log.e(
-                "GalaxyVitalsEcg",
-                analysisFailureLogMessage(result.failureStage, result.analysisBundleId, error),
-                result.cause,
-            )
+            logAnalysisFailure(result.failureStage, result.analysisBundleId, error)
         }
         val decision = result.decision
         return entity.withAnalysis(
@@ -259,14 +256,10 @@ class EcgRepository(
     }
 
     private fun failedAnalysis(entity: EcgSessionEntity, error: Exception): EcgSessionEntity {
-        Log.e(
-            "GalaxyVitalsEcg",
-            analysisFailureLogMessage(
-                stage = null,
-                bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
-                error = error,
-            ),
-            error,
+        logAnalysisFailure(
+            stage = null,
+            bundleId = EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID,
+            error = error,
         )
         return entity.withAnalysis(
             status = AnalysisStatus.FAILED,
@@ -365,6 +358,15 @@ class EcgRepository(
         return uri.lastPathSegment
     }
 
+    private fun logAnalysisFailure(
+        stage: ModelFailureStage?,
+        bundleId: String?,
+        error: Throwable,
+    ) {
+        val logged = analysisFailureLogThrowable(stage, bundleId, error)
+        Log.e("GalaxyVitalsEcg", logged.message.orEmpty(), logged)
+    }
+
     companion object {
         private const val MAX_WEAR_COLLISION_ATTEMPTS = 32
     }
@@ -416,23 +418,38 @@ internal fun analysisFailureLogMessage(
     stage: ModelFailureStage?,
     bundleId: String?,
     error: Throwable,
-): String {
-    val sanitized = sanitizeAnalysisLogText(error.message.orEmpty())
-    return buildString {
-        append("ECG analysis failed")
-        append(" stage=").append(stage?.name ?: "UNKNOWN")
-        append(" bundle=").append(bundleId ?: "none")
-        append(" error=").append(error.javaClass.simpleName)
-        if (sanitized.isNotEmpty()) {
-            append(": ").append(sanitized)
-        }
-    }
+): String = buildString {
+    append("ECG analysis failed")
+    append(" stage=").append(stage?.name ?: "UNKNOWN")
+    append(" bundle=").append(bundleId ?: "none")
+    append(" error=").append(error.javaClass.simpleName)
 }
 
-private val WAVEFORM_LEAK = Regex("""(?i)-?\d+(?:\.\d+)?\s*mV|millivolts?""")
+internal fun analysisFailureLogThrowable(
+    stage: ModelFailureStage?,
+    bundleId: String?,
+    error: Throwable,
+): RuntimeException = RuntimeException(analysisFailureLogMessage(stage, bundleId, error)).apply {
+    initCause(redactAnalysisFailureCause(error))
+}
 
-private fun sanitizeAnalysisLogText(raw: String): String =
-    WAVEFORM_LEAK.replace(raw, "")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-        .take(240)
+private fun redactAnalysisFailureCause(error: Throwable): Throwable {
+    val seen = IdentityHashMap<Throwable, Throwable>()
+    fun copy(original: Throwable): Throwable {
+        seen[original]?.let { return it }
+        val redacted = Throwable(original.javaClass.name)
+        seen[original] = redacted
+        redacted.stackTrace = original.stackTrace
+        val cause = original.cause
+        if (cause != null && cause !== original) {
+            redacted.initCause(copy(cause))
+        }
+        original.suppressed.forEach { suppressed ->
+            if (suppressed !== original) {
+                redacted.addSuppressed(copy(suppressed))
+            }
+        }
+        return redacted
+    }
+    return copy(error)
+}
