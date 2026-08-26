@@ -9,14 +9,17 @@ import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSubscription
+import app.galaxyvitals.wear.sensors.OffBodyGate
+import app.galaxyvitals.wear.sensors.PpgGreenBatch
+import app.galaxyvitals.wear.sensors.SensorAvailability
 import app.galaxyvitals.wear.sensors.SensorIssueCode
 import app.galaxyvitals.wear.sensors.SensorRecovery
-import app.galaxyvitals.wear.sensors.OffBodyGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Owns exactly one Samsung measurement attempt and serializes every event on the UI dispatcher. */
+/** One ECG_ON_DEMAND listener per capture; acquisition events reduce on a serial queue. */
 class EcgMeasurementCoordinator(
     private val sensor: EcgSensor,
     private val recorder: EcgSessionRecorder,
@@ -38,14 +41,29 @@ class EcgMeasurementCoordinator(
     private val offBodyFactory: ((Boolean) -> Unit) -> OffBodyGate,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val acquisitionDispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
     private val wallClock: () -> Long = System::currentTimeMillis,
+    private val delayMs: suspend (Long) -> Unit = { delay(it) },
     private val transitionLogger: (String) -> Unit = { Log.i(LOG_TAG, it) },
     private val bpmLogger: (String) -> Unit = { Log.i(BPM_LOG_TAG, it) },
     private val acquisitionLogger: (String) -> Unit = { Log.i(ACQ_LOG_TAG, it) },
 ) : AutoCloseable {
     private val _state = MutableStateFlow(MeasureUiState())
     val state: StateFlow<MeasureUiState> = _state.asStateFlow()
+
+    private val events = Channel<AcqEvent>(Channel.UNLIMITED)
+    private val reducerJob: Job = scope.launch(acquisitionDispatcher) {
+        for (event in events) {
+            try {
+                reduce(event)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                failTerminal("INTERNAL", "Recording failed", error.message ?: "Unexpected capture error.")
+            }
+        }
+    }
 
     private var attemptId = 0L
     private var attemptStartedAt = 0L
@@ -55,12 +73,10 @@ class EcgMeasurementCoordinator(
     private var offBody: OffBodyGate? = null
     private var foregroundLease: AutoCloseable? = null
     private var connectTimeoutJob: Job? = null
+    private var countdownJob: Job? = null
     private var streamMonitorJob: Job? = null
-    private var recordingTimerJob: Job? = null
     private var bpmWorkerJob: Job? = null
     private var lastBatchAt = 0L
-    private var contactSince = 0L
-    private var recordingStartedAt = 0L
     private var sensorStopped = true
     private var sensorDisconnected = true
     private var offBodyStarted = false
@@ -69,16 +85,8 @@ class EcgMeasurementCoordinator(
     private var lastLoggedPhase: MeasurePhase? = null
     private var lastLoggedCode: String? = null
     private var streamGeneration = 0L
-    private var sensorRun = SensorRun.PREFLIGHT
-    private var settledWindowStarted = false
-    private var preflightBpmSeed: BpmEstimate? = null
-    private var captureBpmConfirmed = false
-    private var preflightAbsoluteDeadline = 0L
-    private var contactWaitDeadline = 0L
-    private var bpmAfterContactDeadline = 0L
-    private var captureBpmDeadline = 0L
-    private var captureContactSince = 0L
-    private var captureContactDeadline = 0L
+    private var awaitingFirstBatch = false
+    private var bpmDirty = false
     private var lastAcquisitionLogAt = 0L
     private val bpmLock = Any()
     private var pendingBpmSnapshot: BpmSnapshot? = null
@@ -86,41 +94,21 @@ class EcgMeasurementCoordinator(
     private val bpmSmoother = LiveBpmSmoother()
 
     fun startHardware() {
-        scope.launch(mainDispatcher) { startNewAttempt() }
+        events.trySend(AcqEvent.Start)
     }
 
     fun retry() = startHardware()
 
     fun cancel() {
-        scope.launch(mainDispatcher) {
-            if (!terminal && _state.value.phase !in setOf(MeasurePhase.Success, MeasurePhase.Failed)) {
-                failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
-            } else {
-                cleanupAttempt(releaseLease = true)
-            }
-        }
+        events.trySend(AcqEvent.Cancel)
     }
 
     fun onHostStop() {
-        scope.launch(mainDispatcher) {
-            val phase = _state.value.phase
-            if (phase == MeasurePhase.PermissionRequired || phase == MeasurePhase.ResolutionRequired) {
-                return@launch
-            }
-            if (!terminal && phase !in setOf(MeasurePhase.Success, MeasurePhase.Failed)) {
-                failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
-            } else {
-                cleanupAttempt(releaseLease = true)
-            }
-        }
+        events.trySend(AcqEvent.HostStop)
     }
 
     fun onHostResume() {
-        scope.launch(mainDispatcher) {
-            if (_state.value.phase == MeasurePhase.ResolutionRequired) {
-                startNewAttempt()
-            }
-        }
+        events.trySend(AcqEvent.HostResume)
     }
 
     fun resolvePending(activity: android.app.Activity): Boolean = sensor.resolvePending(activity)
@@ -129,6 +117,83 @@ class EcgMeasurementCoordinator(
         attemptId += 1
         terminal = true
         cleanupAttempt(releaseLease = true)
+        reducerJob.cancel()
+        events.close()
+    }
+
+    private fun reduce(event: AcqEvent) {
+        when (event) {
+            AcqEvent.Start -> startNewAttempt()
+            AcqEvent.Cancel -> onCancel()
+            AcqEvent.HostStop -> onHostStopLocked()
+            AcqEvent.HostResume -> onHostResumeLocked()
+            is AcqEvent.ConnectResult -> {
+                if (!isCurrent(event.attemptId) || terminal) return
+                handleConnectResult(event.attemptId, event.availability)
+            }
+            is AcqEvent.ConnectTimeout -> {
+                if (!isCurrent(event.attemptId) || terminal) return
+                if (_state.value.phase == MeasurePhase.Connecting) {
+                    unavailable("CONNECT_TIMEOUT", "Samsung ECG connection timed out.")
+                }
+            }
+            is AcqEvent.CountdownFinished -> {
+                if (!isCurrent(event.attemptId) || terminal) return
+                onCountdownFinished()
+            }
+            is AcqEvent.Batch -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                handleBatch(event.batch)
+            }
+            is AcqEvent.Deadline -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                handleDeadline()
+            }
+            is AcqEvent.SensorError -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                handleSensorError(event.error)
+            }
+            is AcqEvent.OffBody -> {
+                if (!isCurrent(event.attemptId) || terminal) return
+                if (event.blocked && _state.value.phase in ACTIVE_BODY_PHASES) {
+                    failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
+                }
+            }
+            is AcqEvent.StreamStall -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                failTerminal("STREAM_STALLED", "Recording failed", "ECG sensor stopped sending data.")
+            }
+            is AcqEvent.BpmResult -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                onBpmEstimate(event.snapshot, event.estimated)
+            }
+        }
+    }
+
+    private fun onCancel() {
+        if (!terminal && _state.value.phase !in setOf(MeasurePhase.Success, MeasurePhase.Failed)) {
+            failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
+        } else {
+            cleanupAttempt(releaseLease = true)
+        }
+    }
+
+    private fun onHostStopLocked() {
+        val phase = _state.value.phase
+        if (phase == MeasurePhase.PermissionRequired || phase == MeasurePhase.ResolutionRequired) {
+            return
+        }
+        if (!terminal && phase !in setOf(MeasurePhase.Success, MeasurePhase.Failed)) {
+            failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
+        } else {
+            cleanupAttempt(releaseLease = true)
+        }
+    }
+
+    private fun onHostResumeLocked() {
+        if (_state.value.phase == MeasurePhase.ResolutionRequired) {
+            startNewAttempt()
+        }
     }
 
     private fun startNewAttempt() {
@@ -142,23 +207,13 @@ class EcgMeasurementCoordinator(
         sensorDisconnected = false
         offBodyStarted = false
         lastBatchAt = 0L
-        contactSince = 0L
-        recordingStartedAt = 0L
         lastUiWaveformAt = 0L
         lastBpmScheduleAt = 0L
         lastLoggedPhase = null
         lastLoggedCode = null
         streamGeneration += 1
-        sensorRun = SensorRun.PREFLIGHT
-        settledWindowStarted = false
-        preflightBpmSeed = null
-        captureBpmConfirmed = false
-        preflightAbsoluteDeadline = 0L
-        contactWaitDeadline = 0L
-        bpmAfterContactDeadline = 0L
-        captureBpmDeadline = 0L
-        captureContactSince = 0L
-        captureContactDeadline = 0L
+        awaitingFirstBatch = false
+        bpmDirty = false
         lastAcquisitionLogAt = 0L
         synchronized(bpmLock) { pendingBpmSnapshot = null }
         resetLive()
@@ -166,282 +221,101 @@ class EcgMeasurementCoordinator(
             MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
         }
         connectTimeoutJob = scope.launch(mainDispatcher) {
-            delay(CONNECT_TIMEOUT_MS)
-            if (isCurrent(id) && _state.value.phase == MeasurePhase.Connecting) {
-                unavailable("CONNECT_TIMEOUT", "Samsung ECG connection timed out.")
-            }
+            delayMs(CONNECT_TIMEOUT_MS)
+            events.trySend(AcqEvent.ConnectTimeout(id))
         }
         try {
             sensor.connect { availability ->
-                dispatchAttempt(id) {
-                    connectTimeoutJob?.cancel()
-                    connectTimeoutJob = null
-                    if (!availability.ready) {
-                        val reason = availability.reason
-                            ?: availability.issue?.message
-                            ?: "Samsung ECG is not available for this package."
-                        when (availability.issue?.recovery) {
-                            SensorRecovery.REQUEST_PERMISSION -> {
-                                showPermissionRequired(reason)
-                            }
-                            SensorRecovery.RESOLVE_SERVICE -> {
-                                transition(MeasurePhase.ResolutionRequired, "RESOLUTION_REQUIRED") {
-                                    MeasureUiState(
-                                        phase = MeasurePhase.ResolutionRequired,
-                                        status = "Samsung Health setup needed",
-                                        error = reason,
-                                    )
-                                }
-                            }
-                            else -> {
-                                val code = when (availability.issue?.code) {
-                                    SensorIssueCode.SDK_POLICY_ERROR -> "SDK_POLICY"
-                                    SensorIssueCode.TRACKER_UNSUPPORTED -> "TRACKER_UNSUPPORTED"
-                                    SensorIssueCode.CONNECTION_FAILED -> "CONNECTION_FAILED"
-                                    else -> "TRACKER_UNAVAILABLE"
-                                }
-                                if (trackerReady) {
-                                    failTerminal(code, "Recording failed", reason)
-                                } else {
-                                    unavailable(code, reason)
-                                }
-                            }
-                        }
-                    } else {
-                        trackerReady = true
-                        startPreflight(id)
-                    }
-                }
+                events.trySend(AcqEvent.ConnectResult(id, availability))
             }
         } catch (error: RuntimeException) {
             unavailable("CONNECT_FAILED", error.message ?: "Samsung ECG service could not start.")
         }
     }
 
-    private fun startPreflight(id: Long) {
-        val now = elapsedRealtime()
-        sensorRun = SensorRun.PREFLIGHT
-        preflightAbsoluteDeadline = now + PREFLIGHT_ABSOLUTE_DEADLINE_MS
-        contactWaitDeadline = now + CONTACT_WAIT_MS
-        transition(MeasurePhase.Warmup, "PREFLIGHT") {
-            _state.value.copy(
-                phase = MeasurePhase.Warmup,
-                status = "Checking ECG contact…",
-                samsungReady = true,
-                error = null,
-            )
-        }
-        try {
-            offBody = offBodyFactory { blocked ->
-                dispatchAttempt(id) {
-                    if (blocked && _state.value.phase in CAPTURE_PHASES) {
-                        failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
+    private fun handleConnectResult(id: Long, availability: SensorAvailability) {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
+        if (!availability.ready) {
+            val reason = availability.reason
+                ?: availability.issue?.message
+                ?: "Samsung ECG is not available for this package."
+            when (availability.issue?.recovery) {
+                SensorRecovery.REQUEST_PERMISSION -> showPermissionRequired(reason)
+                SensorRecovery.RESOLVE_SERVICE -> {
+                    transition(MeasurePhase.ResolutionRequired, "RESOLUTION_REQUIRED") {
+                        MeasureUiState(
+                            phase = MeasurePhase.ResolutionRequired,
+                            status = "Samsung Health setup needed",
+                            error = reason,
+                        )
                     }
                 }
+                else -> {
+                    val code = when (availability.issue?.code) {
+                        SensorIssueCode.SDK_POLICY_ERROR -> "SDK_POLICY"
+                        SensorIssueCode.TRACKER_UNSUPPORTED -> "TRACKER_UNSUPPORTED"
+                        SensorIssueCode.CONNECTION_FAILED -> "CONNECTION_FAILED"
+                        else -> "TRACKER_UNAVAILABLE"
+                    }
+                    if (trackerReady) {
+                        failTerminal(code, "Recording failed", reason)
+                    } else {
+                        unavailable(code, reason)
+                    }
+                }
+            }
+            return
+        }
+        trackerReady = true
+        try {
+            offBody = offBodyFactory { blocked ->
+                events.trySend(AcqEvent.OffBody(id, blocked))
             }.also {
                 it.start()
                 offBodyStarted = true
             }
-            startEcgListener(id)
         } catch (error: RuntimeException) {
-            failTerminal("START_FAILED", "Recording failed", error.message ?: "ECG listener could not start.")
+            failTerminal("START_FAILED", "Recording failed", error.message ?: "Off-body monitor could not start.")
             return
         }
-        lastBatchAt = elapsedRealtime()
-        streamMonitorJob = scope.launch(mainDispatcher) {
-            while (isCurrent(id) && !terminal) {
-                delay(STREAM_POLL_MS)
-                val ticked = elapsedRealtime()
-                if (lastBatchAt > 0L && ticked - lastBatchAt > EcgWearContract.ECG_STALL_MS) {
-                    failTerminal("STREAM_STALLED", "Recording failed", "ECG sensor stopped sending data.")
+        startArmedCountdown(id)
+    }
+
+    private fun startArmedCountdown(id: Long) {
+        val deadlineAt = elapsedRealtime() + COUNTDOWN_MS
+        transition(MeasurePhase.ArmedCountdown, "ARMED_COUNTDOWN") {
+            MeasureUiState(
+                phase = MeasurePhase.ArmedCountdown,
+                status = COUNTDOWN_STATUS,
+                remainingSec = 3,
+                samsungReady = true,
+                error = null,
+            )
+        }
+        countdownJob?.cancel()
+        countdownJob = scope.launch(mainDispatcher) {
+            while (isCurrent(id) && !terminal && _state.value.phase == MeasurePhase.ArmedCountdown) {
+                val left = deadlineAt - elapsedRealtime()
+                val sec = ((left + 999L) / 1000L).toInt().coerceAtLeast(0)
+                if (_state.value.remainingSec != sec) {
+                    _state.value = _state.value.copy(remainingSec = sec)
+                }
+                if (left <= 0L) {
+                    events.trySend(AcqEvent.CountdownFinished(id))
                     return@launch
                 }
-                checkDeadlines(ticked)
+                delayMs(minOf(left, COUNTDOWN_TICK_MS))
             }
         }
     }
 
-    private fun startEcgListener(id: Long) {
-        streamGeneration += 1
-        val gen = streamGeneration
-        val createdSubscription = sensor.startEcg(
-            maxDurationMs = 30_000,
-            onError = { error -> dispatch(id, gen) { handleSensorError(error) } },
-            onBatch = { batch -> dispatch(id, gen) { handleBatch(batch) } },
-            onDeadline = { /* Task 2 */ },
-        )
-        if (!isCurrent(id) || terminal || gen != streamGeneration) {
-            createdSubscription.close()
-            return
-        }
-        subscription = createdSubscription
-    }
-
-    private fun handleBatch(batch: EcgBatch) {
-        if (terminal || !trackerReady) return
-        lastBatchAt = elapsedRealtime()
-        if (batch.samplesMv.isEmpty() || batch.samplesMv.any { !it.isFinite() }) {
-            failTerminal("INVALID_BATCH", "Recording failed", "Samsung returned an invalid ECG batch.")
-            return
-        }
-        checkDeadlines(lastBatchAt)
-        if (terminal) return
-        when (_state.value.phase) {
-            MeasurePhase.Warmup, MeasurePhase.Ready, MeasurePhase.LeadOff,
-            MeasurePhase.CalculatingBpm,
-            -> handlePreflightBatch(batch)
-            MeasurePhase.StartingCapture -> handleStartingCaptureBatch(batch)
-            MeasurePhase.Recording -> handleRecordingBatch(batch)
-            else -> Unit
-        }
-    }
-
-    private fun handlePreflightBatch(batch: EcgBatch) {
-        if (!batch.contactValid) {
-            onPreflightContactLost("CONTACT_LOST_PREFLIGHT", "Touch the button")
-            return
-        }
-        if (offBody?.isBlocked() == true) {
-            onPreflightContactLost("OFF_BODY_PREFLIGHT", "Wear the watch snugly")
-            return
-        }
-        val now = elapsedRealtime()
-        if (contactSince == 0L) {
-            contactSince = now
-            bpmAfterContactDeadline = now + BPM_AFTER_CONTACT_MS
-        }
-        val heldMs = now - contactSince
-        if (heldMs < CONTACT_DEBOUNCE_MS) {
-            liveEcgProcessor.append(batch)
-            if (_state.value.phase != MeasurePhase.Ready || _state.value.status != "Hold still") {
-                transition(MeasurePhase.Ready, "CONTACT_DEBOUNCE") {
-                    _state.value.copy(
-                        phase = MeasurePhase.Ready,
-                        status = "Hold still",
-                        bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                    )
-                }
-            }
-            publishWaveformIfDue(now)
-            return
-        }
-        if (!settledWindowStarted) {
-            liveEcgProcessor.beginSettledWindow(EcgWearContract.signFactorFor(wrist()))
-            settledWindowStarted = true
-        }
-        liveEcgProcessor.append(batch)
-        if (heldMs < PRE_RECORD_HOLD_MS) {
-            if (_state.value.status != "Stabilizing sensor…") {
-                transition(MeasurePhase.Ready, "SENSOR_SETTLE") {
-                    _state.value.copy(
-                        phase = MeasurePhase.Ready,
-                        status = "Stabilizing sensor…",
-                        bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                    )
-                }
-            }
-            publishWaveformIfDue(now)
-            return
-        }
-        if (_state.value.phase != MeasurePhase.CalculatingBpm) {
-            transition(MeasurePhase.CalculatingBpm, "CALCULATING_BPM") {
-                _state.value.copy(
-                    phase = MeasurePhase.CalculatingBpm,
-                    status = "Calculating heart rate…",
-                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                )
-            }
-        }
-        publishWaveformIfDue(now)
-        requestBpmAnalysis(now, BpmEpoch.PREFLIGHT)
-    }
-
-    private fun onPreflightContactLost(code: String, status: String) {
-        contactSince = 0L
-        settledWindowStarted = false
-        bpmAfterContactDeadline = 0L
-        contactWaitDeadline = elapsedRealtime() + CONTACT_WAIT_MS
-        resetLive()
-        if (_state.value.phase != MeasurePhase.LeadOff || _state.value.status != status) {
-            transition(MeasurePhase.LeadOff, code) {
-                _state.value.copy(
-                    phase = MeasurePhase.LeadOff,
-                    status = status,
-                    waveform = LiveWaveformFrame(),
-                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
-                )
-            }
-        }
-    }
-
-    private fun handleStartingCaptureBatch(batch: EcgBatch) {
-        logCaptureBatch(batch)
-        if (!batch.contactValid) {
-            captureContactSince = 0L
-            if (_state.value.status != "Touch the button") {
-                transition(MeasurePhase.StartingCapture, "CAPTURE_CONTACT_LOST") {
-                    _state.value.copy(
-                        phase = MeasurePhase.StartingCapture,
-                        status = "Touch the button",
-                    )
-                }
-            }
-            return
-        }
+    private fun onCountdownFinished() {
+        if (terminal || _state.value.phase != MeasurePhase.ArmedCountdown) return
         if (offBody?.isBlocked() == true) {
             failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
             return
         }
-        val now = elapsedRealtime()
-        if (captureContactSince == 0L) {
-            captureContactSince = now
-        }
-        if (_state.value.status != "Starting capture…") {
-            transition(MeasurePhase.StartingCapture, "CAPTURE_CONTACT_DEBOUNCE") {
-                _state.value.copy(
-                    phase = MeasurePhase.StartingCapture,
-                    status = "Starting capture…",
-                )
-            }
-        }
-        if (now - captureContactSince < CONTACT_DEBOUNCE_MS) return
-        if (!beginRecording()) return
-        handleRecordingBatch(batch, alreadyLogged = true)
-    }
-
-    private fun handleRecordingBatch(batch: EcgBatch, alreadyLogged: Boolean = false) {
-        if (!alreadyLogged) logCaptureBatch(batch)
-        if (!batch.contactValid) {
-            failTerminal("CONTACT_LOSS", "Recording failed", "ECG contact was lost.")
-            return
-        }
-        if (offBody?.isBlocked() == true) {
-            failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
-            return
-        }
-        val now = elapsedRealtime()
-        liveEcgProcessor.append(batch)
-        try {
-            recorder.addEcg(batch)
-        } catch (error: Exception) {
-            failTerminal("CAPTURE_INVALID", "Recording failed", error.message ?: "Invalid ECG signal.")
-            return
-        }
-        publishWaveformIfDue(now)
-        requestBpmAnalysis(now, BpmEpoch.CAPTURE)
-        if (!captureBpmConfirmed && captureBpmDeadline > 0L && now >= captureBpmDeadline) {
-            failTerminal(
-                "CAPTURE_BPM_TIMEOUT",
-                "Recording failed",
-                "Signal unstable. Please try again.",
-            )
-            return
-        }
-        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) completeRecording()
-    }
-
-    private fun beginRecording(): Boolean {
-        if (_state.value.phase == MeasurePhase.Recording || terminal) return false
         val sessionId = "${wallClock()}-$attemptId"
         val selectedWrist = wrist()
         try {
@@ -452,89 +326,136 @@ class EcgMeasurementCoordinator(
                 signFactor = EcgWearContract.signFactorFor(selectedWrist),
                 nowMs = wallClock(),
             )
+            recorder.addBpmObservation(LiveBpmAvailability.COLLECTING.name)
+            liveEcgProcessor.beginCaptureWindow(EcgWearContract.signFactorFor(selectedWrist))
+            awaitingFirstBatch = true
+            lastUiWaveformAt = 0L
+            lastBpmScheduleAt = 0L
+            lastAcquisitionLogAt = 0L
+            bpmDirty = false
+            bpmSmoother.reset()
+            synchronized(bpmLock) { pendingBpmSnapshot = null }
+            transition(MeasurePhase.Recording, "RECORDING") {
+                MeasureUiState(
+                    phase = MeasurePhase.Recording,
+                    status = "Recording",
+                    remainingSec = remainingSecFromSamples(),
+                    sessionId = sessionId,
+                    samsungReady = true,
+                    waveform = liveEcgProcessor.waveformFrame(0L),
+                    bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+                    error = null,
+                )
+            }
+            startEcgListener(attemptId)
+            lastBatchAt = elapsedRealtime()
+            startStreamMonitor(attemptId)
         } catch (error: RuntimeException) {
             failTerminal(
                 "FOREGROUND_OR_RECORDER_START",
                 "Recording failed",
                 error.message ?: "Health foreground service could not start.",
             )
-            return false
         }
-        val now = elapsedRealtime()
-        recordingStartedAt = now
-        captureBpmDeadline = now + CAPTURE_BPM_DEADLINE_MS
-        captureBpmConfirmed = false
-        val seed = preflightBpmSeed
-        val bpmState = if (seed != null) {
-            bpmSmoother.seed(now, seed)
-        } else {
-            LiveBpmState(LiveBpmAvailability.COLLECTING)
+    }
+
+    private fun startEcgListener(id: Long) {
+        streamGeneration += 1
+        val gen = streamGeneration
+        val createdSubscription = sensor.startEcg(
+            maxDurationMs = LISTENER_MAX_MS,
+            onError = { error -> events.trySend(AcqEvent.SensorError(id, gen, error)) },
+            onBatch = { batch -> events.trySend(AcqEvent.Batch(id, gen, batch)) },
+            onDeadline = { events.trySend(AcqEvent.Deadline(id, gen)) },
+        )
+        if (!isCurrent(id) || terminal || gen != streamGeneration) {
+            createdSubscription.close()
+            return
         }
-        transition(MeasurePhase.Recording, "RECORDING") {
-            _state.value.copy(
-                phase = MeasurePhase.Recording,
-                status = "Recording",
-                remainingSec = 30,
-                sessionId = sessionId,
-                waveform = liveEcgProcessor.waveformFrame(0L),
-                bpm = bpmState,
-                error = null,
-            )
-        }
-        val id = attemptId
-        recordingTimerJob = scope.launch(mainDispatcher) {
-            while (isCurrent(id) && !terminal && _state.value.phase == MeasurePhase.Recording) {
-                val elapsed = elapsedRealtime() - recordingStartedAt
-                val left = ((EcgWearContract.MEASURE_DURATION_MS - elapsed + 999L) / 1000L)
-                    .toInt().coerceAtLeast(0)
-                val current = _state.value
-                if (current.remainingSec != left) {
-                    _state.value = current.copy(remainingSec = left)
-                }
-                if (elapsed > RECORDING_DEADLINE_MS) {
-                    failTerminal(
-                        "INCOMPLETE_CAPTURE",
-                        "Recording failed",
-                        "The ECG recording did not complete. Please try again.",
-                    )
+        subscription = createdSubscription
+    }
+
+    private fun startStreamMonitor(id: Long) {
+        val gen = streamGeneration
+        streamMonitorJob?.cancel()
+        streamMonitorJob = scope.launch(mainDispatcher) {
+            while (isCurrent(id) && !terminal) {
+                delay(STREAM_POLL_MS)
+                val ticked = elapsedRealtime()
+                if (lastBatchAt > 0L && ticked - lastBatchAt > EcgWearContract.ECG_STALL_MS) {
+                    events.trySend(AcqEvent.StreamStall(id, gen))
                     return@launch
                 }
-                delay(STREAM_POLL_MS)
             }
         }
-        return true
     }
 
-    private fun startCapture(seed: BpmEstimate) {
-        if (terminal || _state.value.phase != MeasurePhase.CalculatingBpm) return
-        preflightBpmSeed = seed
-        val now = elapsedRealtime()
-        captureContactSince = 0L
-        captureContactDeadline = now + CONTACT_WAIT_MS
-        transition(MeasurePhase.StartingCapture, "STARTING_CAPTURE") {
-            _state.value.copy(
-                phase = MeasurePhase.StartingCapture,
-                status = "Starting capture…",
-                bpm = bpmSmoother.seed(now, seed),
+    private fun handleBatch(batch: EcgBatch) {
+        if (terminal || _state.value.phase != MeasurePhase.Recording) return
+        lastBatchAt = elapsedRealtime()
+        logCaptureBatch(batch)
+        if (batch.samplesMv.isEmpty() || batch.samplesMv.any { !it.isFinite() }) {
+            failTerminal("INVALID_BATCH", "Recording failed", "Samsung returned an invalid ECG batch.")
+            return
+        }
+        if (awaitingFirstBatch && !batch.contactValid) {
+            failTerminal(
+                "CONTACT_NOT_READY",
+                "Recording failed",
+                "ECG contact was not detected. Keep touching the button and try again.",
+            )
+            return
+        }
+        awaitingFirstBatch = false
+        if (!batch.contactValid) {
+            failTerminal("CONTACT_LOSS", "Recording failed", "ECG contact was lost.")
+            return
+        }
+        if (offBody?.isBlocked() == true) {
+            failTerminal("OFF_BODY", "Recording failed", "Watch not worn properly.")
+            return
+        }
+        val remaining = EcgSessionRecorder.EXPECTED_SAMPLES - recorder.sampleCount
+        if (remaining <= 0) return
+        val toStore = if (batch.samplesMv.size > remaining) batch.keepPrefix(remaining) else batch
+        try {
+            recorder.addEcgAtomically(toStore)
+        } catch (error: Exception) {
+            failTerminal("CAPTURE_INVALID", "Recording failed", error.message ?: "Invalid ECG signal.")
+            return
+        }
+        liveEcgProcessor.append(toStore)
+        val now = lastBatchAt
+        publishWaveformIfDue(now)
+        bpmDirty = true
+        requestBpmAnalysis(now, BpmEpoch.CAPTURE)
+        val leftSec = remainingSecFromSamples()
+        if (_state.value.remainingSec != leftSec) {
+            _state.value = _state.value.copy(remainingSec = leftSec)
+        }
+        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) {
+            closeListenerFirst()
+            finishValidateEncodeSave()
+        }
+    }
+
+    private fun handleDeadline() {
+        if (terminal) return
+        closeListenerFirst()
+        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES &&
+            _state.value.phase == MeasurePhase.Recording
+        ) {
+            finishValidateEncodeSave()
+        } else {
+            failTerminal(
+                "INCOMPLETE_CAPTURE",
+                "Recording failed",
+                "The ECG recording did not complete. Please try again.",
             )
         }
-        subscription?.close()
-        subscription = null
-        sensorRun = SensorRun.CAPTURE
-        lastBatchAt = elapsedRealtime()
-        bpmWorkerJob?.cancel()
-        bpmWorkerJob = null
-        synchronized(bpmLock) { pendingBpmSnapshot = null }
-        lastBpmScheduleAt = 0L
-        liveEcgProcessor.beginCaptureWindow(EcgWearContract.signFactorFor(wrist()))
-        try {
-            startEcgListener(attemptId)
-        } catch (error: RuntimeException) {
-            failTerminal("START_FAILED", "Recording failed", error.message ?: "ECG listener could not start.")
-        }
     }
 
-    private fun completeRecording() {
+    private fun finishValidateEncodeSave() {
         if (terminal || _state.value.phase != MeasurePhase.Recording) return
         val snapshot = try {
             recorder.takeSnapshot().also { it.requireCompleteCapture() }
@@ -549,12 +470,7 @@ class EcgMeasurementCoordinator(
         val id = attemptId
         val sessionId = _state.value.sessionId ?: snapshot.sessionId
         terminal = true
-        streamMonitorJob?.cancel()
-        streamMonitorJob = null
-        recordingTimerJob?.cancel()
-        recordingTimerJob = null
-        bpmWorkerJob?.cancel()
-        bpmWorkerJob = null
+        cancelJobs()
         cleanupAcquisition()
         transition(MeasurePhase.Saving, "SAVING") {
             _state.value.copy(phase = MeasurePhase.Saving, status = "Saving…", remainingSec = 0)
@@ -581,8 +497,11 @@ class EcgMeasurementCoordinator(
                             status = if (pushed) "Sent to phone" else "Saved on watch",
                             sessionId = sessionId,
                             remainingSec = 0,
-                            error = if (pushed) null else
-                                "Phone not linked. Keep GalaxyVitals open nearby, then Sync.",
+                            error = if (pushed) {
+                                null
+                            } else {
+                                "Phone not linked. Keep GalaxyVitals open nearby, then Sync."
+                            },
                         )
                     }
                 }
@@ -654,24 +573,33 @@ class EcgMeasurementCoordinator(
     }
 
     private fun cleanupAttempt(releaseLease: Boolean) {
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
-        streamMonitorJob?.cancel()
-        streamMonitorJob = null
-        recordingTimerJob?.cancel()
-        recordingTimerJob = null
-        bpmWorkerJob?.cancel()
-        bpmWorkerJob = null
-        synchronized(bpmLock) { pendingBpmSnapshot = null }
+        cancelJobs()
         cleanupAcquisition()
         recorder.cancel()
         if (releaseLease) releaseForegroundLease()
         resetLive()
     }
 
-    private fun cleanupAcquisition() {
+    private fun cancelJobs() {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
+        countdownJob?.cancel()
+        countdownJob = null
+        streamMonitorJob?.cancel()
+        streamMonitorJob = null
+        bpmWorkerJob?.cancel()
+        bpmWorkerJob = null
+        synchronized(bpmLock) { pendingBpmSnapshot = null }
+    }
+
+    private fun closeListenerFirst() {
+        streamGeneration += 1
         subscription?.close()
         subscription = null
+    }
+
+    private fun cleanupAcquisition() {
+        closeListenerFirst()
         if (!sensorStopped) {
             runCatching(sensor::stop)
             sensorStopped = true
@@ -692,75 +620,13 @@ class EcgMeasurementCoordinator(
         foregroundLease = null
     }
 
-    private fun dispatchAttempt(id: Long, event: () -> Unit) {
-        scope.launch(mainDispatcher) {
-            if (isCurrent(id) && !terminal) event()
-        }
-    }
-
-    private fun dispatch(id: Long, generation: Long, event: () -> Unit) {
-        scope.launch(mainDispatcher) {
-            if (isCurrent(id) && generation == streamGeneration && !terminal) event()
-        }
-    }
-
-    private fun checkDeadlines(now: Long) {
-        if (terminal) return
-        if (_state.value.phase == MeasurePhase.StartingCapture) {
-            if (captureContactDeadline > 0L && now >= captureContactDeadline) {
-                failTerminal(
-                    "CAPTURE_CONTACT_TIMEOUT",
-                    "Recording failed",
-                    "ECG contact was not detected in time. Keep touching the button and try again.",
-                )
-            }
-            return
-        }
-        if (sensorRun != SensorRun.PREFLIGHT) return
-        val phase = _state.value.phase
-        if (phase in setOf(
-                MeasurePhase.Recording,
-                MeasurePhase.Saving,
-                MeasurePhase.Success,
-            )
-        ) {
-            return
-        }
-        if (preflightAbsoluteDeadline > 0L && now >= preflightAbsoluteDeadline) {
-            failTerminal(
-                "PREFLIGHT_DEADLINE",
-                "Recording failed",
-                "ECG contact was not detected in time. Adjust the watch and try again.",
-            )
-            return
-        }
-        if (contactSince == 0L && contactWaitDeadline > 0L && now >= contactWaitDeadline) {
-            failTerminal(
-                "CONTACT_TIMEOUT",
-                "Recording failed",
-                "ECG contact was not detected in time. Adjust the watch and try again.",
-            )
-            return
-        }
-        if (contactSince > 0L &&
-            preflightBpmSeed == null &&
-            bpmAfterContactDeadline > 0L &&
-            now >= bpmAfterContactDeadline
-        ) {
-            failTerminal(
-                "BPM_PREFLIGHT_TIMEOUT",
-                "Recording failed",
-                "Could not measure heart rate. Please try again.",
-            )
-        }
-    }
-
     private fun resetLive() {
         liveEcgProcessor.reset(EcgWearContract.signFactorFor(wrist()))
         bpmSmoother.reset()
     }
 
     private fun requestBpmAnalysis(now: Long, epoch: BpmEpoch) {
+        if (!bpmDirty) return
         val snapshot = BpmSnapshot(
             rawWindow = liveEcgProcessor.analysisSamples,
             livePpg = liveEcgProcessor.livePpg,
@@ -774,6 +640,7 @@ class EcgMeasurementCoordinator(
         if (workerActive) return
         if (lastBpmScheduleAt != 0L && now - lastBpmScheduleAt < BPM_UI_INTERVAL_MS) return
         lastBpmScheduleAt = now
+        bpmDirty = false
         val id = attemptId
         val gen = streamGeneration
         bpmWorkerJob = scope.launch(computeDispatcher) {
@@ -790,45 +657,25 @@ class EcgMeasurementCoordinator(
                     nowMs = snap.now,
                     epoch = snap.epoch,
                 )
-                withContext(mainDispatcher) {
-                    if (!isCurrent(id) || gen != streamGeneration || terminal) return@withContext
-                    onBpmEstimate(snap, estimated)
-                }
+                events.trySend(AcqEvent.BpmResult(id, gen, snap, estimated))
             }
         }
     }
 
     private fun onBpmEstimate(snapshot: BpmSnapshot, estimated: BpmEstimate?) {
-        val phase = _state.value.phase
+        if (_state.value.phase != MeasurePhase.Recording) return
         if (estimated != null) {
             bpmLogger(
                 "publish epoch=${estimated.epoch} source=${estimated.source} bSqi=${estimated.bSqi} " +
                     "rr=${estimated.rrCount} bpm=${estimated.bpm}",
             )
-        } else if (phase == MeasurePhase.Recording || phase == MeasurePhase.CalculatingBpm) {
+            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
+        } else {
             bpmLogger(
                 "abstain epoch=${snapshot.epoch} analysisSamples=${snapshot.analysisSampleCount} " +
                     "ppgPoints=${snapshot.livePpg.size}",
             )
-        }
-        if (phase == MeasurePhase.CalculatingBpm &&
-            estimated != null &&
-            estimated.epoch == BpmEpoch.PREFLIGHT &&
-            estimated.rrCount >= 4
-        ) {
-            startCapture(estimated)
-            return
-        }
-        if (phase != MeasurePhase.Recording) return
-        if (snapshot.epoch != BpmEpoch.CAPTURE) return
-        if (estimated != null) {
-            if (!captureBpmConfirmed) {
-                captureBpmConfirmed = true
-                captureBpmDeadline = 0L
-            }
-            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
-        } else if (captureBpmConfirmed) {
-            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
+            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, null))
         }
     }
 
@@ -842,7 +689,7 @@ class EcgMeasurementCoordinator(
     private fun logCaptureBatch(batch: EcgBatch) {
         val phase = _state.value.phase
         val now = lastBatchAt
-        val force = phase == MeasurePhase.StartingCapture || batch.leadOff != 0
+        val force = awaitingFirstBatch || batch.leadOff != 0
         if (!force && lastAcquisitionLogAt != 0L && now - lastAcquisitionLogAt < 1_000L) return
         lastAcquisitionLogAt = now
         acquisitionLogger(
@@ -850,6 +697,11 @@ class EcgMeasurementCoordinator(
                 "batchSize=${batch.samplesMv.size} generation=$streamGeneration " +
                 "samples=${recorder.sampleCount}",
         )
+    }
+
+    private fun remainingSecFromSamples(): Int {
+        val left = (EcgSessionRecorder.EXPECTED_SAMPLES - recorder.sampleCount).coerceAtLeast(0)
+        return ((left * EcgSessionRecorder.EXPECTED_PERIOD_MS + 999L) / 1000L).toInt()
     }
 
     private fun isCurrent(id: Long): Boolean = id == attemptId
@@ -879,22 +731,62 @@ class EcgMeasurementCoordinator(
         val epoch: BpmEpoch,
     )
 
+    private sealed interface AcqEvent {
+        data object Start : AcqEvent
+        data object Cancel : AcqEvent
+        data object HostStop : AcqEvent
+        data object HostResume : AcqEvent
+        data class ConnectResult(val attemptId: Long, val availability: SensorAvailability) : AcqEvent
+        data class ConnectTimeout(val attemptId: Long) : AcqEvent
+        data class CountdownFinished(val attemptId: Long) : AcqEvent
+        data class Batch(val attemptId: Long, val generation: Long, val batch: EcgBatch) : AcqEvent
+        data class Deadline(val attemptId: Long, val generation: Long) : AcqEvent
+        data class SensorError(val attemptId: Long, val generation: Long, val error: EcgSensorError) : AcqEvent
+        data class OffBody(val attemptId: Long, val blocked: Boolean) : AcqEvent
+        data class StreamStall(val attemptId: Long, val generation: Long) : AcqEvent
+        data class BpmResult(
+            val attemptId: Long,
+            val generation: Long,
+            val snapshot: BpmSnapshot,
+            val estimated: BpmEstimate?,
+        ) : AcqEvent
+    }
+
     companion object {
         private const val LOG_TAG = "EcgMeasurement"
         private const val BPM_LOG_TAG = "EcgBpm"
         private const val ACQ_LOG_TAG = "EcgAcquisition"
         private const val CONNECT_TIMEOUT_MS = 3_500L
-        private const val CONTACT_WAIT_MS = 10_000L
-        private const val BPM_AFTER_CONTACT_MS = 15_000L
-        private const val PREFLIGHT_ABSOLUTE_DEADLINE_MS = 25_000L
-        private const val CAPTURE_BPM_DEADLINE_MS = 12_000L
-        private const val CONTACT_DEBOUNCE_MS = 1_000L
-        private const val SENSOR_SETTLE_MS = 3_000L
-        private const val PRE_RECORD_HOLD_MS = CONTACT_DEBOUNCE_MS + SENSOR_SETTLE_MS
+        private const val COUNTDOWN_MS = 3_000L
+        private const val COUNTDOWN_TICK_MS = 200L
+        private const val LISTENER_MAX_MS = 30_000L
         private const val STREAM_POLL_MS = 200L
-        private const val RECORDING_DEADLINE_MS = 31_000L
         private const val UI_WAVEFORM_INTERVAL_MS = 100L
         private const val BPM_UI_INTERVAL_MS = 1_000L
-        private val CAPTURE_PHASES = setOf(MeasurePhase.StartingCapture, MeasurePhase.Recording)
+        private const val COUNTDOWN_STATUS = "ใส่นาฬิกาให้กระชับและวางนิ้วบนปุ่ม"
+        private val ACTIVE_BODY_PHASES = setOf(MeasurePhase.ArmedCountdown, MeasurePhase.Recording)
     }
+}
+
+private fun EcgBatch.keepPrefix(count: Int): EcgBatch {
+    if (count >= samplesMv.size) return this
+    val ppg = ppgGreen?.let { green ->
+        val kept = green.ecgSampleOffsets.indices.filter { index -> green.ecgSampleOffsets[index] < count }
+        if (kept.isEmpty()) {
+            null
+        } else {
+            PpgGreenBatch(
+                values = IntArray(kept.size) { green.values[kept[it]] },
+                ecgSampleOffsets = IntArray(kept.size) { green.ecgSampleOffsets[kept[it]] },
+                sensorTimestampsMs = LongArray(kept.size) { green.sensorTimestampsMs[kept[it]] },
+                nominalSampleRateHz = green.nominalSampleRateHz,
+            )
+        }
+    }
+    return copy(
+        samplesMv = samplesMv.copyOf(count),
+        sensorTimestampsMs = sensorTimestampsMs.copyOf(count),
+        sampleFlags = sampleFlags.copyOf(count),
+        ppgGreen = ppg,
+    )
 }

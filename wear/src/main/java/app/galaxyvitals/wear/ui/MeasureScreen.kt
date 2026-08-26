@@ -51,8 +51,7 @@ fun MeasureScreen(
         onDispose { view.keepScreenOn = previousKeepScreenOn }
     }
 
-    val showHomeKeyHint = state.status == "Touch the button" &&
-        (state.phase == MeasurePhase.LeadOff || state.phase == MeasurePhase.StartingCapture)
+    val showHomeKeyHint = state.phase == MeasurePhase.ArmedCountdown
     ScreenScaffold { contentPadding ->
         Box(Modifier.fillMaxSize()) {
             Column(
@@ -69,8 +68,22 @@ fun MeasureScreen(
                     textAlign = TextAlign.Center,
                 )
                 when (state.phase) {
-                    MeasurePhase.Connecting, MeasurePhase.Warmup -> {
+                    MeasurePhase.Connecting -> {
                         CircularProgressIndicator()
+                    }
+                    MeasurePhase.ArmedCountdown -> {
+                        Text(
+                            "Wear the watch snugly and rest a finger on the top button",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            "%02d".format(state.remainingSec),
+                            style = MaterialTheme.typography.displaySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center,
+                        )
                     }
                     MeasurePhase.PermissionRequired -> {
                         Text(
@@ -92,25 +105,6 @@ fun MeasureScreen(
                         )
                         Button(onClick = onResolve, modifier = Modifier.fillMaxWidth()) {
                             Text("Open Samsung Health")
-                        }
-                    }
-                    MeasurePhase.Ready, MeasurePhase.LeadOff, MeasurePhase.CalculatingBpm,
-                    MeasurePhase.StartingCapture,
-                    -> {
-                        Text(
-                            when {
-                                showHomeKeyHint -> "Top button"
-                                state.phase == MeasurePhase.LeadOff -> "Keep the watch snug"
-                                state.phase == MeasurePhase.CalculatingBpm -> "Keep still"
-                                state.phase == MeasurePhase.StartingCapture -> "Keep still"
-                                else -> "Hold still"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                        if (state.waveform.points.size >= 2) {
-                            EcgWaveformMini(state.waveform, Modifier.fillMaxWidth())
                         }
                     }
                     MeasurePhase.Recording -> RecordingReadout(state, Modifier.weight(1f))

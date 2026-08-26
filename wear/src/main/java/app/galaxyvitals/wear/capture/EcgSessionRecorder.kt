@@ -65,6 +65,11 @@ class EcgSessionRecorder {
         }
     }
 
+    fun addEcgAtomically(batch: EcgBatch) = addEcg(batch)
+
+    @Suppress("UNUSED_PARAMETER")
+    fun addBpmObservation(status: String) = Unit
+
     fun addEcg(batch: EcgBatch) {
         synchronized(lock) {
             if (!recording || batch.samplesMv.isEmpty()) return

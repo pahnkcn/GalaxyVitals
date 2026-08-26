@@ -24,6 +24,7 @@ import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,113 +34,248 @@ import org.junit.Test
 
 class EcgMeasurementCoordinatorTest {
     @Test
-    fun stableContactDoesNotRecordUntilReliableBpmAndRestartsListener() {
-        val harness = Harness()
-        harness.coordinator.startHardware()
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0, valueMv = 140f))
-        harness.now = 400L
-        harness.sensor.emit(batch(sequence = 1, valueMv = 140f))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
-        harness.now = 2_101L
-        harness.sensor.emit(batch(sequence = 2, valueMv = 140f))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.coordinator.state.value.liveMv).isNotEmpty()
-        assertThat(harness.coordinator.state.value.liveMv.maxOf { kotlin.math.abs(it) }).isLessThan(5f)
-        val preflight = harness.coordinator.state.value.waveform
-        assertThat(preflight.lastSampleIndex - preflight.firstSampleIndex).isEqualTo(1_499L)
-
-        harness.now = 4_101L
-        harness.sensor.emit(batch(sequence = 3))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.CalculatingBpm)
-        assertThat(harness.sensor.startCount).isEqualTo(1)
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.coordinator.state.value.status).isEqualTo("Calculating heart rate…")
-
-        streamUntilCapture(harness, startSequence = 4)
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
-        assertThat(harness.sensor.startCount).isEqualTo(2)
-        assertThat(harness.recorder.isRecording).isFalse()
-
-        holdUntilRecording(harness)
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.foregroundAcquires).isEqualTo(1)
-        assertThat(harness.recorder.isRecording).isTrue()
-        assertThat(harness.recorder.sampleCount).isGreaterThan(0)
-        assertThat(harness.coordinator.state.value.hrBpm).isNotNull()
-    }
-
-    @Test
-    fun missingFingerContactAsksToTouchTheButton() {
-        val harness = Harness()
-        harness.coordinator.startHardware()
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.LeadOff)
-        assertThat(harness.coordinator.state.value.status).isEqualTo("Touch the button")
-    }
-
-    @Test
-    fun contactMustRemainStableForFullDebounce() {
-        val harness = Harness()
-        harness.coordinator.startHardware()
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0))
-        harness.now = 250L
-        harness.sensor.emit(batch(sequence = 1, leadOff = 1))
-        harness.now = 300L
-        harness.sensor.emit(batch(sequence = 2))
-        harness.now = 700L
-        harness.sensor.emit(batch(sequence = 3))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
-        assertThat(harness.foregroundAcquires).isEqualTo(0)
-        assertThat(harness.recorder.isRecording).isFalse()
-    }
-
-    @Test
-    fun recordingFailureIsTerminalUntilRetryAndStaleCallbacksAreIgnored() {
+    fun successfulCaptureOpensExactlyOneOnDemandListener() {
         val harness = Harness()
         startRecording(harness)
-        val captureListener = harness.sensor.listeners.lastIndex
-        val preflightListener = 0
-        harness.sensor.emit(captureListener, batch(sequence = 1, leadOff = 1))
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
+        assertThat(harness.foregroundAcquires).isEqualTo(1)
+        assertThat(harness.recorder.isRecording).isTrue()
+
+        streamUntilTerminal(harness, samples = FloatArray(15_000) { 0.12f })
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(requireNotNull(harness.savedGzip)).isEqualTo(harness.pushedGzip)
+    }
+
+    @Test
+    fun listenerClosesWithin30000MsOnSuccessCancelErrorAndDeadline() {
+        val success = Harness()
+        startRecording(success)
+        val successStart = success.sensor.listeners.last().startedAtMs
+        streamUntilTerminal(success, samples = FloatArray(15_000) { 0.12f })
+        assertThat(success.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
+        assertThat(success.sensor.listeners.last().closedAtMs!! - successStart).isAtMost(30_000L)
+        assertThat(success.sensor.closeCount).isEqualTo(1)
+
+        val cancelled = Harness()
+        startRecording(cancelled)
+        cancelled.advance(100L)
+        cancelled.coordinator.cancel()
+        assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(cancelled.sensor.startCount).isEqualTo(1)
+        assertThat(cancelled.sensor.closeCount).isEqualTo(1)
+        assertThat(cancelled.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
+
+        val errored = Harness()
+        startRecording(errored)
+        errored.advance(50L)
+        errored.sensor.emitError(EcgSensorError(EcgSensorErrorCode.TRACKER, "tracker failed"))
+        assertThat(errored.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(errored.sensor.startCount).isEqualTo(1)
+        assertThat(errored.sensor.closeCount).isEqualTo(1)
+        assertThat(errored.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
+
+        val deadline = Harness()
+        startRecording(deadline)
+        val started = deadline.sensor.listeners.last().startedAtMs
+        deadline.now = started + 30_000L
+        deadline.sensor.fireDeadline()
+        assertThat(deadline.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(deadline.transitionLogs.joinToString()).contains("INCOMPLETE_CAPTURE")
+        assertThat(deadline.sensor.startCount).isEqualTo(1)
+        assertThat(deadline.sensor.closeCount).isEqualTo(1)
+        assertThat(deadline.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
+        assertThat(deadline.savedGzip).isNull()
+    }
+
+    @Test
+    fun fifteenThousandSamplesSucceedAnd14995FailIncompleteCapture() {
+        val complete = Harness()
+        startRecording(complete)
+        streamUntilTerminal(complete, samples = FloatArray(15_000) { 0.11f })
+        assertThat(complete.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        val gzip = requireNotNull(complete.savedGzip)
+        val parsed = EcgCsvParser.parseBytes(
+            gzip,
+            gzip = true,
+            sessionIdHint = requireNotNull(complete.coordinator.state.value.sessionId),
+        )
+        assertThat(parsed.samples).hasSize(15_000)
+        assertThat(complete.sensor.startCount).isEqualTo(1)
+
+        val incomplete = Harness()
+        startRecording(incomplete)
+        streamPrepared(
+            incomplete,
+            FloatArray(14_995) { 0.11f },
+            startSequence = 0,
+            includePpg = false,
+            batchSize = 5,
+        )
+        assertThat(incomplete.recorder.sampleCount).isEqualTo(14_995)
+        incomplete.sensor.fireDeadline()
+        assertThat(incomplete.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(incomplete.transitionLogs.joinToString()).contains("INCOMPLETE_CAPTURE")
+        assertThat(incomplete.savedGzip).isNull()
+        assertThat(incomplete.sensor.closeCount).isEqualTo(1)
+    }
+
+    @Test
+    fun firstBatchLeadOffFailsClosedAsContactNotReady() {
+        val harness = Harness()
+        startRecording(harness)
+        assertThat(harness.recorder.isRecording).isTrue()
+        assertThat(harness.recorder.sampleCount).isEqualTo(0)
+        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
+
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.sensor.startCount).isEqualTo(2)
-        assertThat(harness.sensor.closeCount).isEqualTo(2)
+        assertThat(harness.transitionLogs.joinToString()).contains("CONTACT_NOT_READY")
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
         assertThat(harness.sensor.stopCount).isEqualTo(1)
         assertThat(harness.sensor.disconnectCount).isEqualTo(1)
         assertThat(harness.foregroundCloses).isEqualTo(1)
-
-        harness.sensor.emit(captureListener, batch(sequence = 2))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.sensor.startCount).isEqualTo(2)
-
-        harness.coordinator.retry()
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
-        assertThat(harness.sensor.startCount).isEqualTo(3)
-        harness.sensor.emit(preflightListener, batch(sequence = 5, leadOff = 1))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
+        assertThat(harness.recorder.isRecording).isFalse()
+        assertThat(harness.recorder.sampleCount).isEqualTo(0)
+        assertThat(harness.savedGzip).isNull()
+        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("leadOff=1")
+        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("generation=")
+        assertThat(harness.acquisitionLogs.none { log -> log.contains("samplesMv") }).isTrue()
     }
 
     @Test
-    fun stabilizingSensorDoesNotPublishBpm() {
+    fun missingBpmDoesNotAbortSave() {
+        val harness = Harness()
+        startRecording(harness)
+        streamUntilTerminal(harness, samples = FloatArray(15_000) { 0.02f * ((it % 3) - 1) })
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(harness.savedGzip).isNotNull()
+        assertThat(harness.coordinator.state.value.hrBpm).isNull()
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+    }
+
+    @Test
+    fun ppgDisagreementDoesNotAbortSave() {
+        val harness = Harness()
+        startRecording(harness)
+        val qrs = syntheticQrs(seconds = 30.0, bpm = 72.0)
+        streamPrepared(
+            harness,
+            qrs,
+            startSequence = 0,
+            includePpg = true,
+            bpm = 110,
+            stopWhen = {
+                harness.coordinator.state.value.phase in setOf(
+                    MeasurePhase.Saving,
+                    MeasurePhase.Success,
+                    MeasurePhase.Failed,
+                )
+            },
+        )
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(harness.savedGzip).isNotNull()
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+    }
+
+    @Test
+    fun staleCallbacksAfterRetryOrCancelAreIgnored() {
+        val cancelled = Harness()
+        startRecording(cancelled)
+        val cancelledListener = 0
+        cancelled.coordinator.cancel()
+        assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        cancelled.sensor.emit(cancelledListener, batch(sequence = 2, samples = FloatArray(10) { 9f }))
+        assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(cancelled.sensor.startCount).isEqualTo(1)
+
+        val retried = Harness()
+        startRecording(retried)
+        val firstListener = 0
+        retried.sensor.emit(batch(sequence = 0, leadOff = 1))
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        retried.sensor.emit(firstListener, batch(sequence = 1, samples = FloatArray(10) { 8f }))
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+
+        retried.coordinator.retry()
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(retried.sensor.startCount).isEqualTo(1)
+        retried.sensor.emit(firstListener, batch(sequence = 5, samples = FloatArray(10) { 7f }))
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(retried.recorder.sampleCount).isEqualTo(0)
+
+        retried.advance(3_000L)
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(retried.sensor.startCount).isEqualTo(2)
+        val before = retried.recorder.sampleCount
+        retried.sensor.emit(firstListener, batch(sequence = 6, samples = FloatArray(10) { 9f }))
+        assertThat(retried.recorder.sampleCount).isEqualTo(before)
+        assertThat(retried.coordinator.liveEcgProcessor.analysisSamples.toList()).doesNotContain(9f)
+    }
+
+    @Test
+    fun lastBatchOvershootKeepsPrefixCompleting15000() {
+        val harness = Harness()
+        startRecording(harness)
+        streamPrepared(
+            harness,
+            FloatArray(14_995) { 0.12f },
+            startSequence = 0,
+            includePpg = false,
+            batchSize = 5,
+        )
+        assertThat(harness.recorder.sampleCount).isEqualTo(14_995)
+        val overshoot = FloatArray(10) { index -> (index + 1) * 0.1f }
+        harness.now += 20L
+        harness.sensor.emit(
+            batch(
+                sequence = harness.nextSequence,
+                samples = overshoot,
+                timestampStartMs = 1_000L + 14_995L * 2L,
+            ),
+        )
+
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("batchSize=10")
+        val gzip = requireNotNull(harness.savedGzip)
+        val parsed = EcgCsvParser.parseBytes(
+            gzip,
+            gzip = true,
+            sessionIdHint = requireNotNull(harness.coordinator.state.value.sessionId),
+        )
+        assertThat(parsed.samples).hasSize(15_000)
+        assertThat(parsed.samples.takeLast(5).map { it.valueMv })
+            .containsExactly(0.1f, 0.2f, 0.3f, 0.4f, 0.5f)
+            .inOrder()
+        assertThat(parsed.samples.map { it.valueMv }).doesNotContain(0.6f)
+        assertThat(parsed.samples.map { it.valueMv }).doesNotContain(1.0f)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
+    }
+
+    @Test
+    fun armedCountdownWaitsThreeSecondsBeforeOpeningListener() {
         val harness = Harness()
         harness.coordinator.startHardware()
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0))
-        harness.now = 2_101L
-        harness.sensor.emit(batch(sequence = 1, samples = syntheticQrs(seconds = 3.0, bpm = 72.0)))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Ready)
-        assertThat(harness.coordinator.state.value.status).isEqualTo("Stabilizing sensor…")
-        assertThat(harness.coordinator.state.value.hrBpm).isNull()
-        assertThat(harness.coordinator.state.value.bpm.availability)
-            .isEqualTo(LiveBpmAvailability.COLLECTING)
-        assertThat(harness.coordinator.state.value.bpm.estimate).isNull()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.coordinator.state.value.status)
+            .isEqualTo("ใส่นาฬิกาให้กระชับและวางนิ้วบนปุ่ม")
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        assertThat(harness.recorder.isRecording).isFalse()
+        harness.advance(2_999L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        harness.advance(1L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
     }
 
     @Test
@@ -173,11 +309,10 @@ class EcgMeasurementCoordinatorTest {
     @Test
     fun recorderKeepsRawSamplesOnRightWrist() {
         val harness = Harness(wrist = Wrist.RIGHT)
-        reachStartingCapture(harness)
-        val nextSequence = holdUntilRecording(harness)
+        startRecording(harness)
         val raw = FloatArray(10) { index -> if (index == 0) 1.5f else 0.12f }
         harness.now += 20L
-        harness.sensor.emit(batch(sequence = nextSequence, samples = raw))
+        harness.sensor.emit(batch(sequence = harness.nextSequence, samples = raw))
 
         val recorded = harness.recorder.finish("watch")
         val parsed = EcgCsvParser.parseBytes(
@@ -315,97 +450,6 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
-    fun noiseWithoutReliableBpmTimesOutAt15SecondsWithoutAFile() {
-        val harness = Harness()
-        harness.coordinator.startHardware()
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0, samples = FloatArray(10) { 0.02f }))
-        var sequence = 1
-        while (harness.now < 15_200L) {
-            harness.now += 20L
-            harness.sensor.emit(
-                batch(sequence = sequence, samples = FloatArray(10) { 0.02f * ((sequence % 3) - 1) }),
-            )
-            sequence += 1
-        }
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.coordinator.state.value.error)
-            .isEqualTo("Could not measure heart rate. Please try again.")
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.recorder.sampleCount).isEqualTo(0)
-        assertThat(harness.savedGzip).isNull()
-    }
-
-    @Test
-    fun preflightCallbacksAfterRestartAreDropped() {
-        val harness = Harness()
-        startRecording(harness)
-        val preflight = 0
-        val before = harness.recorder.sampleCount
-        harness.sensor.emit(preflight, batch(sequence = 99, samples = FloatArray(10) { 9f }))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.recorder.sampleCount).isEqualTo(before)
-        assertThat(harness.coordinator.liveEcgProcessor.analysisSamples.toList()).doesNotContain(9f)
-    }
-
-    @Test
-    fun captureWithoutFreshBpmFailsAt12Seconds() {
-        val harness = Harness()
-        startRecording(harness)
-        val started = harness.now
-        var sequence = harness.nextSequence
-        val noise = FloatArray(10) { 0.01f }
-        while (harness.now < started + 12_000L) {
-            harness.now += 20L
-            harness.sensor.emit(batch(sequence = sequence, samples = noise))
-            sequence += 1
-        }
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.coordinator.state.value.error)
-            .isEqualTo("Signal unstable. Please try again.")
-        assertThat(harness.savedGzip).isNull()
-    }
-
-    @Test
-    fun completeCaptureWrites15000RawSamplesAt500Hz() {
-        val harness = Harness()
-        reachStartingCapture(harness)
-        val nextSequence = holdUntilRecording(harness)
-        val qrs = syntheticQrs(seconds = 30.0, bpm = 72.0)
-        streamPrepared(
-            harness,
-            qrs,
-            startSequence = nextSequence,
-            includePpg = false,
-            batchSize = 10,
-            stopWhen = {
-                harness.coordinator.state.value.phase in setOf(
-                    MeasurePhase.Saving,
-                    MeasurePhase.Success,
-                    MeasurePhase.Failed,
-                )
-            },
-        )
-        assertThat(harness.recorder.sampleCount).isEqualTo(0)
-        assertThat(harness.coordinator.state.value.phase)
-            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
-        val gzip = requireNotNull(harness.savedGzip)
-        assertThat(harness.pushedGzip).isEqualTo(gzip)
-        val parsed = EcgCsvParser.parseBytes(
-            gzip,
-            gzip = true,
-            sessionIdHint = requireNotNull(harness.coordinator.state.value.sessionId),
-        )
-        assertThat(parsed.samples).hasSize(15_000)
-        assertThat(parsed.captureSource.name).isEqualTo("HARDWARE")
-        assertThat(parsed.schemaVersion).isEqualTo(2)
-        val duration = parsed.samples.last().relMs - parsed.samples.first().relMs
-        assertThat(duration).isEqualTo(29_998L)
-        val hz = 14_999.0 * 1000.0 / duration
-        assertThat(hz).isWithin(5.0).of(500.0)
-    }
-
-    @Test
     fun waveformUiEmitsAtMost10HzUnderSamsungCallbackLoad() {
         val harness = Harness()
         startRecording(harness)
@@ -445,99 +489,42 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
-    fun contactWaitTimesOutAt10SecondsWithoutContact() {
+    fun completeCaptureWrites15000RawSamplesAt500Hz() {
         val harness = Harness()
-        harness.coordinator.startHardware()
-        harness.now = 100L
-        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
-        harness.now = 10_100L
-        harness.sensor.emit(batch(sequence = 1, leadOff = 1))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        startRecording(harness)
+        val qrs = syntheticQrs(seconds = 30.0, bpm = 72.0)
+        streamPrepared(
+            harness,
+            qrs,
+            startSequence = harness.nextSequence,
+            includePpg = false,
+            batchSize = 10,
+            stopWhen = {
+                harness.coordinator.state.value.phase in setOf(
+                    MeasurePhase.Saving,
+                    MeasurePhase.Success,
+                    MeasurePhase.Failed,
+                )
+            },
+        )
         assertThat(harness.recorder.sampleCount).isEqualTo(0)
-    }
-
-    @Test
-    fun firstCaptureBatchLeadOffStaysInStartingCaptureWithoutRecorder() {
-        val harness = Harness()
-        reachStartingCapture(harness)
-        harness.now += 20L
-        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
-        assertThat(harness.coordinator.state.value.status).isEqualTo("Touch the button")
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.recorder.sampleCount).isEqualTo(0)
-        assertThat(harness.foregroundAcquires).isEqualTo(0)
-        assertThat(harness.savedGzip).isNull()
-        assertThat(harness.pushedGzip).isNull()
-        assertThat(harness.acquisitionLogs).isNotEmpty()
-        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("phase=StartingCapture")
-        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("leadOff=1")
-        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("generation=")
-        assertThat(harness.acquisitionLogs.none { log -> log.contains("samplesMv") }).isTrue()
-    }
-
-    @Test
-    fun captureRearmRecordsOnlyBatchesAfterOneSecondContact() {
-        val harness = Harness()
-        reachStartingCapture(harness)
-        harness.now += 20L
-        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
-        val contactStart = harness.now + 20L
-        harness.now = contactStart
-        harness.sensor.emit(batch(sequence = 1, samples = FloatArray(10) { 99f }))
-        harness.now = contactStart + 980L
-        harness.sensor.emit(batch(sequence = 2, samples = FloatArray(10) { 99f }))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.foregroundAcquires).isEqualTo(0)
-
-        harness.now = contactStart + 1_000L
-        val firstRecorded = FloatArray(10) { index -> if (index == 0) 1.5f else 0.12f }
-        harness.sensor.emit(batch(sequence = 3, samples = firstRecorded))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.foregroundAcquires).isEqualTo(1)
-        assertThat(harness.recorder.isRecording).isTrue()
-        assertThat(harness.recorder.sampleCount).isEqualTo(10)
-        val recorded = harness.recorder.finish("watch")
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        val gzip = requireNotNull(harness.savedGzip)
+        assertThat(harness.pushedGzip).isEqualTo(gzip)
         val parsed = EcgCsvParser.parseBytes(
-            recorded.gzip,
+            gzip,
             gzip = true,
             sessionIdHint = requireNotNull(harness.coordinator.state.value.sessionId),
         )
-        assertThat(parsed.samples[0].valueMv).isEqualTo(1.5f)
-        assertThat(parsed.samples.map { it.valueMv }).doesNotContain(99f)
+        assertThat(parsed.samples).hasSize(15_000)
         assertThat(parsed.captureSource.name).isEqualTo("HARDWARE")
-    }
-
-    @Test
-    fun captureContactDebounceResetsWhenLeadOffReturns() {
-        val harness = Harness()
-        reachStartingCapture(harness)
-        val t0 = harness.now + 20L
-        harness.now = t0
-        harness.sensor.emit(batch(sequence = 0))
-        harness.now = t0 + 500L
-        harness.sensor.emit(batch(sequence = 1))
-        harness.now = t0 + 600L
-        harness.sensor.emit(batch(sequence = 2, leadOff = 1))
-        val t1 = t0 + 700L
-        harness.now = t1
-        harness.sensor.emit(batch(sequence = 3))
-        harness.now = t1 + 800L
-        harness.sensor.emit(batch(sequence = 4))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
-        assertThat(harness.coordinator.state.value.status).isEqualTo("Starting capture…")
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.foregroundAcquires).isEqualTo(0)
-
-        harness.now = t1 + 1_000L
-        harness.sensor.emit(batch(sequence = 5))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.recorder.isRecording).isTrue()
+        assertThat(parsed.schemaVersion).isEqualTo(2)
+        val duration = parsed.samples.last().relMs - parsed.samples.first().relMs
+        assertThat(duration).isEqualTo(29_998L)
+        val hz = 14_999.0 * 1000.0 / duration
+        assertThat(hz).isWithin(5.0).of(500.0)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
     }
 
     @Test
@@ -566,7 +553,9 @@ class EcgMeasurementCoordinatorTest {
     fun trackerPermissionErrorAfterConnectShowsPermissionRequired() {
         val harness = Harness()
         harness.coordinator.startHardware()
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        harness.advance(3_000L)
         assertThat(harness.sensor.startCount).isEqualTo(1)
         harness.sensor.emitError(
             EcgSensorError(
@@ -604,39 +593,11 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.sensor.connectCount).isEqualTo(1)
     }
 
-    @Test
-    fun captureContactTimeoutAfter10SecondsCleansUpWithoutFile() {
-        val harness = Harness()
-        reachStartingCapture(harness)
-        val captureListener = harness.sensor.listeners.lastIndex
-        harness.now += 20L
-        harness.sensor.emit(batch(sequence = 0, leadOff = 1))
-        harness.now += 10_100L
-        harness.sensor.emit(batch(sequence = 1, leadOff = 1))
-
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.coordinator.state.value.error).isEqualTo(
-            "ECG contact was not detected in time. Keep touching the button and try again.",
-        )
-        assertThat(harness.recorder.isRecording).isFalse()
-        assertThat(harness.recorder.sampleCount).isEqualTo(0)
-        assertThat(harness.savedGzip).isNull()
-        assertThat(harness.pushedGzip).isNull()
-        assertThat(harness.foregroundAcquires).isEqualTo(0)
-        assertThat(harness.sensor.startCount).isEqualTo(2)
-        assertThat(harness.sensor.closeCount).isEqualTo(2)
-        assertThat(harness.sensor.stopCount).isEqualTo(1)
-        assertThat(harness.sensor.disconnectCount).isEqualTo(1)
-
-        harness.sensor.emit(captureListener, batch(sequence = 2))
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-    }
-
     private class Harness(
         wrist: Wrist = Wrist.LEFT,
         compute: CoroutineDispatcher = Dispatchers.Unconfined,
     ) {
-        val sensor = FakeSensor()
+        val sensor = FakeSensor { now }
         val recorder = EcgSessionRecorder()
         var now = 1L
         var nextSequence = 0
@@ -649,6 +610,7 @@ class EcgMeasurementCoordinatorTest {
         val uiStates = ArrayList<MeasureUiState>()
         val computeDispatcher = compute
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        private val delayWaiters = ArrayList<DelayWaiter>()
         val coordinator = EcgMeasurementCoordinator(
             sensor = sensor,
             recorder = recorder,
@@ -665,8 +627,10 @@ class EcgMeasurementCoordinatorTest {
             offBodyFactory = { FakeOffBody() },
             mainDispatcher = Dispatchers.Unconfined,
             computeDispatcher = compute,
+            acquisitionDispatcher = Dispatchers.Unconfined,
             elapsedRealtime = { now },
             wallClock = { 1_700_000_000_000L + now },
+            delayMs = { virtualDelay(it) },
             transitionLogger = { transitionLogs += it },
             bpmLogger = {},
             acquisitionLogger = { acquisitionLogs += it },
@@ -677,7 +641,27 @@ class EcgMeasurementCoordinatorTest {
                 coordinator.state.collect { uiStates += it }
             }
         }
+
+        fun advance(ms: Long) {
+            now += ms
+            val due = delayWaiters.filter { waiter -> now >= waiter.deadline }
+            delayWaiters.removeAll(due.toSet())
+            due.forEach { waiter -> waiter.deferred.complete(Unit) }
+        }
+
+        private suspend fun virtualDelay(ms: Long) {
+            val deadline = now + ms
+            if (now >= deadline) return
+            val waiter = DelayWaiter(deadline, CompletableDeferred())
+            delayWaiters += waiter
+            waiter.deferred.await()
+        }
     }
+
+    private data class DelayWaiter(
+        val deadline: Long,
+        val deferred: CompletableDeferred<Unit>,
+    )
 
     private class GatedDispatcher(
         private val gate: CountDownLatch,
@@ -697,11 +681,21 @@ class EcgMeasurementCoordinatorTest {
         }
     }
 
-    private class FakeSensor : EcgSensor {
+    private class FakeSensor(
+        private val nowMs: () -> Long,
+    ) : EcgSensor {
         data class Listener(
+            val generation: Long,
+            val maxDurationMs: Long,
+            val startedAtMs: Long,
             val onError: (EcgSensorError) -> Unit,
             val onBatch: (EcgBatch) -> Unit,
-        )
+            val onDeadline: () -> Unit,
+            var closedAtMs: Long? = null,
+            var close: () -> Unit = {},
+        ) {
+            val setToCloseMs: Long? get() = closedAtMs?.minus(startedAtMs)
+        }
 
         val listeners = arrayListOf<Listener>()
         var availability = SensorAvailability(ready = true)
@@ -710,6 +704,8 @@ class EcgMeasurementCoordinatorTest {
         var closeCount = 0
         var stopCount = 0
         var disconnectCount = 0
+        val maxDurationMsHistory = ArrayList<Long>()
+        val lastMaxDurationMs: Long get() = maxDurationMsHistory.lastOrNull() ?: -1L
 
         override fun connect(onResult: (SensorAvailability) -> Unit) {
             connectCount += 1
@@ -725,14 +721,26 @@ class EcgMeasurementCoordinatorTest {
             onDeadline: () -> Unit,
         ): EcgSubscription {
             startCount += 1
-            listeners += Listener(onError, onBatch)
+            maxDurationMsHistory += maxDurationMs
+            val listener = Listener(
+                generation = startCount.toLong(),
+                maxDurationMs = maxDurationMs,
+                startedAtMs = nowMs(),
+                onError = onError,
+                onBatch = onBatch,
+                onDeadline = onDeadline,
+            )
+            listeners += listener
             var closed = false
-            return EcgSubscription {
+            val subscription = EcgSubscription {
                 if (!closed) {
                     closed = true
                     closeCount += 1
+                    listener.closedAtMs = nowMs()
                 }
             }
+            listener.close = { subscription.close() }
+            return subscription
         }
 
         fun emit(batch: EcgBatch) {
@@ -745,6 +753,12 @@ class EcgMeasurementCoordinatorTest {
 
         fun emitError(error: EcgSensorError) {
             listeners.last().onError(error)
+        }
+
+        fun fireDeadline(listenerIndex: Int = listeners.lastIndex) {
+            val listener = listeners[listenerIndex]
+            listener.close()
+            listener.onDeadline()
         }
 
         override fun stop() {
@@ -763,49 +777,33 @@ class EcgMeasurementCoordinatorTest {
     }
 
     companion object {
-        private fun reachStartingCapture(harness: Harness) {
-            harness.coordinator.startHardware()
-            harness.now = 100L
-            harness.sensor.emit(batch(sequence = 0))
-            streamUntilCapture(harness, startSequence = 1)
-            assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
-            assertThat(harness.sensor.startCount).isEqualTo(2)
-        }
-
-        private fun holdUntilRecording(harness: Harness, startSequence: Int = 0): Int {
-            var sequence = startSequence
-            val started = harness.now
-            while (harness.coordinator.state.value.phase == MeasurePhase.StartingCapture) {
-                harness.now += 20L
-                harness.sensor.emit(batch(sequence = sequence))
-                sequence += 1
-                check(harness.now - started < 2_500L) { "capture re-arm did not enter Recording" }
-            }
-            harness.nextSequence = sequence
-            return sequence
-        }
-
         private fun startRecording(harness: Harness) {
-            reachStartingCapture(harness)
-            holdUntilRecording(harness)
+            harness.coordinator.startHardware()
+            assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+            assertThat(harness.sensor.startCount).isEqualTo(0)
+            harness.advance(3_000L)
             assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-            assertThat(harness.recorder.sampleCount).isGreaterThan(0)
-            assertThat(harness.coordinator.state.value.hrBpm).isNotNull()
+            assertThat(harness.sensor.startCount).isEqualTo(1)
+            assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
+            assertThat(harness.recorder.isRecording).isTrue()
+            harness.nextSequence = 0
         }
 
-        private fun streamUntilCapture(harness: Harness, startSequence: Int) {
-            val listenerIndex = harness.sensor.listeners.lastIndex
-            val qrs = syntheticQrs(seconds = 12.0, bpm = 72.0)
+        private fun streamUntilTerminal(harness: Harness, samples: FloatArray) {
             streamPrepared(
                 harness,
-                qrs,
-                startSequence,
+                samples,
+                startSequence = harness.nextSequence,
                 includePpg = false,
                 batchSize = 10,
-                listenerIndex = listenerIndex,
-                stopWhen = { harness.coordinator.state.value.phase == MeasurePhase.StartingCapture },
+                stopWhen = {
+                    harness.coordinator.state.value.phase in setOf(
+                        MeasurePhase.Saving,
+                        MeasurePhase.Success,
+                        MeasurePhase.Failed,
+                    )
+                },
             )
-            assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.StartingCapture)
         }
 
         private fun streamQrs(
@@ -870,13 +868,14 @@ class EcgMeasurementCoordinatorTest {
                     batch(
                         sequence = sequence,
                         samples = samples,
-                        timestampStartMs = 1_000L + sequence * 20L,
+                        timestampStartMs = 1_000L + offset * 2L,
                         ppgGreen = ppgBatch,
                     ),
                 )
                 sequence += 1
                 offset += count
             }
+            harness.nextSequence = sequence
         }
 
         private fun batch(
