@@ -8,6 +8,7 @@ import android.app.Activity
 import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
+import app.galaxyvitals.wear.sensors.EcgSensorErrorCode
 import app.galaxyvitals.wear.sensors.EcgSubscription
 import app.galaxyvitals.wear.sensors.SensorIssue
 import app.galaxyvitals.wear.sensors.SensorIssueCode
@@ -562,6 +563,28 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun trackerPermissionErrorAfterConnectShowsPermissionRequired() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Warmup)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        harness.sensor.emitError(
+            EcgSensorError(
+                code = EcgSensorErrorCode.TRACKER,
+                message = "Samsung ECG tracker error: PERMISSION_ERROR",
+                issue = SensorIssue(
+                    SensorIssueCode.PERMISSION_ERROR,
+                    "Samsung ECG tracker error: PERMISSION_ERROR",
+                    SensorRecovery.REQUEST_PERMISSION,
+                ),
+            ),
+        )
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PermissionRequired)
+        harness.coordinator.onHostStop()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PermissionRequired)
+    }
+
+    @Test
     fun hostStopDuringPermissionRequiredDoesNotCancel() {
         val harness = Harness()
         harness.sensor.availability = SensorAvailability(
@@ -718,6 +741,10 @@ class EcgMeasurementCoordinatorTest {
 
         fun emit(listenerIndex: Int, batch: EcgBatch) {
             listeners[listenerIndex].onBatch(batch)
+        }
+
+        fun emitError(error: EcgSensorError) {
+            listeners.last().onError(error)
         }
 
         override fun stop() {

@@ -92,6 +92,16 @@ class SamsungEcgSensorMappingTest {
     }
 
     @Test
+    fun bodySensorsDeniedBlocksConnectBeforeReady() {
+        val denied = SamsungEcgMapping.connectBlockedByBodySensors(granted = false)
+        assertThat(denied).isNotNull()
+        assertThat(denied!!.ready).isFalse()
+        assertThat(denied.issue!!.code).isEqualTo(SensorIssueCode.PERMISSION_ERROR)
+        assertThat(denied.issue!!.recovery).isEqualTo(SensorRecovery.REQUEST_PERMISSION)
+        assertThat(SamsungEcgMapping.connectBlockedByBodySensors(granted = true)).isNull()
+    }
+
+    @Test
     fun missingOnDemandCapabilityMapsToUnsupported() {
         val issue = SamsungEcgMapping.missingOnDemandTracker("app.galaxyvitals")
         assertThat(issue.code).isEqualTo(SensorIssueCode.TRACKER_UNSUPPORTED)

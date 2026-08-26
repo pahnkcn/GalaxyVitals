@@ -101,6 +101,28 @@ internal object SamsungEcgMapping {
         SensorRecovery.NONE,
     )
 
+    fun bodySensorsDeniedIssue(): SensorIssue = SensorIssue(
+        SensorIssueCode.PERMISSION_ERROR,
+        "Body sensors permission is required to record ECG.",
+        SensorRecovery.REQUEST_PERMISSION,
+    )
+
+    fun connectBlockedByBodySensors(granted: Boolean): SensorAvailability? {
+        if (granted) return null
+        val issue = bodySensorsDeniedIssue()
+        return SensorAvailability(ready = false, reason = issue.message, issue = issue)
+    }
+
+    fun trackerError(error: HealthTracker.TrackerError): EcgSensorError {
+        val issue = trackerIssue(error)
+        val code = if (issue.code == SensorIssueCode.SDK_POLICY_ERROR) {
+            EcgSensorErrorCode.SDK_POLICY
+        } else {
+            EcgSensorErrorCode.TRACKER
+        }
+        return EcgSensorError(code, issue.message, issue)
+    }
+
     fun requireOnDemandDuration(maxDurationMs: Long) {
         if (maxDurationMs > MAX_ON_DEMAND_DURATION_MS) {
             throw IllegalArgumentException(

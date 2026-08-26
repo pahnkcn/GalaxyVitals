@@ -115,6 +115,23 @@ class SamsungEcgSensorContractTest {
     }
 
     @Test
+    fun trackerPermissionErrorDeliversRequestPermissionIssue() {
+        val tracker = RecordingHealthTracker()
+        val errors = arrayListOf<EcgSensorError>()
+        session(tracker).startEcg(
+            maxDurationMs = 30_000,
+            onError = { errors += it },
+            onBatch = {},
+            onDeadline = {},
+        )
+        tracker.listener!!.onError(HealthTracker.TrackerError.PERMISSION_ERROR)
+        assertThat(errors).hasSize(1)
+        assertThat(errors.single().issue?.code).isEqualTo(SensorIssueCode.PERMISSION_ERROR)
+        assertThat(errors.single().issue?.recovery).isEqualTo(SensorRecovery.REQUEST_PERMISSION)
+        assertThat(errors.single().code).isNotEqualTo(EcgSensorErrorCode.SDK_POLICY)
+    }
+
+    @Test
     fun connectionFailureNeverAutoResolves() {
         val resolution = SamsungEcgResolution()
         var resolved = 0
@@ -142,10 +159,12 @@ class SamsungEcgSensorContractTest {
     private class RecordingHealthTracker : HealthTracker() {
         var setCount = 0
         var unsetCount = 0
+        var listener: TrackerEventListener? = null
         var onUnset: (() -> Unit)? = null
 
         override fun setEventListener(listener: TrackerEventListener) {
             setCount += 1
+            this.listener = listener
         }
 
         override fun unsetEventListener() {

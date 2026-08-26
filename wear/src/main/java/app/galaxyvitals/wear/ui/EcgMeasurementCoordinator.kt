@@ -182,13 +182,7 @@ class EcgMeasurementCoordinator(
                             ?: "Samsung ECG is not available for this package."
                         when (availability.issue?.recovery) {
                             SensorRecovery.REQUEST_PERMISSION -> {
-                                transition(MeasurePhase.PermissionRequired, "PERMISSION_REQUIRED") {
-                                    MeasureUiState(
-                                        phase = MeasurePhase.PermissionRequired,
-                                        status = "Body sensors needed",
-                                        error = reason,
-                                    )
-                                }
+                                showPermissionRequired(reason)
                             }
                             SensorRecovery.RESOLVE_SERVICE -> {
                                 transition(MeasurePhase.ResolutionRequired, "RESOLUTION_REQUIRED") {
@@ -614,10 +608,25 @@ class EcgMeasurementCoordinator(
 
     private fun handleSensorError(error: EcgSensorError) {
         if (terminal) return
+        if (error.issue?.recovery == SensorRecovery.REQUEST_PERMISSION) {
+            showPermissionRequired(error.issue.message)
+            return
+        }
         if (trackerReady) {
             failTerminal(error.code.name, "Recording failed", error.message)
         } else {
             unavailable(error.code.name, error.message)
+        }
+    }
+
+    private fun showPermissionRequired(message: String) {
+        cleanupAttempt(releaseLease = true)
+        transition(MeasurePhase.PermissionRequired, "PERMISSION_REQUIRED") {
+            MeasureUiState(
+                phase = MeasurePhase.PermissionRequired,
+                status = "Body sensors needed",
+                error = message,
+            )
         }
     }
 

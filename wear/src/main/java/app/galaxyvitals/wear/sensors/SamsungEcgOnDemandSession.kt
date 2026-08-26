@@ -82,12 +82,7 @@ internal class SamsungEcgOnDemandSession(
             override fun onFlushCompleted() = Unit
 
             override fun onError(error: HealthTracker.TrackerError) {
-                val code = if (error == HealthTracker.TrackerError.SDK_POLICY_ERROR) {
-                    EcgSensorErrorCode.SDK_POLICY
-                } else {
-                    EcgSensorErrorCode.TRACKER
-                }
-                deliverError(EcgSensorError(code, "Samsung ECG tracker error: $error"), onError)
+                deliverError(SamsungEcgMapping.trackerError(error), onError)
             }
         }
         tracker.setEventListener(listener)

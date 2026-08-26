@@ -1,11 +1,14 @@
 package app.galaxyvitals.wear.sensors
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
@@ -14,7 +17,15 @@ import com.samsung.android.service.health.tracking.data.HealthTrackerType
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
-class SamsungEcgSensor(context: Context) : EcgSensor {
+class SamsungEcgSensor(
+    context: Context,
+    private val hasBodySensorsPermission: () -> Boolean = {
+        ContextCompat.checkSelfPermission(
+            context.applicationContext,
+            Manifest.permission.BODY_SENSORS,
+        ) == PackageManager.PERMISSION_GRANTED
+    },
+) : EcgSensor {
     private val app = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val acquisition = Executors.newSingleThreadExecutor { runnable ->
@@ -52,6 +63,10 @@ class SamsungEcgSensor(context: Context) : EcgSensor {
             service != null || ecgTracker != null || activeSubscriptionEpoch != 0L
         }
         if (hasExistingConnection) disconnect()
+        SamsungEcgMapping.connectBlockedByBodySensors(hasBodySensorsPermission())?.let { denied ->
+            main.post { onResult(denied) }
+            return
+        }
         val token = synchronized(connectionLock) {
             connectionToken += 1
             connectionToken

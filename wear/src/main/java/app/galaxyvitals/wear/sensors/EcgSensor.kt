@@ -109,6 +109,7 @@ enum class EcgSensorErrorCode {
 data class EcgSensorError(
     val code: EcgSensorErrorCode,
     val message: String,
+    val issue: SensorIssue? = null,
 )
 
 enum class SensorIssueCode {
