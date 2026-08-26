@@ -1,0 +1,18 @@
+{
+  "schema": "app.galaxyvitals.ecg.physionet_bpm_split",
+  "version": 1,
+  "split_rule": "record-and-participant",
+  "seed": 20260826,
+  "records_file": "physionet_split.csv",
+  "assignment": "Alternating sorted MIT-BIH non-paced record ids (dev, locked, ...). Records 201 and 202 share participant 201 and stay in the same split. NSTDB records follow their parent MIT-BIH participant (118e* with 118, 119e* with 119). Paced MIT-BIH 102/104/107/217 are excluded.",
+  "dev_use": "False-positive and coverage analysis; EcgBeatDetectorConfig selection only.",
+  "locked_use": "Frozen engineering gates after config freeze. Do not retune from locked-set output.",
+  "gates": {
+    "mitdb_sensitivity_min": 0.99,
+    "mitdb_ppv_min": 0.99,
+    "mitdb_median_hr_error_bpm_max": 2.0,
+    "nstdb_snr_ge_12_coverage_min": 0.80,
+    "nstdb_snr_ge_12_median_hr_error_bpm_max": 5.0,
+    "high_noise_error_gt_10bpm_max": 0.05
+  }
+}
