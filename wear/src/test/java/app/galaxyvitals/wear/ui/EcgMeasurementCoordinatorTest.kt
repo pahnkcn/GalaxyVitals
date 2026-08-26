@@ -261,6 +261,104 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun closeClosesListenerAndDoesNotLeaveLiveCapturePhase() {
+        val recording = Harness()
+        startRecording(recording)
+        assertThat(recording.sensor.closeCount).isEqualTo(0)
+        recording.coordinator.close()
+        assertThat(recording.sensor.closeCount).isEqualTo(1)
+        assertThat(recording.coordinator.state.value.phase)
+            .isNotIn(setOf(MeasurePhase.ArmedCountdown, MeasurePhase.Recording, MeasurePhase.Connecting))
+
+        val countdown = Harness()
+        countdown.coordinator.startHardware()
+        assertThat(countdown.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        countdown.coordinator.close()
+        assertThat(countdown.sensor.startCount).isEqualTo(0)
+        assertThat(countdown.coordinator.state.value.phase)
+            .isNotIn(setOf(MeasurePhase.ArmedCountdown, MeasurePhase.Recording))
+        countdown.advance(3_000L)
+        assertThat(countdown.sensor.startCount).isEqualTo(0)
+        assertThat(countdown.coordinator.state.value.phase)
+            .isNotEqualTo(MeasurePhase.Recording)
+    }
+
+    @Test
+    fun countdownTickAfterCancelDoesNotReviveArmedCountdown() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        harness.coordinator.cancel()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        harness.advance(3_000L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        assertThat(harness.sensor.closeCount).isEqualTo(0)
+    }
+
+    @Test
+    fun inFlightCompletingBatchThenDeadlineStillSaves() {
+        val acquisition = PauseableDispatcher()
+        val harness = Harness(acquisition = acquisition)
+        startRecording(harness)
+        streamPrepared(
+            harness,
+            FloatArray(14_990) { 0.12f },
+            startSequence = 0,
+            includePpg = false,
+            batchSize = 10,
+        )
+        assertThat(harness.recorder.sampleCount).isEqualTo(14_990)
+        acquisition.pause()
+        harness.now += 20L
+        harness.sensor.emit(
+            batch(
+                sequence = harness.nextSequence,
+                samples = FloatArray(10) { 0.12f },
+                timestampStartMs = 1_000L + 14_990L * 2L,
+            ),
+        )
+        harness.sensor.fireDeadline()
+        acquisition.resume()
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(harness.savedGzip).isNotNull()
+        assertThat(harness.transitionLogs.joinToString()).doesNotContain("INCOMPLETE_CAPTURE")
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
+    }
+
+    @Test
+    fun deadlineThenInFlightCompletingBatchStillSaves() {
+        val acquisition = PauseableDispatcher()
+        val harness = Harness(acquisition = acquisition)
+        startRecording(harness)
+        streamPrepared(
+            harness,
+            FloatArray(14_990) { 0.12f },
+            startSequence = 0,
+            includePpg = false,
+            batchSize = 10,
+        )
+        assertThat(harness.recorder.sampleCount).isEqualTo(14_990)
+        acquisition.pause()
+        harness.sensor.fireDeadline()
+        harness.now += 20L
+        harness.sensor.emit(
+            batch(
+                sequence = harness.nextSequence,
+                samples = FloatArray(10) { 0.12f },
+                timestampStartMs = 1_000L + 14_990L * 2L,
+            ),
+        )
+        acquisition.resume()
+        assertThat(harness.coordinator.state.value.phase)
+            .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
+        assertThat(harness.savedGzip).isNotNull()
+        assertThat(harness.transitionLogs.joinToString()).doesNotContain("INCOMPLETE_CAPTURE")
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
+    }
+
+    @Test
     fun armedCountdownWaitsThreeSecondsBeforeOpeningListener() {
         val harness = Harness()
         harness.coordinator.startHardware()
@@ -596,6 +694,8 @@ class EcgMeasurementCoordinatorTest {
     private class Harness(
         wrist: Wrist = Wrist.LEFT,
         compute: CoroutineDispatcher = Dispatchers.Unconfined,
+        acquisition: CoroutineDispatcher = Dispatchers.Unconfined,
+        main: CoroutineDispatcher = Dispatchers.Unconfined,
     ) {
         val sensor = FakeSensor { now }
         val recorder = EcgSessionRecorder()
@@ -625,9 +725,9 @@ class EcgMeasurementCoordinatorTest {
             pushToPhone = { _, gzip -> pushedGzip = gzip },
             watchInfo = { "watch" },
             offBodyFactory = { FakeOffBody() },
-            mainDispatcher = Dispatchers.Unconfined,
+            mainDispatcher = main,
             computeDispatcher = compute,
-            acquisitionDispatcher = Dispatchers.Unconfined,
+            acquisitionDispatcher = acquisition,
             elapsedRealtime = { now },
             wallClock = { 1_700_000_000_000L + now },
             delayMs = { virtualDelay(it) },
@@ -662,6 +762,38 @@ class EcgMeasurementCoordinatorTest {
         val deadline: Long,
         val deferred: CompletableDeferred<Unit>,
     )
+
+    private class PauseableDispatcher : CoroutineDispatcher() {
+        private val queue = ArrayDeque<Runnable>()
+        @Volatile
+        var paused = false
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            val runNow = synchronized(queue) {
+                if (paused) {
+                    queue.addLast(block)
+                    false
+                } else {
+                    true
+                }
+            }
+            if (runNow) block.run()
+        }
+
+        fun pause() {
+            paused = true
+        }
+
+        fun resume() {
+            paused = false
+            while (true) {
+                val next = synchronized(queue) {
+                    if (queue.isEmpty()) null else queue.removeFirst()
+                } ?: break
+                next.run()
+            }
+        }
+    }
 
     private class GatedDispatcher(
         private val gate: CountDownLatch,

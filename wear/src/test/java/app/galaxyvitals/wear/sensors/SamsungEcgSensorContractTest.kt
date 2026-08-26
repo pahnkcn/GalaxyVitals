@@ -4,6 +4,8 @@ import android.app.Activity
 import com.google.common.truth.Truth.assertThat
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
+import com.samsung.android.service.health.tracking.data.DataPoint
+import com.samsung.android.service.health.tracking.data.ValueKey
 import org.junit.Test
 
 class SamsungEcgSensorContractTest {
@@ -69,6 +71,33 @@ class SamsungEcgSensorContractTest {
         scheduler.fireNext()
         assertThat(events).containsExactly("unset", "deadline").inOrder()
         assertThat(tracker.unsetCount).isEqualTo(1)
+    }
+
+    @Test
+    fun inFlightBatchIsDeliveredBeforeDeadlineAfterUnset() {
+        val tracker = RecordingHealthTracker()
+        val scheduler = ManualDeadlineScheduler()
+        val events = arrayListOf<String>()
+        var current = true
+        val queued = ArrayList<() -> Unit>()
+        val session = SamsungEcgOnDemandSession(
+            tracker = tracker,
+            scheduler = scheduler,
+            isCurrent = { current },
+            postMain = { it() },
+            execute = { queued += it },
+        )
+        session.startEcg(
+            maxDurationMs = 30_000,
+            onError = {},
+            onBatch = { events += "batch" },
+            onDeadline = { events += "deadline" },
+        )
+        tracker.listener!!.onDataReceived(ecgPoints())
+        tracker.onUnset = { current = false }
+        scheduler.fireNext()
+        queued.forEach { it() }
+        assertThat(events).containsExactly("batch", "deadline").inOrder()
     }
 
     @Test
@@ -146,6 +175,19 @@ class SamsungEcgSensorContractTest {
         assertThat(resolved).isEqualTo(0)
         assertThat(resolution.resolvePending(Activity())).isTrue()
         assertThat(resolved).isEqualTo(1)
+    }
+
+    private fun ecgPoints(size: Int = 5): List<DataPoint> = List(size) { index ->
+        DataPoint(
+            values = mapOf(
+                ValueKey.EcgSet.ECG_MV to 0.1f,
+                ValueKey.EcgSet.LEAD_OFF to 0,
+                ValueKey.EcgSet.SEQUENCE to 1,
+                ValueKey.EcgSet.MIN_THRESHOLD_MV to -5f,
+                ValueKey.EcgSet.MAX_THRESHOLD_MV to 5f,
+            ),
+            timestamp = 1_000L + index * 2L,
+        )
     }
 
     private fun session(

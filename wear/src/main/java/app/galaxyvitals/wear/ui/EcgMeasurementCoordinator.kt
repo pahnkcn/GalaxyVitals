@@ -24,6 +24,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -86,6 +88,7 @@ class EcgMeasurementCoordinator(
     private var lastLoggedCode: String? = null
     private var streamGeneration = 0L
     private var awaitingFirstBatch = false
+    private var countdownDeadlineAt = 0L
     private var bpmDirty = false
     private var lastAcquisitionLogAt = 0L
     private val bpmLock = Any()
@@ -114,11 +117,14 @@ class EcgMeasurementCoordinator(
     fun resolvePending(activity: android.app.Activity): Boolean = sensor.resolvePending(activity)
 
     override fun close() {
-        attemptId += 1
-        terminal = true
-        cleanupAttempt(releaseLease = true)
-        reducerJob.cancel()
-        events.close()
+        val done = CountDownLatch(1)
+        if (events.trySend(AcqEvent.Shutdown(done)).isSuccess) {
+            if (!done.await(3, TimeUnit.SECONDS)) {
+                subscription?.close()
+            }
+        } else {
+            subscription?.close()
+        }
     }
 
     private fun reduce(event: AcqEvent) {
@@ -136,10 +142,6 @@ class EcgMeasurementCoordinator(
                 if (_state.value.phase == MeasurePhase.Connecting) {
                     unavailable("CONNECT_TIMEOUT", "Samsung ECG connection timed out.")
                 }
-            }
-            is AcqEvent.CountdownFinished -> {
-                if (!isCurrent(event.attemptId) || terminal) return
-                onCountdownFinished()
             }
             is AcqEvent.Batch -> {
                 if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
@@ -167,6 +169,16 @@ class EcgMeasurementCoordinator(
                 if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
                 onBpmEstimate(event.snapshot, event.estimated)
             }
+            is AcqEvent.CountdownTick -> {
+                if (!isCurrent(event.attemptId) || terminal) return
+                handleCountdownTick()
+            }
+            is AcqEvent.DeadlineSettle -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                settleDeadline()
+            }
+            is AcqEvent.PersistResult -> handlePersistResult(event)
+            is AcqEvent.Shutdown -> handleShutdown(event.done)
         }
     }
 
@@ -213,6 +225,7 @@ class EcgMeasurementCoordinator(
         lastLoggedCode = null
         streamGeneration += 1
         awaitingFirstBatch = false
+        countdownDeadlineAt = 0L
         bpmDirty = false
         lastAcquisitionLogAt = 0L
         synchronized(bpmLock) { pendingBpmSnapshot = null }
@@ -283,7 +296,7 @@ class EcgMeasurementCoordinator(
     }
 
     private fun startArmedCountdown(id: Long) {
-        val deadlineAt = elapsedRealtime() + COUNTDOWN_MS
+        countdownDeadlineAt = elapsedRealtime() + COUNTDOWN_MS
         transition(MeasurePhase.ArmedCountdown, "ARMED_COUNTDOWN") {
             MeasureUiState(
                 phase = MeasurePhase.ArmedCountdown,
@@ -295,19 +308,23 @@ class EcgMeasurementCoordinator(
         }
         countdownJob?.cancel()
         countdownJob = scope.launch(mainDispatcher) {
-            while (isCurrent(id) && !terminal && _state.value.phase == MeasurePhase.ArmedCountdown) {
-                val left = deadlineAt - elapsedRealtime()
-                val sec = ((left + 999L) / 1000L).toInt().coerceAtLeast(0)
-                if (_state.value.remainingSec != sec) {
-                    _state.value = _state.value.copy(remainingSec = sec)
-                }
-                if (left <= 0L) {
-                    events.trySend(AcqEvent.CountdownFinished(id))
-                    return@launch
-                }
+            while (true) {
+                events.trySend(AcqEvent.CountdownTick(id))
+                val left = countdownDeadlineAt - elapsedRealtime()
+                if (left <= 0L) return@launch
                 delayMs(minOf(left, COUNTDOWN_TICK_MS))
             }
         }
+    }
+
+    private fun handleCountdownTick() {
+        if (_state.value.phase != MeasurePhase.ArmedCountdown) return
+        val left = countdownDeadlineAt - elapsedRealtime()
+        val sec = ((left + 999L) / 1000L).toInt().coerceAtLeast(0)
+        if (_state.value.remainingSec != sec) {
+            _state.value = _state.value.copy(remainingSec = sec)
+        }
+        if (left <= 0L) onCountdownFinished()
     }
 
     private fun onCountdownFinished() {
@@ -327,6 +344,8 @@ class EcgMeasurementCoordinator(
                 nowMs = wallClock(),
             )
             recorder.addBpmObservation(LiveBpmAvailability.COLLECTING.name)
+            countdownJob?.cancel()
+            countdownJob = null
             liveEcgProcessor.beginCaptureWindow(EcgWearContract.signFactorFor(selectedWrist))
             awaitingFirstBatch = true
             lastUiWaveformAt = 0L
@@ -442,9 +461,12 @@ class EcgMeasurementCoordinator(
     private fun handleDeadline() {
         if (terminal) return
         closeListenerFirst()
-        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES &&
-            _state.value.phase == MeasurePhase.Recording
-        ) {
+        events.trySend(AcqEvent.DeadlineSettle(attemptId, streamGeneration))
+    }
+
+    private fun settleDeadline() {
+        if (terminal || _state.value.phase != MeasurePhase.Recording) return
+        if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) {
             finishValidateEncodeSave()
         } else {
             failTerminal(
@@ -488,40 +510,88 @@ class EcgMeasurementCoordinator(
                 } catch (_: Exception) {
                     false
                 }
-                withContext(mainDispatcher) {
-                    if (!isCurrent(id)) return@withContext
-                    releaseForegroundLease()
-                    transition(MeasurePhase.Success, "SUCCESS") {
-                        MeasureUiState(
-                            phase = MeasurePhase.Success,
-                            status = if (pushed) "Sent to phone" else "Saved on watch",
-                            sessionId = sessionId,
-                            remainingSec = 0,
-                            error = if (pushed) {
-                                null
-                            } else {
-                                "Phone not linked. Keep GalaxyVitals open nearby, then Sync."
-                            },
-                        )
-                    }
-                }
+                events.trySend(
+                    AcqEvent.PersistResult(
+                        attemptId = id,
+                        success = true,
+                        sessionId = sessionId,
+                        pushed = pushed,
+                        error = null,
+                    ),
+                )
             } catch (cancelled: CancellationException) {
-                releaseForegroundLease()
+                events.trySend(
+                    AcqEvent.PersistResult(
+                        attemptId = id,
+                        success = false,
+                        sessionId = sessionId,
+                        pushed = false,
+                        error = cancelled.message,
+                    ),
+                )
                 throw cancelled
             } catch (error: Exception) {
-                withContext(mainDispatcher) {
-                    if (isCurrent(id)) {
-                        releaseForegroundLease()
-                        transition(MeasurePhase.Failed, "SAVE_FAILED") {
-                            MeasureUiState(
-                                phase = MeasurePhase.Failed,
-                                status = "Save failed",
-                                error = error.message ?: "Could not save this recording. Please try again.",
-                            )
-                        }
-                    }
-                }
+                events.trySend(
+                    AcqEvent.PersistResult(
+                        attemptId = id,
+                        success = false,
+                        sessionId = sessionId,
+                        pushed = false,
+                        error = error.message ?: "Could not save this recording. Please try again.",
+                    ),
+                )
             }
+        }
+    }
+
+    private fun handlePersistResult(event: AcqEvent.PersistResult) {
+        if (!isCurrent(event.attemptId) || _state.value.phase != MeasurePhase.Saving) return
+        releaseForegroundLease()
+        if (event.success) {
+            transition(MeasurePhase.Success, "SUCCESS") {
+                MeasureUiState(
+                    phase = MeasurePhase.Success,
+                    status = if (event.pushed) "Sent to phone" else "Saved on watch",
+                    sessionId = event.sessionId,
+                    remainingSec = 0,
+                    error = if (event.pushed) {
+                        null
+                    } else {
+                        "Phone not linked. Keep GalaxyVitals open nearby, then Sync."
+                    },
+                )
+            }
+        } else {
+            transition(MeasurePhase.Failed, "SAVE_FAILED") {
+                MeasureUiState(
+                    phase = MeasurePhase.Failed,
+                    status = "Save failed",
+                    error = event.error ?: "Could not save this recording. Please try again.",
+                )
+            }
+        }
+    }
+
+    private fun handleShutdown(done: CountDownLatch) {
+        try {
+            closeListenerFirst()
+            val phase = _state.value.phase
+            if (!terminal && phase !in setOf(
+                    MeasurePhase.Success,
+                    MeasurePhase.Failed,
+                    MeasurePhase.PermissionRequired,
+                    MeasurePhase.ResolutionRequired,
+                )
+            ) {
+                failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
+            } else {
+                cleanupAttempt(releaseLease = true)
+            }
+            terminal = true
+            attemptId += 1
+            events.close()
+        } finally {
+            done.countDown()
         }
     }
 
@@ -593,13 +663,14 @@ class EcgMeasurementCoordinator(
     }
 
     private fun closeListenerFirst() {
-        streamGeneration += 1
-        subscription?.close()
+        val active = subscription
         subscription = null
+        active?.close()
     }
 
     private fun cleanupAcquisition() {
         closeListenerFirst()
+        streamGeneration += 1
         if (!sensorStopped) {
             runCatching(sensor::stop)
             sensorStopped = true
@@ -738,7 +809,6 @@ class EcgMeasurementCoordinator(
         data object HostResume : AcqEvent
         data class ConnectResult(val attemptId: Long, val availability: SensorAvailability) : AcqEvent
         data class ConnectTimeout(val attemptId: Long) : AcqEvent
-        data class CountdownFinished(val attemptId: Long) : AcqEvent
         data class Batch(val attemptId: Long, val generation: Long, val batch: EcgBatch) : AcqEvent
         data class Deadline(val attemptId: Long, val generation: Long) : AcqEvent
         data class SensorError(val attemptId: Long, val generation: Long, val error: EcgSensorError) : AcqEvent
@@ -750,6 +820,16 @@ class EcgMeasurementCoordinator(
             val snapshot: BpmSnapshot,
             val estimated: BpmEstimate?,
         ) : AcqEvent
+        data class CountdownTick(val attemptId: Long) : AcqEvent
+        data class DeadlineSettle(val attemptId: Long, val generation: Long) : AcqEvent
+        data class PersistResult(
+            val attemptId: Long,
+            val success: Boolean,
+            val sessionId: String?,
+            val pushed: Boolean,
+            val error: String?,
+        ) : AcqEvent
+        data class Shutdown(val done: CountDownLatch) : AcqEvent
     }
 
     companion object {

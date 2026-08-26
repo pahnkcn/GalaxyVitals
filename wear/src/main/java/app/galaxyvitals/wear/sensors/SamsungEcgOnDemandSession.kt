@@ -72,10 +72,7 @@ internal class SamsungEcgOnDemandSession(
                     return
                 }
                 execute {
-                    if (!isCurrent()) return@execute
-                    postMain {
-                        if (isCurrent()) onBatch(batch)
-                    }
+                    postMain { onBatch(batch) }
                 }
             }
 
@@ -90,7 +87,9 @@ internal class SamsungEcgOnDemandSession(
         val deadline = scheduler.schedule(maxDurationMs) {
             if (!closed.compareAndSet(false, true)) return@schedule
             runCatching { tracker.unsetEventListener() }
-            onDeadline()
+            execute {
+                postMain { onDeadline() }
+            }
         }
         return EcgSubscription {
             if (!closed.compareAndSet(false, true)) return@EcgSubscription
