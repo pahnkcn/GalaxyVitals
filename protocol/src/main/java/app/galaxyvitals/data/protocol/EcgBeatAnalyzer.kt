@@ -4,7 +4,6 @@ import app.galaxyvitals.domain.EcgSample
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sqrt
 
 enum class EcgBpmStatus {
     RELIABLE,
@@ -57,6 +56,7 @@ object EcgBeatAnalyzer {
         val secondary = ArrayList<Int>()
         val matched = ArrayList<Int>()
         val rrMs = ArrayList<Double>()
+        val envelopeSnrs = ArrayList<Double>()
         prepared.cleanRanges.forEach { range ->
             prepared.quality.segments.forEach { segment ->
                 val slice = samplesInRange(segment.samples, range)
@@ -71,6 +71,7 @@ object EcgBeatAnalyzer {
                 local.secondary.forEach { secondary += it + offset }
                 local.matched.forEach { matched += it + offset }
                 rrMs += local.rrMs
+                envelopeSnrs += local.envelopeSnr
             }
         }
         return finish(
@@ -78,8 +79,8 @@ object EcgBeatAnalyzer {
             secondary = secondary.toIntArray(),
             matched = matched.toIntArray(),
             rrMs = rrMs,
+            envelopeSnr = if (envelopeSnrs.isEmpty()) 0.0 else envelopeSnrs.median(),
             cleanDurationMs = cleanDurationMs,
-            hideBpmOnDisagreement = true,
             config = config,
         )
     }
@@ -113,8 +114,8 @@ object EcgBeatAnalyzer {
             secondary = local.secondary,
             matched = local.matched,
             rrMs = local.rrMs,
+            envelopeSnr = local.envelopeSnr,
             cleanDurationMs = cleanDurationMs,
-            hideBpmOnDisagreement = false,
             config = config,
         )
     }
@@ -125,22 +126,20 @@ object EcgBeatAnalyzer {
     ): SegmentDetections {
         val upright = detectOnResampled(oriented, config)
         if (!config.dualPolarity) return upright
-        if (isReliableCandidate(upright, config)) return upright
-        val inverted = FloatArray(oriented.size) { -oriented[it] }
-        return betterPolarity(upright, detectOnResampled(inverted, config))
+        val polarityInverted = upright.dominantDeflection <= 0.0
+        val bsqiPoor = bSqi(upright) < config.minBsqi
+        if (!polarityInverted && !bsqiPoor) return upright
+        val inverted = detectOnResampled(FloatArray(oriented.size) { -oriented[it] }, config)
+        return betterPolarity(upright, inverted)
     }
-
-    private fun isReliableCandidate(detection: SegmentDetections, config: EcgBeatDetectorConfig): Boolean =
-        detection.rrMs.size >= config.minRrCount &&
-            bSqi(detection) >= config.minBsqi &&
-            rrCoefficientOfVariation(detection.rrMs) <= config.maxRrCv
 
     private fun betterPolarity(left: SegmentDetections, right: SegmentDetections): SegmentDetections {
         val cmp = compareValuesBy(
             right,
             left,
-            { it.matched.size },
             { bSqi(it) },
+            { it.matched.size },
+            { it.dominantDeflection },
         )
         return if (cmp > 0) right else left
     }
@@ -151,8 +150,40 @@ object EcgBeatAnalyzer {
     }
 
     private fun detectOnResampled(oriented: FloatArray, config: EcgBeatDetectorConfig): SegmentDetections {
+        val chunk = TARGET_HZ * 10
+        if (oriented.size <= chunk + EcgQrsFilter.WARMUP_SAMPLES) {
+            return detectSingleResampledWindow(oriented, config)
+        }
+        val primary = ArrayList<Int>()
+        val secondary = ArrayList<Int>()
+        val matched = ArrayList<Int>()
+        val rrMs = ArrayList<Double>()
+        val snrs = ArrayList<Double>()
+        val deflections = ArrayList<Double>()
+        var start = 0
+        while (start + chunk <= oriented.size) {
+            val local = detectSingleResampledWindow(oriented.copyOfRange(start, start + chunk), config)
+            local.primary.forEach { primary += it + start }
+            local.secondary.forEach { secondary += it + start }
+            local.matched.forEach { matched += it + start }
+            rrMs += local.rrMs
+            snrs += local.envelopeSnr
+            deflections += local.dominantDeflection
+            start += chunk
+        }
+        return SegmentDetections(
+            primary = primary.toIntArray(),
+            secondary = secondary.toIntArray(),
+            matched = matched.toIntArray(),
+            rrMs = rrMs,
+            envelopeSnr = if (snrs.isEmpty()) 0.0 else snrs.median(),
+            dominantDeflection = if (deflections.isEmpty()) 0.0 else deflections.median(),
+        )
+    }
+
+    private fun detectSingleResampledWindow(oriented: FloatArray, config: EcgBeatDetectorConfig): SegmentDetections {
         if (oriented.size <= EcgQrsFilter.WARMUP_SAMPLES) {
-            return SegmentDetections(IntArray(0), IntArray(0), IntArray(0), emptyList())
+            return SegmentDetections(IntArray(0), IntArray(0), IntArray(0), emptyList(), 0.0, 0.0)
         }
         val filtered = EcgQrsFilter.filter(oriented)
         val start = EcgQrsFilter.WARMUP_SAMPLES
@@ -181,17 +212,46 @@ object EcgBeatAnalyzer {
             config = config,
         )
         val primary = refinePeaks(
-            delayCompensate(primaryRaw, samplesForMs(config.primaryIntegrationMs)),
+            delayCompensate(primaryRaw.indices, samplesForMs(config.primaryIntegrationMs)),
             oriented,
             config,
         )
         val secondary = refinePeaks(
-            delayCompensate(secondaryRaw, samplesForMs(config.secondaryIntegrationMs)),
+            delayCompensate(secondaryRaw.indices, samplesForMs(config.secondaryIntegrationMs)),
             oriented,
             config,
         )
         val matched = matchPeaks(primary, secondary, samplesForMs(config.matchToleranceMs))
-        return SegmentDetections(primary, secondary, matched, rrIntervals(matched, config))
+        return SegmentDetections(
+            primary = primary,
+            secondary = secondary,
+            matched = matched,
+            rrMs = rrIntervals(matched, config),
+            envelopeSnr = primaryRaw.signalNoise,
+            dominantDeflection = dominantDeflection(oriented, primary),
+        )
+    }
+
+    private fun dominantDeflection(oriented: FloatArray, peaks: IntArray): Double {
+        if (peaks.isEmpty() || oriented.isEmpty()) return 0.0
+        val radius = samplesForMs(80)
+        val extremes = ArrayList<Double>(peaks.size)
+        for (peak in peaks) {
+            val from = (peak - radius).coerceAtLeast(0)
+            val to = (peak + radius).coerceAtMost(oriented.lastIndex)
+            var best = oriented[from]
+            var bestAbs = abs(best)
+            for (index in from..to) {
+                val value = oriented[index]
+                val magnitude = abs(value)
+                if (magnitude > bestAbs) {
+                    bestAbs = magnitude
+                    best = value
+                }
+            }
+            extremes += best.toDouble()
+        }
+        return extremes.median()
     }
 
     private fun detectPeaks(
@@ -201,12 +261,12 @@ object EcgBeatAnalyzer {
         twaveMs: Int?,
         searchBack: Boolean,
         config: EcgBeatDetectorConfig,
-    ): IntArray {
-        if (startIndex >= envelope.lastIndex) return IntArray(0)
+    ): PeakDetection {
+        if (startIndex >= envelope.lastIndex) return PeakDetection(IntArray(0), 0.0)
         val refractory = samplesForMs(refractoryMs)
         val twave = twaveMs?.let(::samplesForMs) ?: 0
         val candidates = findLocalMaxima(envelope, startIndex)
-        if (candidates.isEmpty()) return IntArray(0)
+        if (candidates.isEmpty()) return PeakDetection(IntArray(0), 0.0)
 
         val learnEnd = min(envelope.size, startIndex + config.learnSeconds * TARGET_HZ)
         var maxTrain = 0.0
@@ -302,7 +362,12 @@ object EcgBeatAnalyzer {
             while (trySearchBack(envelope.size)) {
             }
         }
-        return qrs.toIntArray()
+        val signalNoise = if (npki <= 1e-12) {
+            if (spki > 0.0) 99.0 else 0.0
+        } else {
+            spki / npki
+        }
+        return PeakDetection(qrs.toIntArray(), signalNoise)
     }
 
     private fun slope(envelope: FloatArray, peak: Int): Double {
@@ -414,8 +479,8 @@ object EcgBeatAnalyzer {
         secondary: IntArray,
         matched: IntArray,
         rrMs: List<Double>,
+        envelopeSnr: Double,
         cleanDurationMs: Long,
-        hideBpmOnDisagreement: Boolean,
         config: EcgBeatDetectorConfig,
     ): EcgBeatResult {
         val denominator = primary.size + secondary.size - matched.size
@@ -442,7 +507,7 @@ object EcgBeatAnalyzer {
         if (bSqi < config.minBsqi) {
             return EcgBeatResult(
                 status = EcgBpmStatus.DETECTOR_DISAGREEMENT,
-                bpmMedian = if (hideBpmOnDisagreement) null else bpm,
+                bpmMedian = null,
                 primaryPeaks = primary,
                 secondaryPeaks = secondary,
                 matchedPeaks = matched,
@@ -451,7 +516,7 @@ object EcgBeatAnalyzer {
                 reason = "R-peak detectors disagree",
             )
         }
-        if (rrCoefficientOfVariation(rrMs) > config.maxRrCv) {
+        if (envelopeSnr < config.minEnvelopeSnr && bSqi < config.snrBypassBsqi) {
             return EcgBeatResult(
                 status = EcgBpmStatus.LOW_QUALITY,
                 bpmMedian = null,
@@ -460,7 +525,7 @@ object EcgBeatAnalyzer {
                 matchedPeaks = matched,
                 bSqi = bSqi,
                 cleanDurationMs = cleanDurationMs,
-                reason = "RR intervals are too irregular",
+                reason = "Envelope SNR is insufficient",
             )
         }
         return EcgBeatResult(
@@ -475,16 +540,15 @@ object EcgBeatAnalyzer {
         )
     }
 
-    private fun rrCoefficientOfVariation(rrMs: List<Double>): Double {
-        if (rrMs.size < 2) return 0.0
-        val mean = rrMs.average()
-        if (mean <= 0.0) return Double.POSITIVE_INFINITY
-        var acc = 0.0
-        for (value in rrMs) {
-            val delta = value - mean
-            acc += delta * delta
+    private fun List<Double>.median(): Double {
+        if (isEmpty()) return Double.NaN
+        val sorted = sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) {
+            sorted[mid]
+        } else {
+            (sorted[mid - 1] + sorted[mid]) / 2.0
         }
-        return sqrt(acc / rrMs.size) / mean
     }
 
     private fun samplesInRange(samples: List<EcgSample>, range: LongRange): List<EcgSample> {
@@ -512,10 +576,17 @@ object EcgBeatAnalyzer {
 
     private fun samplesForMs(ms: Int): Int = max(1, TARGET_HZ * ms / 1_000)
 
+    private data class PeakDetection(
+        val indices: IntArray,
+        val signalNoise: Double,
+    )
+
     private data class SegmentDetections(
         val primary: IntArray,
         val secondary: IntArray,
         val matched: IntArray,
         val rrMs: List<Double>,
+        val envelopeSnr: Double,
+        val dominantDeflection: Double,
     )
 }

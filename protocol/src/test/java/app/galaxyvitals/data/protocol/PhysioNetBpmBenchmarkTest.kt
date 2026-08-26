@@ -83,13 +83,16 @@ class PhysioNetBpmBenchmarkTest {
     }
 
     private fun lockedHighNoise(): List<PreparedRecord> {
-        // 0 dB / -6 dB (e00, e_6) are included when prepared; skip until present.
-        // Numeric gate stays <=5% on whatever locked high-noise records exist.
-        return locked.filter { record ->
-            if (record.dataset != "nstdb" || record.snrDb == null || record.snrDb >= 12) return@filter false
-            val extreme = record.snrDb == 0 || record.snrDb == -6
-            if (extreme && (!record.signalFile.isFile || !record.beatsFile.isFile)) return@filter false
-            true
+        val byId = locked.filter { it.dataset == "nstdb" }.associateBy { it.recordId }
+        return LOCKED_HIGH_NOISE_IDS.map { id ->
+            val record = byId[id]
+                ?: error("locked high-noise record $id missing from manifest; run tools/ecg_benchmark/prepare_physionet.py")
+            require(record.signalFile.isFile) { "missing ${record.signalFile.path}" }
+            require(record.beatsFile.isFile) { "missing ${record.beatsFile.path}" }
+            require(record.snrDb != null && record.snrDb < 12) {
+                "locked high-noise record $id has snr_db=${record.snrDb}"
+            }
+            record
         }
     }
 
@@ -249,6 +252,7 @@ class PhysioNetBpmBenchmarkTest {
         const val MIN_RR_COUNT = 4
         const val MIN_BPM = 40.0
         const val MAX_BPM = 180.0
+        val LOCKED_HIGH_NOISE_IDS = listOf("119e06", "119e00", "119e_6")
 
         fun repoRoot(): File = PhysioNetBenchmarkSplit.repoRoot()
 

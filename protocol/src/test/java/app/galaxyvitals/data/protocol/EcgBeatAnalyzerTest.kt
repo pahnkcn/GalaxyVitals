@@ -18,14 +18,18 @@ class EcgBeatAnalyzerTest {
     fun detectorConfigIsVersionedFromDevSplit() {
         val config = EcgBeatDetectorConfig.DEFAULT
         assertThat(config.version).isEqualTo(EcgBeatDetectorConfig.VERSION)
+        assertThat(config.version).isEqualTo(2)
         assertThat(config.provenance).contains("physionet-dev-split-v1")
+        assertThat(config.provenance).contains("minSignalNoise")
         assertThat(config.thresholdNoiseWeight).isEqualTo(0.375)
         assertThat(config.primaryRefractoryMs).isEqualTo(300)
         assertThat(config.secondaryRefractoryMs).isEqualTo(300)
         assertThat(config.secondaryTwave).isTrue()
-        assertThat(config.maxRrCv).isEqualTo(0.22)
         assertThat(config.dualPolarity).isTrue()
         assertThat(config.minBsqi).isEqualTo(0.80)
+        assertThat(config.minEnvelopeSnr).isEqualTo(3.0)
+        assertThat(config.snrBypassBsqi).isEqualTo(0.95)
+        assertThat(config.provenance).doesNotContain("maxRrCv")
     }
 
     @Test
@@ -119,6 +123,41 @@ class EcgBeatAnalyzerTest {
         val result = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
         assertThat(result.bpmMedian).isNotNull()
         assertThat(result.bpmMedian!!).isWithin(4.0).of(72.0)
+    }
+
+    @Test
+    fun analyzeWindowKeepsReliableOnCleanVentricularBigeminy() {
+        val samples = syntheticBigeminy(seconds = 16.0, shortMs = 450.0, longMs = 900.0)
+        val result = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isAtLeast(50.0)
+        assertThat(result.bpmMedian!!).isAtMost(180.0)
+        assertThat(result.matchedPeaks.size).isAtLeast(8)
+        assertThat(result.reason).isNotEqualTo("RR intervals are too irregular")
+    }
+
+    @Test
+    fun analyzeWindowRecoversInvertedQrsWithoutCallerSignFlip() {
+        val samples = syntheticQrs(seconds = 12.0, bpm = 72.0, invert = true)
+        val result = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(72.0)
+        val peakValues = result.primaryPeaks.map { samples[it] }
+        assertThat(peakValues.size).isAtLeast(5)
+        val medianPeak = peakValues.sorted()[peakValues.size / 2]
+        assertThat(medianPeak).isLessThan(-0.5f)
+    }
+
+    @Test
+    fun analyzeWindowAbstainsOnLeadNoiseWithoutReportingBpm() {
+        val samples = FloatArray(6_000) { index ->
+            java.util.Random(index.toLong() * 17L + 3L).nextGaussian().toFloat() * 0.85f
+        }
+        val result = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
+        assertThat(result.status).isNotEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian).isNull()
     }
 
     @Test
@@ -237,6 +276,15 @@ class EcgBeatAnalyzerTest {
         assertThat(result.bpmMedian!!).isWithin(2.0).of(72.0)
         assertThat(result.bSqi).isAtLeast(0.80)
         assertThat(result.cleanDurationMs).isAtLeast(20_000L)
+    }
+
+    @Test
+    fun analyzePostMeasurementRecovers80BpmOnThirtySecondCapture() {
+        val samples = syntheticQrs(seconds = 30.0, bpm = 80.0).toSamples()
+        val result = EcgBeatAnalyzer.analyze(parsedRecording(samples))
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(80.0)
     }
 
     @Test
@@ -360,6 +408,29 @@ class EcgBeatAnalyzerTest {
         assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
         assertThat(result.bSqi).isAtLeast(0.80)
         assertThat(result.matchedPeaks.size).isAtLeast(5)
+    }
+
+    private fun syntheticBigeminy(
+        seconds: Double,
+        shortMs: Double,
+        longMs: Double,
+        srHz: Int = 500,
+    ): FloatArray {
+        val n = (seconds * srHz).roundToInt()
+        val out = DoubleArray(n)
+        var peak = 0.4 * srHz
+        var shortNext = true
+        while (peak < n) {
+            val r = peak.roundToInt()
+            addGaussian(out, r - (0.18 * srHz).roundToInt(), 0.12, 0.035 * srHz)
+            addGaussian(out, r - (0.025 * srHz).roundToInt(), -0.15, 0.008 * srHz)
+            addGaussian(out, r, 1.20, 0.010 * srHz)
+            addGaussian(out, r + (0.025 * srHz).roundToInt(), -0.28, 0.010 * srHz)
+            addGaussian(out, r + (0.22 * srHz).roundToInt(), 0.30, 0.045 * srHz)
+            peak += (if (shortNext) shortMs else longMs) * srHz / 1000.0
+            shortNext = !shortNext
+        }
+        return FloatArray(n) { out[it].toFloat() }
     }
 
     private fun syntheticQrs(
