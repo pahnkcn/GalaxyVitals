@@ -13,6 +13,7 @@ class EcgWearContractTest {
         assertThat(EcgWearContract.requireSessionId(sessionId)).isEqualTo(sessionId)
         assertThat(EcgWearContract.sessionPath(sessionId)).isEqualTo("/ecg/session/$sessionId")
         assertThat(EcgWearContract.cleanupPath(sessionId)).isEqualTo("/ecg/cleanup/$sessionId")
+        assertThat(EcgWearContract.ackPath(sessionId)).isEqualTo("/ecg/ack/$sessionId")
         assertThat(EcgWearContract.deletePath(sessionId)).isEqualTo("/ecg/delete/$sessionId")
         assertThat(EcgWearContract.inboxFileName(sessionId)).isEqualTo("ecg_$sessionId.csv.gz")
         assertThat(EcgWearContract.sessionIdFromFileName("ecg_$sessionId.csv.gz"))
@@ -37,6 +38,9 @@ class EcgWearContractTest {
             }
             assertThrows(IllegalArgumentException::class.java) {
                 EcgWearContract.cleanupPath(sessionId)
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                EcgWearContract.ackPath(sessionId)
             }
             assertThrows(IllegalArgumentException::class.java) {
                 EcgWearContract.deletePath(sessionId)

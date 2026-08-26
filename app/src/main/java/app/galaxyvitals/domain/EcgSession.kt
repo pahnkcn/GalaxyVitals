@@ -47,6 +47,13 @@ data class EcgSession(
     val analysisBundleId: String? = null,
     val payloadSha256: String? = null,
     val captureSource: String = "LEGACY",
+    val rawTimingTrust: String? = null,
+    val liveBpmMedian: Double? = null,
+    val liveBpmMin: Double? = null,
+    val liveBpmMax: Double? = null,
+    val liveBpmReliableCoveragePct: Double = 0.0,
+    val liveBpmAlgorithmId: String? = null,
+    val liveBpmObservationCount: Int = 0,
 )
 
 data class BloodPressureReading(

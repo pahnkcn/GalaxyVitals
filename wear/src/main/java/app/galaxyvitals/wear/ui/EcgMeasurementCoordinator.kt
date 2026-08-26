@@ -2,6 +2,7 @@ package app.galaxyvitals.wear.ui
 
 import android.os.SystemClock
 import android.util.Log
+import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
@@ -566,7 +567,7 @@ class EcgMeasurementCoordinator(
             transition(MeasurePhase.Success, "SUCCESS") {
                 MeasureUiState(
                     phase = MeasurePhase.Success,
-                    status = if (event.pushed) "Sent to phone" else "Saved on watch",
+                    status = EcgSyncSemantics.afterPutDataItem(event.pushed),
                     sessionId = event.sessionId,
                     remainingSec = 0,
                     error = if (event.pushed) {

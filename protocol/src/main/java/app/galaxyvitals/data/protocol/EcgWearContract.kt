@@ -80,7 +80,25 @@ object EcgWearContract {
 
     fun cleanupPath(sessionId: String): String = CLEANUP_PREFIX + requireSessionId(sessionId)
 
+    fun ackPath(sessionId: String): String = ACK_PREFIX + requireSessionId(sessionId)
+
     fun deletePath(sessionId: String): String = DELETE_PREFIX + requireSessionId(sessionId)
+
+    fun bytesToPersist(
+        schemaVersion: Int,
+        incomingGzip: ByteArray,
+        canonicalGzip: ByteArray,
+    ): ByteArray = if (schemaVersion >= 2) incomingGzip else canonicalGzip
+
+    fun mayAcknowledgeStoredPayload(
+        incomingGzip: ByteArray,
+        storedGzip: ByteArray,
+        expectedSha256: String,
+    ): Boolean {
+        if (incomingGzip.isEmpty()) return false
+        if (!incomingGzip.contentEquals(storedGzip)) return false
+        return sha256(storedGzip) == requireSha256(expectedSha256)
+    }
 
     fun syncNowPath(nodeId: String): String = "${RPC_REQ_PREFIX}$nodeId/syncNow"
 

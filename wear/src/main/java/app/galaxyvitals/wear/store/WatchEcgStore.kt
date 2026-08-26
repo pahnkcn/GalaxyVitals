@@ -2,6 +2,7 @@ package app.galaxyvitals.wear.store
 
 import android.content.Context
 import app.galaxyvitals.data.protocol.EcgCsvParser
+import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.data.protocol.ParsedEcgFile
 import java.io.File
@@ -77,6 +78,12 @@ class WatchEcgStore internal constructor(private val dir: File) {
 
     /** Files without an exact per-session acknowledgement are eligible for upload. */
     fun listPendingGzipFiles(): List<File> = listGzipFiles().filterNot(::isSynced)
+
+    fun syncStatus(sessionId: String): String {
+        val file = fileFor(sessionId)
+        require(file.isFile) { "Missing ECG recording" }
+        return EcgSyncSemantics.fromAckMarker(isSynced(file))
+    }
 
     /**
      * Keeps the newest local history and removes only older recordings acknowledged by the phone.

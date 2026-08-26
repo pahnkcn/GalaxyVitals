@@ -38,6 +38,19 @@ class WatchSessionBpmTest {
     }
 
     @Test
+    fun liveMedianDoesNotReplaceSessionBpm() {
+        val parsed = session(
+            hrMedian = 64.0,
+            samples = syntheticQrs(seconds = 30, bpm = 110).toSamples(),
+            liveBpmMedian = 120.0,
+        )
+
+        assertThat(WatchSessionBpm.displayBpm(parsed)).isEqualTo(64)
+        assertThat(WatchSessionBpm.withDisplayBpm(parsed).hrMedian).isEqualTo(64.0)
+        assertThat(WatchSessionBpm.historyLabel(parsed)).isEqualTo("64 bpm")
+    }
+
+    @Test
     fun historyShowsPlaceholderWhenRhythmCannotBeEstimated() {
         val parsed = session(hrMedian = null, samples = FloatArray(2_500) { 0.02f }.toSamples())
 
@@ -96,7 +109,11 @@ class WatchSessionBpmTest {
         return EcgCsvParser.parseBytes(utf8, gzip = false, sessionIdHint = "hist")
     }
 
-    private fun session(hrMedian: Double?, samples: List<EcgSample>) = ParsedEcgFile(
+    private fun session(
+        hrMedian: Double?,
+        samples: List<EcgSample>,
+        liveBpmMedian: Double? = null,
+    ) = ParsedEcgFile(
         sessionId = "hist",
         srHz = EcgWearContract.DEFAULT_SR_HZ,
         unit = "mV",
@@ -114,6 +131,7 @@ class WatchSessionBpmTest {
         durationSec = samples.size / EcgWearContract.DEFAULT_SR_HZ.toDouble(),
         schemaVersion = 2,
         captureSource = CaptureSource.HARDWARE,
+        liveBpmMedian = liveBpmMedian,
     )
 
     private fun FloatArray.toSamples(): List<EcgSample> = indices.map { index ->

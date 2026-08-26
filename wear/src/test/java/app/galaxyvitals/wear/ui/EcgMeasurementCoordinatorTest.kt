@@ -1,6 +1,7 @@
 package app.galaxyvitals.wear.ui
 
 import app.galaxyvitals.data.protocol.EcgCsvParser
+import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
@@ -705,6 +706,31 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun putDataItemSuccessIsQueuedNotSentToPhone() {
+        val harness = Harness()
+        startRecording(harness)
+        streamUntilTerminal(harness, samples = FloatArray(15_000) { 0.12f })
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Success)
+        assertThat(harness.coordinator.state.value.status).isEqualTo(EcgSyncSemantics.QUEUED)
+        assertThat(harness.coordinator.state.value.status).isNotEqualTo(EcgSyncSemantics.ACKNOWLEDGED)
+        assertThat(harness.coordinator.state.value.status).isNotEqualTo("Sent to phone")
+        assertThat(harness.coordinator.state.value.error).isNull()
+        assertThat(harness.pushedGzip).isNotNull()
+    }
+
+    @Test
+    fun pushFailureStaysSavedOnWatchNotAcknowledged() {
+        val harness = Harness(failPush = true)
+        startRecording(harness)
+        streamUntilTerminal(harness, samples = FloatArray(15_000) { 0.11f })
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Success)
+        assertThat(harness.coordinator.state.value.status).isEqualTo(EcgSyncSemantics.SAVED_ON_WATCH)
+        assertThat(harness.coordinator.state.value.status).isNotEqualTo(EcgSyncSemantics.ACKNOWLEDGED)
+        assertThat(harness.coordinator.state.value.status).isNotEqualTo("Sent to phone")
+        assertThat(harness.coordinator.state.value.error).isNotNull()
+    }
+
+    @Test
     fun hostStopDuringResolutionRequiredDoesNotCancelAndResumeRetriesConnect() {
         val harness = Harness()
         harness.sensor.availability = SensorAvailability(
@@ -775,6 +801,7 @@ class EcgMeasurementCoordinatorTest {
         compute: CoroutineDispatcher = Dispatchers.Unconfined,
         acquisition: CoroutineDispatcher = Dispatchers.Unconfined,
         main: CoroutineDispatcher = Dispatchers.Unconfined,
+        failPush: Boolean = false,
     ) {
         val sensor = FakeSensor { now }
         val recorder = EcgSessionRecorder()
@@ -801,7 +828,10 @@ class EcgMeasurementCoordinatorTest {
                 AutoCloseable { foregroundCloses += 1 }
             },
             save = { _, gzip -> savedGzip = gzip },
-            pushToPhone = { _, gzip -> pushedGzip = gzip },
+            pushToPhone = { _, gzip ->
+                pushedGzip = gzip
+                if (failPush) throw IllegalStateException("No connected phone")
+            },
             watchInfo = { "watch" },
             offBodyFactory = { FakeOffBody() },
             mainDispatcher = main,

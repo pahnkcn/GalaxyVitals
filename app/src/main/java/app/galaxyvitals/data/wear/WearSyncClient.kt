@@ -49,6 +49,13 @@ class WearSyncClient(context: Context) {
         return nodes.size
     }
 
+    suspend fun sendAck(sessionId: String) {
+        sendToConnected(
+            EcgWearContract.ackPath(EcgWearContract.requireSessionId(sessionId)),
+            byteArrayOf(1),
+        )
+    }
+
     suspend fun sendCleanup(sessionId: String) {
         sendToConnected(
             EcgWearContract.cleanupPath(EcgWearContract.requireSessionId(sessionId)),

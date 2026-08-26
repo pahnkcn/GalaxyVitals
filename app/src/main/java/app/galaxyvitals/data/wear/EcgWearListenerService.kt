@@ -75,12 +75,22 @@ class EcgWearListenerService : WearableListenerService() {
                         val discardedDemo = EcgCsvParser.peekCaptureSourceToken(incoming) == "DEMO"
                         try {
                             if (!discardedDemo) {
-                                app.container.ecgRepository.ingestGzipFile(
+                                val incomingBytes = incoming.readBytes()
+                                val stored = app.container.ecgRepository.ingestGzipFile(
                                     incoming,
                                     pendingAsset.sessionId,
                                     EcgSource.WEAR,
                                     expectedSha256 = pendingAsset.sha256,
                                 )
+                                val storedBytes = File(stored.filePath).readBytes()
+                                if (!EcgWearContract.mayAcknowledgeStoredPayload(
+                                        incomingBytes,
+                                        storedBytes,
+                                        pendingAsset.sha256,
+                                    )
+                                ) {
+                                    throw java.io.IOException("ECG stored payload SHA-256 mismatch")
+                                }
                             }
                         } finally {
                             incoming.delete()
@@ -90,6 +100,7 @@ class EcgWearListenerService : WearableListenerService() {
                         Wearable.getDataClient(this@EcgWearListenerService)
                             .deleteDataItems(pendingAsset.dataItemUri)
                             .await()
+                        app.container.wearSyncClient.sendAck(pendingAsset.sessionId)
                         app.container.wearSyncClient.sendCleanup(pendingAsset.sessionId)
                         if (!discardedDemo) notifyReceived(pendingAsset.sessionId)
                     } catch (cancelled: CancellationException) {

@@ -62,6 +62,7 @@ class PhoneWatchBridgeTest {
         val sessionId = "42"
         assertThat(EcgWearContract.sessionPath(sessionId)).isEqualTo("/ecg/session/42")
         assertThat(EcgWearContract.cleanupPath(sessionId)).isEqualTo("/ecg/cleanup/42")
+        assertThat(EcgWearContract.ackPath(sessionId)).isEqualTo("/ecg/ack/42")
         assertThat(EcgWearContract.inboxFileName(sessionId)).isEqualTo("ecg_42.csv.gz")
         assertThat(EcgWearContract.sessionIdFromFileName("ecg_42.csv.gz")).isEqualTo("42")
 

@@ -31,6 +31,7 @@ import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.wear.ui.components.EcgWaveformMini
 import app.galaxyvitals.wear.ui.components.HomeKeyHint
 import kotlin.math.roundToInt
@@ -119,7 +120,7 @@ fun MeasureScreen(
                     }
                     MeasurePhase.Success -> {
                         Text(
-                            if (state.error == null) "On your phone" else "Saved on watch",
+                            state.status,
                             color = MaterialTheme.colorScheme.primary,
                         )
                         state.error?.let {
@@ -163,6 +164,12 @@ private fun RecordingReadout(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Text(
+            EcgSyncSemantics.LIVE_ECG_DERIVED_BPM,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
         LiveHeartRateReadout(state.bpm)
         Spacer(Modifier.weight(1f))
         EcgWaveformMini(state.waveform, Modifier.fillMaxWidth())
@@ -204,7 +211,7 @@ private fun LiveHeartRateReadout(bpm: LiveBpmState) {
     ) {
         Icon(
             imageVector = Icons.Filled.Favorite,
-            contentDescription = "Heart rate",
+            contentDescription = EcgSyncSemantics.LIVE_ECG_DERIVED_BPM,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .size(18.dp)

@@ -70,6 +70,18 @@ class FormattersTest {
         assertThat(session.naoTitle()).isEqualTo("Not analysed")
     }
 
+    @Test
+    fun historyPrimaryUsesEcgHrMedianNotLiveMedian() {
+        val session = session(
+            hrMedian = 50.0,
+            ecgHrMedian = 72.4,
+            liveBpmMedian = 120.0,
+        )
+
+        assertThat(session.hrLabel()).isEqualTo("72")
+        assertThat(session.hrSourceLabel()).isEqualTo("ECG-derived median bpm")
+    }
+
     private fun session(
         status: AnalysisStatus = AnalysisStatus.NONE,
         label: String? = null,
@@ -78,6 +90,7 @@ class FormattersTest {
         durationSec: Double = 1.0,
         hrMedian: Double? = 70.0,
         ecgHrMedian: Double? = null,
+        liveBpmMedian: Double? = null,
     ) = EcgSession(
         sessionId = "test",
         filePath = "test.csv.gz",
@@ -102,5 +115,6 @@ class FormattersTest {
         naoConfidence = confidence,
         findings = findings,
         ecgHrMedian = ecgHrMedian,
+        liveBpmMedian = liveBpmMedian,
     )
 }

@@ -1,5 +1,6 @@
 package app.galaxyvitals.wear.store
 
+import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.data.protocol.EcgCsvWriter
 import app.galaxyvitals.domain.CaptureSource
@@ -67,6 +68,9 @@ class WatchEcgStoreTest {
             .containsExactly(EcgWearContract.inboxFileName("10"))
         assertThat(File(dir, "ecg_1.csv.gz${WatchEcgStore.SYNCED_SUFFIX}").isFile).isTrue()
         assertThat(File(dir, "ecg_10.csv.gz${WatchEcgStore.SYNCED_SUFFIX}").exists()).isFalse()
+        assertThat(store.syncStatus("1")).isEqualTo(EcgSyncSemantics.ACKNOWLEDGED)
+        assertThat(store.syncStatus("10")).isEqualTo(EcgSyncSemantics.QUEUED)
+        assertThat(store.syncStatus("1")).isNotEqualTo(store.syncStatus("10"))
     }
 
     @Test

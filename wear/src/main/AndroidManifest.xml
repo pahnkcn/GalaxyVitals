@@ -61,6 +61,13 @@
                 <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
                 <data
                     android:host="*"
+                    android:pathPrefix="/ecg/ack"
+                    android:scheme="wear" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:host="*"
                     android:pathPrefix="/ecg/delete"
                     android:scheme="wear" />
             </intent-filter>

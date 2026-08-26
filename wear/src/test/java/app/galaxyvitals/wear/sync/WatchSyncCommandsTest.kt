@@ -69,6 +69,22 @@ class WatchSyncCommandsTest {
         assertThat(store.listPendingGzipFiles()).isEmpty()
     }
 
+    @Test
+    fun ackPathMarksExactSessionAcknowledged() {
+        val store = WatchEcgStore(tmp.newFolder("ack"))
+        store.save("42", byteArrayOf(3))
+        store.save("420", byteArrayOf(4))
+
+        val changed = recordingCommands(store).handle(EcgWearContract.ackPath("42"))
+
+        assertThat(changed.handled).isTrue()
+        assertThat(changed.storeChanged).isTrue()
+        assertThat(store.syncStatus("42")).isEqualTo("ACKNOWLEDGED")
+        assertThat(store.syncStatus("420")).isEqualTo("QUEUED")
+        assertThat(store.listPendingGzipFiles().map { it.name })
+            .containsExactly(EcgWearContract.inboxFileName("420"))
+    }
+
     private fun recordingCommands(store: WatchEcgStore): Recording {
         var storeChanged = false
         val commands = WatchSyncCommands(

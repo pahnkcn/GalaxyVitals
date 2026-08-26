@@ -175,7 +175,7 @@ class EcgRepository(
             val analysed = try {
                 if (!file.exists()) throw IllegalStateException("ECG waveform is missing")
                 val parsed = EcgCsvParser.parseFile(file, sessionId)
-                analyze(entity, parsed)
+                analyze(entity.withCaptureProvenance(parsed), parsed)
             } catch (err: Exception) {
                 failedAnalysis(entity, err)
             }
@@ -193,7 +193,7 @@ class EcgRepository(
                 val analysed = try {
                     if (!file.exists()) throw IllegalStateException("ECG waveform is missing")
                     val parsed = EcgCsvParser.parseFile(file, row.sessionId)
-                    analyze(row, parsed)
+                    analyze(row.withCaptureProvenance(parsed), parsed)
                 } catch (err: Exception) {
                     failedAnalysis(row, err)
                 }
@@ -228,11 +228,20 @@ class EcgRepository(
         if (keepFile == null) {
             writeCanonical(dest, parsed)
         } else if (keepFile.canonicalPath != dest.canonicalPath) {
-            if (parsed.schemaVersion >= 2) {
-                writeAtomic(dest, keepFile.readBytes())
+            val incoming = keepFile.readBytes()
+            val canonical = if (parsed.schemaVersion >= 2) {
+                incoming
             } else {
-                writeCanonical(dest, parsed)
+                EcgCsvWriter.gzipBytes(EcgCsvWriter.encodeParsed(parsed))
             }
+            writeAtomic(
+                dest,
+                EcgWearContract.bytesToPersist(
+                    schemaVersion = parsed.schemaVersion,
+                    incomingGzip = incoming,
+                    canonicalGzip = canonical,
+                ),
+            )
         }
         val entity = EcgSessionEntity.from(
             parsed = parsed,

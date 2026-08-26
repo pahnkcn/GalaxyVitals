@@ -10,8 +10,13 @@ class WatchSyncCommands(
     private val onSyncNow: () -> Unit = {},
 ) {
     fun handle(path: String): Boolean = when {
-        path.startsWith(EcgWearContract.CLEANUP_PREFIX) -> {
-            val acknowledged = path.removePrefix(EcgWearContract.CLEANUP_PREFIX)
+        path.startsWith(EcgWearContract.CLEANUP_PREFIX) ||
+            path.startsWith(EcgWearContract.ACK_PREFIX) -> {
+            val acknowledged = if (path.startsWith(EcgWearContract.ACK_PREFIX)) {
+                path.removePrefix(EcgWearContract.ACK_PREFIX)
+            } else {
+                path.removePrefix(EcgWearContract.CLEANUP_PREFIX)
+            }
             try {
                 if (store.markSynced(acknowledged)) store.pruneAcknowledgedHistory()
                 onStoreChanged()

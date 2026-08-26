@@ -41,6 +41,13 @@ data class EcgSessionEntity(
     val analysisBundleId: String? = null,
     val payloadSha256: String? = null,
     val captureSource: String = "LEGACY",
+    val rawTimingTrust: String? = null,
+    val liveBpmMedian: Double? = null,
+    val liveBpmMin: Double? = null,
+    val liveBpmMax: Double? = null,
+    val liveBpmReliableCoveragePct: Double = 0.0,
+    val liveBpmAlgorithmId: String? = null,
+    val liveBpmObservationCount: Int = 0,
 ) {
     fun toDomain(): EcgSession = EcgSession(
         sessionId = sessionId,
@@ -76,6 +83,13 @@ data class EcgSessionEntity(
         analysisBundleId = analysisBundleId,
         payloadSha256 = payloadSha256,
         captureSource = captureSource,
+        rawTimingTrust = rawTimingTrust,
+        liveBpmMedian = liveBpmMedian,
+        liveBpmMin = liveBpmMin,
+        liveBpmMax = liveBpmMax,
+        liveBpmReliableCoveragePct = liveBpmReliableCoveragePct,
+        liveBpmAlgorithmId = liveBpmAlgorithmId,
+        liveBpmObservationCount = liveBpmObservationCount,
     )
 
     companion object {
@@ -110,9 +124,31 @@ data class EcgSessionEntity(
                 timingTrust = parsed.timingTrust.name,
                 payloadSha256 = payloadSha256,
                 captureSource = parsed.captureSource.name,
+                rawTimingTrust = parsed.rawTimingTrust?.name,
+                liveBpmMedian = parsed.liveBpmMedian,
+                liveBpmMin = parsed.liveBpmMin,
+                liveBpmMax = parsed.liveBpmMax,
+                liveBpmReliableCoveragePct = parsed.liveBpmReliableCoveragePct,
+                liveBpmAlgorithmId = parsed.liveBpmAlgorithmId,
+                liveBpmObservationCount = parsed.liveBpmObservationCount,
             )
         }
     }
+
+    fun withCaptureProvenance(
+        parsed: app.galaxyvitals.data.protocol.ParsedEcgFile,
+    ): EcgSessionEntity = copy(
+        inputSchemaVersion = parsed.schemaVersion,
+        timingTrust = parsed.timingTrust.name,
+        rawTimingTrust = parsed.rawTimingTrust?.name,
+        liveBpmMedian = parsed.liveBpmMedian,
+        liveBpmMin = parsed.liveBpmMin,
+        liveBpmMax = parsed.liveBpmMax,
+        liveBpmReliableCoveragePct = parsed.liveBpmReliableCoveragePct,
+        liveBpmAlgorithmId = parsed.liveBpmAlgorithmId,
+        liveBpmObservationCount = parsed.liveBpmObservationCount,
+        captureSource = parsed.captureSource.name,
+    )
 
     fun withAnalysis(
         status: AnalysisStatus,

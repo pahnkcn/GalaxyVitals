@@ -26,8 +26,7 @@ class WatchDataLayer(context: Context) {
 
     suspend fun putSession(sessionId: String, gzip: ByteArray) {
         // putDataItem() can succeed locally even when no companion is connected.
-        // Do not report a recording as delivered until Wear OS exposes a target
-        // phone; the pending watch file remains available for a later retry.
+        // Success here is QUEUED only; ACKNOWLEDGED requires a per-session ACK.
         requireConnectedPhone(nodeClient.connectedNodes.await())
         require(gzip.isNotEmpty()) { "ECG payload is empty" }
         val now = System.currentTimeMillis()
