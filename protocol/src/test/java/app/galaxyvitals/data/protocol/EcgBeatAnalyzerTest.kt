@@ -15,6 +15,20 @@ import kotlin.math.sin
 
 class EcgBeatAnalyzerTest {
     @Test
+    fun detectorConfigIsVersionedFromDevSplit() {
+        val config = EcgBeatDetectorConfig.DEFAULT
+        assertThat(config.version).isEqualTo(EcgBeatDetectorConfig.VERSION)
+        assertThat(config.provenance).contains("physionet-dev-split-v1")
+        assertThat(config.thresholdNoiseWeight).isEqualTo(0.375)
+        assertThat(config.primaryRefractoryMs).isEqualTo(300)
+        assertThat(config.secondaryRefractoryMs).isEqualTo(300)
+        assertThat(config.secondaryTwave).isTrue()
+        assertThat(config.maxRrCv).isEqualTo(0.22)
+        assertThat(config.dualPolarity).isTrue()
+        assertThat(config.minBsqi).isEqualTo(0.80)
+    }
+
+    @Test
     fun analyzeWindowRecovers72Bpm() {
         assertWindowBpm(72.0, tolerance = 2.0)
     }

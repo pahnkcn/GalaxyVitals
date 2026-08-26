@@ -94,6 +94,12 @@ data class PhysioNetBenchmarkSplit(
     fun records(dataset: String, split: String): List<String> =
         rows.filter { it.dataset == dataset && it.split == split }.map { it.recordId }
 
+    fun isLocked(dataset: String, recordId: String): Boolean =
+        rows.any { it.dataset == dataset && it.recordId == recordId && it.split == "locked" }
+
+    fun isDev(dataset: String, recordId: String): Boolean =
+        rows.any { it.dataset == dataset && it.recordId == recordId && it.split == "dev" }
+
     companion object {
         fun load(root: File = repoRoot()): PhysioNetBenchmarkSplit {
             val json = File(root, "tools/ecg_benchmark/physionet_split.json").readText(Charsets.UTF_8)

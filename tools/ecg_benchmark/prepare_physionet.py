@@ -111,14 +111,216 @@ def resample_to_target(signal: np.ndarray, source_hz: float) -> np.ndarray:
 
 
 def load_record(database: str, record_id: str):
-    record = wfdb.rdrecord(record_id, pn_dir=database)
     try:
-        annotation = wfdb.rdann(record_id, "atr", pn_dir=database)
+        record = wfdb.rdrecord(record_id, pn_dir=database)
+        annotation = _load_annotation(database, record_id)
+        return record, annotation
+    except Exception as exc:
+        try:
+            return load_record_http(database, record_id)
+        except Exception:
+            raise exc
+
+
+def _load_annotation(database: str, record_id: str):
+    try:
+        return wfdb.rdann(record_id, "atr", pn_dir=database)
     except Exception:
         stem = RECORD_STEM.match(record_id)
         if stem is None:
             raise
-        annotation = wfdb.rdann(stem.group(1), "atr", pn_dir="mitdb")
+        return wfdb.rdann(stem.group(1), "atr", pn_dir="mitdb")
+
+
+PHYSIONET_FILE = "https://physionet.org/files/{database}/1.0.0/{name}"
+
+
+def _http_bytes(database: str, name: str) -> bytes:
+    from urllib.request import Request, urlopen
+
+    url = PHYSIONET_FILE.format(database=database, name=name)
+    request = Request(url, headers={"User-Agent": "GalaxyVitals-ecg-benchmark/1.0"})
+    with urlopen(request, timeout=120) as response:
+        return response.read()
+
+
+def _parse_gain(token: str, adc_zero: int) -> tuple[float, int, str]:
+    unit = "mV"
+    left = token
+    if "/" in token:
+        left, unit = token.split("/", 1)
+    if "(" in left and left.endswith(")"):
+        gain_text, baseline_text = left[:-1].split("(", 1)
+        return float(gain_text), int(baseline_text), unit
+    return float(left), adc_zero, unit
+
+
+def _signed12(values: np.ndarray) -> np.ndarray:
+    values = values.astype(np.int16, copy=False)
+    return np.where(values >= 2048, values - 4096, values).astype(np.int16, copy=False)
+
+
+def _decode_212(payload: bytes, sample_count: int) -> np.ndarray:
+    raw = np.frombuffer(payload, dtype=np.uint8)
+    expected = sample_count * 3
+    if raw.size != expected:
+        raise ValueError(f"format 212 byte count {raw.size} != expected {expected}")
+    frames = raw.reshape(-1, 3).astype(np.int16)
+    first = frames[:, 0] | ((frames[:, 1] & 0x0F) << 8)
+    second = frames[:, 2] | ((frames[:, 1] & 0xF0) << 4)
+    return np.column_stack((_signed12(first), _signed12(second)))
+
+
+def _decode_16(payload: bytes, sample_count: int, signal_count: int) -> np.ndarray:
+    raw = np.frombuffer(payload, dtype="<i2")
+    expected = sample_count * signal_count
+    if raw.size != expected:
+        raise ValueError(f"format 16 sample count {raw.size} != expected {expected}")
+    return raw.reshape(sample_count, signal_count)
+
+
+def _signed_checksum(values: np.ndarray) -> int:
+    unsigned = int(np.sum(values.astype(np.int64))) & 0xFFFF
+    return unsigned - 0x10000 if unsigned >= 0x8000 else unsigned
+
+
+def _parse_header(database: str, record_id: str):
+    from types import SimpleNamespace
+
+    text = _http_bytes(database, f"{record_id}.hea").decode("ascii")
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")]
+    head = lines[0].split()
+    signal_count = int(head[1])
+    fs = float(head[2].split("/", 1)[0])
+    sample_count = int(head[3])
+    specs = []
+    for line in lines[1 : 1 + signal_count]:
+        fields = line.split()
+        fmt_text = fields[1].split("+", 1)[0].split(":", 1)[0].split("x", 1)[0]
+        fmt = int(fmt_text)
+        adc_zero = int(fields[4])
+        gain, baseline, unit = _parse_gain(fields[2], adc_zero)
+        specs.append(
+            SimpleNamespace(
+                filename=fields[0],
+                fmt=fmt,
+                gain=gain,
+                baseline=baseline,
+                initial=int(fields[5]),
+                checksum=int(fields[6]),
+                unit=unit,
+                name=" ".join(fields[8:]),
+            )
+        )
+    return fs, sample_count, specs
+
+
+def _atr_pairs(payload: bytes) -> np.ndarray:
+    raw = np.frombuffer(payload, dtype=np.uint8)
+    if raw.size % 2:
+        raise ValueError("annotation byte count is not even")
+    return raw.reshape(-1, 2)
+
+
+_ATR_SYMBOLS = {
+    0: " ", 1: "N", 2: "L", 3: "R", 4: "a", 5: "V", 6: "F",
+    7: "J", 8: "A", 9: "S", 10: "E", 11: "j", 12: "/", 13: "Q",
+    14: "~", 16: "|", 18: "s", 19: "T", 20: "*", 21: "D",
+    22: '"', 23: "=", 24: "p", 25: "B", 26: "^", 27: "t",
+    28: "+", 29: "u", 30: "?", 31: "!", 32: "[", 33: "]",
+    34: "e", 35: "n", 36: "@", 37: "x", 38: "f", 39: "(",
+    40: ")", 41: "r",
+}
+
+
+def _atr_core(pairs: np.ndarray, index: int) -> tuple[int, int, int]:
+    delta = 0
+    while int(pairs[index, 1]) >> 2 == 59:
+        skip = (
+            (int(pairs[index + 1, 0]) << 16)
+            + (int(pairs[index + 1, 1]) << 24)
+            + int(pairs[index + 2, 0])
+            + (int(pairs[index + 2, 1]) << 8)
+        )
+        if skip > 0x7FFFFFFF:
+            skip -= 0x100000000
+        delta += skip
+        index += 3
+    label = int(pairs[index, 1]) >> 2
+    delta += int(pairs[index, 0]) + 256 * (int(pairs[index, 1]) & 3)
+    return delta, label, index + 1
+
+
+def _read_atr(database: str, record_id: str):
+    from types import SimpleNamespace
+    from urllib.error import HTTPError
+
+    try:
+        pairs = _atr_pairs(_http_bytes(database, f"{record_id}.atr"))
+    except HTTPError:
+        stem = RECORD_STEM.match(record_id)
+        if stem is None:
+            raise
+        pairs = _atr_pairs(_http_bytes("mitdb", f"{stem.group(1)}.atr"))
+    samples: list[int] = []
+    symbols: list[str] = []
+    total = 0
+    index = 0
+    while index < len(pairs) - 1:
+        delta, label, index = _atr_core(pairs, index)
+        total += delta
+        if label == 0:
+            break
+        samples.append(total)
+        symbols.append(_ATR_SYMBOLS.get(label, " "))
+        while index < len(pairs):
+            extra = int(pairs[index, 1]) >> 2
+            if extra <= 59:
+                break
+            if extra == 63:
+                length = int(pairs[index, 0])
+                index += 1 + (length + 1) // 2
+            else:
+                index += 1
+    return SimpleNamespace(sample=np.asarray(samples, dtype=np.int64), symbol=symbols)
+
+
+def load_record_http(database: str, record_id: str):
+    from types import SimpleNamespace
+
+    fs, sample_count, specs = _parse_header(database, record_id)
+    if not specs:
+        raise ValueError(f"no signals in {database}/{record_id}")
+    filenames = {spec.filename for spec in specs}
+    if len(filenames) != 1:
+        raise ValueError(f"separate signal files unsupported for {database}/{record_id}")
+    payload = _http_bytes(database, specs[0].filename)
+    fmt = specs[0].fmt
+    if any(spec.fmt != fmt for spec in specs):
+        raise ValueError(f"mixed WFDB formats unsupported for {database}/{record_id}")
+    if fmt == 212:
+        if len(specs) != 2:
+            raise ValueError(f"format 212 requires two channels for {database}/{record_id}")
+        digital = _decode_212(payload, sample_count)
+    elif fmt == 16:
+        digital = _decode_16(payload, sample_count, len(specs))
+    else:
+        raise ValueError(f"unsupported WFDB format {fmt} for {database}/{record_id}")
+    for channel, spec in enumerate(specs):
+        if int(digital[0, channel]) != spec.initial:
+            raise ValueError(f"initial-value check failed for {database}/{record_id} channel {channel}")
+        if _signed_checksum(digital[:, channel]) != spec.checksum:
+            raise ValueError(f"checksum failed for {database}/{record_id} channel {channel}")
+    physical = np.empty(digital.shape, dtype=np.float64)
+    for channel, spec in enumerate(specs):
+        physical[:, channel] = (digital[:, channel] - spec.baseline) / spec.gain
+    record = SimpleNamespace(
+        fs=fs,
+        sig_name=[spec.name for spec in specs],
+        units=[spec.unit for spec in specs],
+        p_signal=physical,
+    )
+    annotation = _read_atr(database, record_id)
     return record, annotation
 
 
@@ -133,13 +335,17 @@ def beat_rows(annotation, fs: float) -> list[tuple[int, str]]:
 
 
 def sign_factor_from_beats(signal: np.ndarray, annotation, fs: float) -> int:
+    window = max(1, int(round(0.2 * fs)))
     values = []
     for sample, symbol in zip(annotation.sample, annotation.symbol):
         if symbol not in BEAT_SYMBOLS:
             continue
         index = int(sample)
         if 0 <= index < len(signal):
-            values.append(float(signal[index]))
+            lo = max(0, index - window)
+            hi = min(len(signal), index + window)
+            baseline = float(np.median(signal[lo:hi]))
+            values.append(float(signal[index]) - baseline)
     if not values:
         return 1
     return 1 if float(np.median(values)) >= 0.0 else -1
@@ -288,6 +494,19 @@ def main() -> None:
     print(f"wrote {len(rows)} records to {manifest}")
     if failures:
         raise SystemExit("failed records: " + ", ".join(failures))
+    if args.limit is None:
+        missing = missing_required_records(output)
+        if missing:
+            raise SystemExit("missing required records: " + ", ".join(missing))
+
+
+def missing_required_records(output: Path) -> list[str]:
+    missing: list[str] = []
+    for database, record_id in selected_records(None):
+        dest = output / database / record_id
+        if not (dest / "signal.f32").is_file() or not (dest / "beats.csv").is_file() or not (dest / "meta.txt").is_file():
+            missing.append(f"{database}/{record_id}")
+    return missing
 
 
 if __name__ == "__main__":

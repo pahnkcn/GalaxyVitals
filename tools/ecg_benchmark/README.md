@@ -19,8 +19,15 @@ python tools/ecg_benchmark/prepare_physionet.py
 ```
 
 `--limit N` converts a smoke subset (MIT-BIH non-paced first, then NSTDB). Paced
-MIT-BIH records `102`, `104`, `107`, and `217` are skipped. The script downloads
-only when you run it; `.\gradlew.bat :protocol:test` does not download PhysioNet.
+MIT-BIH records `102`, `104`, `107`, and `217` are skipped. A full run (no
+`--limit`) **fails** if any of the 44 non-paced MIT-BIH records or 12 NSTDB
+records are missing, including `118e00`, `118e_6`, `119e00`, and `119e_6`
+(WFDB format 16). The script downloads only when you run it;
+`.\gradlew.bat :protocol:test` does not download PhysioNet.
+
+Record/participant split: [physionet_split.csv](physionet_split.csv) (dev vs
+locked). Detector thresholds are chosen on **dev** only and frozen in
+`EcgBeatDetectorConfig`. Opt-in Kotlin gates run on the **locked** set.
 
 Output per record:
 
@@ -46,7 +53,9 @@ Gates (10 s `EcgBeatAnalyzer.analyzeWindow` slices, 150 ms peak match):
 - NSTDB SNR ≥ 12 dB: coverage ≥ 80%; accepted HR MAE ≤ 5 BPM
 - High-noise NSTDB: abstain allowed; among reported windows, fraction with error > 10 BPM ≤ 5%
 
-Do not change production detector thresholds to chase these numbers.
+Gates are locked-split engineering checks, not clinical accuracy claims. Do not
+retune `EcgBeatDetectorConfig` from locked-set output. Do not change live BPM
+estimator thresholds to chase these numbers.
 
 ## Hardware
 
