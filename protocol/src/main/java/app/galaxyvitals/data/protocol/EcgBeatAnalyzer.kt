@@ -150,38 +150,6 @@ object EcgBeatAnalyzer {
     }
 
     private fun detectOnResampled(oriented: FloatArray, config: EcgBeatDetectorConfig): SegmentDetections {
-        val chunk = TARGET_HZ * 10
-        if (oriented.size <= chunk + EcgQrsFilter.WARMUP_SAMPLES) {
-            return detectSingleResampledWindow(oriented, config)
-        }
-        val primary = ArrayList<Int>()
-        val secondary = ArrayList<Int>()
-        val matched = ArrayList<Int>()
-        val rrMs = ArrayList<Double>()
-        val snrs = ArrayList<Double>()
-        val deflections = ArrayList<Double>()
-        var start = 0
-        while (start + chunk <= oriented.size) {
-            val local = detectSingleResampledWindow(oriented.copyOfRange(start, start + chunk), config)
-            local.primary.forEach { primary += it + start }
-            local.secondary.forEach { secondary += it + start }
-            local.matched.forEach { matched += it + start }
-            rrMs += local.rrMs
-            snrs += local.envelopeSnr
-            deflections += local.dominantDeflection
-            start += chunk
-        }
-        return SegmentDetections(
-            primary = primary.toIntArray(),
-            secondary = secondary.toIntArray(),
-            matched = matched.toIntArray(),
-            rrMs = rrMs,
-            envelopeSnr = if (snrs.isEmpty()) 0.0 else snrs.median(),
-            dominantDeflection = if (deflections.isEmpty()) 0.0 else deflections.median(),
-        )
-    }
-
-    private fun detectSingleResampledWindow(oriented: FloatArray, config: EcgBeatDetectorConfig): SegmentDetections {
         if (oriented.size <= EcgQrsFilter.WARMUP_SAMPLES) {
             return SegmentDetections(IntArray(0), IntArray(0), IntArray(0), emptyList(), 0.0, 0.0)
         }
@@ -360,6 +328,24 @@ object EcgBeatAnalyzer {
         }
         if (searchBack && qrs.isNotEmpty()) {
             while (trySearchBack(envelope.size)) {
+            }
+        }
+        if (config.minPeakToMedian > 0.0 && qrs.size >= 3) {
+            val medianAmp = qrsAmp.median()
+            if (medianAmp > 0.0) {
+                val keep = ArrayList<Int>()
+                val keepAmp = ArrayList<Double>()
+                val floor = config.minPeakToMedian * medianAmp
+                for (index in qrs.indices) {
+                    if (qrsAmp[index] >= floor) {
+                        keep += qrs[index]
+                        keepAmp += qrsAmp[index]
+                    }
+                }
+                qrs.clear()
+                qrs.addAll(keep)
+                qrsAmp.clear()
+                qrsAmp.addAll(keepAmp)
             }
         }
         val signalNoise = if (npki <= 1e-12) {

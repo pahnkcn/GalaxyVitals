@@ -29,13 +29,15 @@ data class EcgBeatDetectorConfig(
     val learnSeconds: Int,
     val minEnvelopeSnr: Double,
     val snrBypassBsqi: Double,
+    val minPeakToMedian: Double,
     val dualPolarity: Boolean,
 ) {
     companion object {
-        const val VERSION = 2
+        const val VERSION = 3
         const val PROVENANCE =
             "physionet-dev-split-v1; thr=0.375; refractory=300ms; secondary-twave; " +
-                "minSignalNoise=3.0; snrBypassBsqi=0.95; polarity-bsqi-dual; freeze=2026-08-26-v2"
+                "minSignalNoise=3.0; snrBypassBsqi=0.95; minPeakToMedian=0.20; " +
+                "no-tile; polarity-bsqi-dual; freeze=2026-08-26-v3"
 
         val DEFAULT = EcgBeatDetectorConfig(
             version = VERSION,
@@ -61,6 +63,7 @@ data class EcgBeatDetectorConfig(
             learnSeconds = 2,
             minEnvelopeSnr = 3.0,
             snrBypassBsqi = 0.95,
+            minPeakToMedian = 0.20,
             dualPolarity = true,
         )
     }

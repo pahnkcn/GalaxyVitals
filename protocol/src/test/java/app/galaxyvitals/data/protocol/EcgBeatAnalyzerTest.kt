@@ -18,9 +18,10 @@ class EcgBeatAnalyzerTest {
     fun detectorConfigIsVersionedFromDevSplit() {
         val config = EcgBeatDetectorConfig.DEFAULT
         assertThat(config.version).isEqualTo(EcgBeatDetectorConfig.VERSION)
-        assertThat(config.version).isEqualTo(2)
+        assertThat(config.version).isEqualTo(3)
         assertThat(config.provenance).contains("physionet-dev-split-v1")
-        assertThat(config.provenance).contains("minSignalNoise")
+        assertThat(config.provenance).contains("minPeakToMedian")
+        assertThat(config.provenance).contains("no-tile")
         assertThat(config.thresholdNoiseWeight).isEqualTo(0.375)
         assertThat(config.primaryRefractoryMs).isEqualTo(300)
         assertThat(config.secondaryRefractoryMs).isEqualTo(300)
@@ -29,6 +30,7 @@ class EcgBeatAnalyzerTest {
         assertThat(config.minBsqi).isEqualTo(0.80)
         assertThat(config.minEnvelopeSnr).isEqualTo(3.0)
         assertThat(config.snrBypassBsqi).isEqualTo(0.95)
+        assertThat(config.minPeakToMedian).isEqualTo(0.20)
         assertThat(config.provenance).doesNotContain("maxRrCv")
     }
 
@@ -285,6 +287,29 @@ class EcgBeatAnalyzerTest {
         assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
         assertThat(result.bpmMedian).isNotNull()
         assertThat(result.bpmMedian!!).isWithin(3.0).of(80.0)
+    }
+
+    @Test
+    fun analyzeWindowReportsBeatsAfterFirstTenSecondsOnSixteenSecondCapture() {
+        val samples = syntheticQrs(seconds = 16.0, bpm = 72.0)
+        val result = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(72.0)
+        val afterTenSeconds = 10 * 500
+        assertThat(result.primaryPeaks.any { it >= afterTenSeconds }).isTrue()
+        assertThat(result.matchedPeaks.any { it >= afterTenSeconds }).isTrue()
+    }
+
+    @Test
+    fun analyzeThirtySecondCaptureDoesNotBlankPerTileWarmup() {
+        val samples = syntheticQrs(seconds = 30.0, bpm = 72.0).toSamples()
+        val result = EcgBeatAnalyzer.analyze(parsedRecording(samples))
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        val secondTileWarmup = 5_000 until 5_500
+        val thirdTileWarmup = 10_000 until 10_500
+        assertThat(result.primaryPeaks.any { it in secondTileWarmup }).isTrue()
+        assertThat(result.primaryPeaks.any { it in thirdTileWarmup }).isTrue()
+        assertThat(result.primaryPeaks.size).isAtLeast(32)
     }
 
     @Test
