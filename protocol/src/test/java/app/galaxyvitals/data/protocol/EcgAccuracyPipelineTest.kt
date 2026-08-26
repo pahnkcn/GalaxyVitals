@@ -31,7 +31,8 @@ class EcgAccuracyPipelineTest {
 
         assertThat(parsed.schemaVersion).isEqualTo(2)
         assertThat(parsed.captureSource).isEqualTo(CaptureSource.HARDWARE)
-        assertThat(parsed.timingTrust).isEqualTo(TimingTrust.SENSOR)
+        assertThat(encoded.toString(Charsets.UTF_8)).contains("\"timing_trust\":\"SENSOR\"")
+        assertThat(parsed.timingTrust).isEqualTo(TimingTrust.UNVERIFIED)
         assertThat(parsed.samples).hasSize(count)
         assertThat(parsed.samples.last().relMs).isEqualTo(29_998L)
         assertThat(parsed.samples.last().sampleIndex).isEqualTo(14_999)

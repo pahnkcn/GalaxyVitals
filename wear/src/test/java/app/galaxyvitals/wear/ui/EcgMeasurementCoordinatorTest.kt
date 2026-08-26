@@ -408,19 +408,21 @@ class EcgMeasurementCoordinatorTest {
     fun recorderKeepsRawSamplesOnRightWrist() {
         val harness = Harness(wrist = Wrist.RIGHT)
         startRecording(harness)
-        val raw = FloatArray(10) { index -> if (index == 0) 1.5f else 0.12f }
-        harness.now += 20L
-        harness.sensor.emit(batch(sequence = harness.nextSequence, samples = raw))
+        streamUntilTerminal(
+            harness,
+            samples = FloatArray(15_000) { index -> if (index == 0) 1.5f else 0.12f },
+        )
 
-        val recorded = harness.recorder.finish("watch")
         val parsed = EcgCsvParser.parseBytes(
-            recorded.gzip,
+            requireNotNull(harness.savedGzip),
             gzip = true,
             sessionIdHint = requireNotNull(harness.coordinator.state.value.sessionId),
         )
+        assertThat(parsed.schemaVersion).isEqualTo(3)
         assertThat(parsed.signFactor).isEqualTo(EcgWearContract.signFactorFor(Wrist.RIGHT))
-        assertThat(parsed.samples.last().valueMv).isEqualTo(0.12f)
-        assertThat(parsed.samples[parsed.samples.lastIndex - 9].valueMv).isEqualTo(1.5f)
+        assertThat(parsed.samples[0].valueMv).isEqualTo(1.5f)
+        assertThat(parsed.samples[1].valueMv).isEqualTo(0.12f)
+        assertThat(parsed.samples).hasSize(15_000)
     }
 
     @Test
@@ -691,7 +693,10 @@ class EcgMeasurementCoordinatorTest {
         )
         assertThat(parsed.samples).hasSize(15_000)
         assertThat(parsed.captureSource.name).isEqualTo("HARDWARE")
-        assertThat(parsed.schemaVersion).isEqualTo(2)
+        assertThat(parsed.schemaVersion).isEqualTo(3)
+        assertThat(parsed.timingTrust.name).isEqualTo("SEQUENCE_RECONSTRUCTED")
+        assertThat(parsed.samples[0].sensorTimestampMsRaw).isNotNull()
+        assertThat(parsed.missingSampleCountKnown).isFalse()
         val duration = parsed.samples.last().relMs - parsed.samples.first().relMs
         assertThat(duration).isEqualTo(29_998L)
         val hz = 14_999.0 * 1000.0 / duration

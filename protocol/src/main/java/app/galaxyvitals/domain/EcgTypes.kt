@@ -16,6 +16,7 @@ enum class TimingTrust {
     SENSOR,
     ASSUMED,
     UNVERIFIED,
+    SEQUENCE_RECONSTRUCTED,
 }
 
 enum class SignalQualityStatus {
@@ -40,4 +41,30 @@ data class EcgSample(
     val hrBpm: Int?,
     val sampleIndex: Int = -1,
     val flags: Int = EcgSampleFlags.NONE,
+    val sensorTimestampMsRaw: Long? = null,
+    val batchSequence: Int? = null,
+    val batchSampleOffset: Int? = null,
+    val batchSize: Int? = null,
+)
+
+data class LiveBpmObservation(
+    val atSampleIndex: Long,
+    val observedCaptureElapsedMs: Long,
+    val status: String,
+    val displayedBpm: Double? = null,
+    val rawBpm: Double? = null,
+    val source: String? = null,
+    val bSqi: Double? = null,
+    val rrCount: Int? = null,
+    val estimateAgeMs: Long = 0L,
+    val reasonCode: String? = null,
+)
+
+data class LiveBpmSummary(
+    val median: Double? = null,
+    val min: Double? = null,
+    val max: Double? = null,
+    val reliableCoveragePct: Double = 0.0,
+    val observationCount: Int = 0,
+    val algorithmId: String? = null,
 )

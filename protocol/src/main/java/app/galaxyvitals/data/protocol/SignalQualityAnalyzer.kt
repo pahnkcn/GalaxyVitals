@@ -69,13 +69,20 @@ object SignalQualityAnalyzer {
         }
         val expectedMs = 1000.0 / parsed.srHz
         val flags = linkedSetOf<QualityFlag>()
-        if (parsed.timingTrust != app.galaxyvitals.domain.TimingTrust.SENSOR) {
+        val timingTrust = parsed.timingTrust
+        if (
+            timingTrust == app.galaxyvitals.domain.TimingTrust.ASSUMED ||
+            timingTrust == app.galaxyvitals.domain.TimingTrust.UNVERIFIED
+        ) {
             flags += QualityFlag.LEGACY_TIMING
         }
         if (parsed.srHz !in setOf(250, 300, 500)) flags += QualityFlag.UNSUPPORTED_RATE
 
-        var gaps = parsed.gapCount + parsed.sequenceGapCount
+        var gaps = parsed.sequenceGapCount
         var missing = parsed.missingSampleCount + parsed.sequenceGapCount
+        if (timingTrust != app.galaxyvitals.domain.TimingTrust.SEQUENCE_RECONSTRUCTED) {
+            gaps += parsed.gapCount
+        }
         var clipped = parsed.clippedSampleCount
         val segments = ArrayList<ContinuousSegment>()
         var start = 0

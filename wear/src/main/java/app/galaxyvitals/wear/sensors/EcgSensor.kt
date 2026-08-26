@@ -49,11 +49,13 @@ data class EcgBatch(
     val maxThresholdMv: Float?,
     val sampleFlags: IntArray,
     val ppgGreen: PpgGreenBatch? = null,
+    val sourceBatchSize: Int = samplesMv.size,
 ) {
     init {
         require(samplesMv.size == sensorTimestampsMs.size)
         require(samplesMv.size == sampleFlags.size)
         require(sequence in 0..255)
+        require(sourceBatchSize >= samplesMv.size)
         ppgGreen?.ecgSampleOffsets?.forEach {
             require(it in samplesMv.indices)
         }
@@ -71,7 +73,8 @@ data class EcgBatch(
             samplesMv.contentEquals(other.samplesMv) &&
             sensorTimestampsMs.contentEquals(other.sensorTimestampsMs) &&
             sampleFlags.contentEquals(other.sampleFlags) &&
-            ppgGreen == other.ppgGreen
+            ppgGreen == other.ppgGreen &&
+            sourceBatchSize == other.sourceBatchSize
     }
 
     override fun hashCode(): Int {
@@ -83,6 +86,7 @@ data class EcgBatch(
         result = 31 * result + (maxThresholdMv?.hashCode() ?: 0)
         result = 31 * result + sampleFlags.contentHashCode()
         result = 31 * result + (ppgGreen?.hashCode() ?: 0)
+        result = 31 * result + sourceBatchSize
         return result
     }
 

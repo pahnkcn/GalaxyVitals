@@ -2,6 +2,7 @@ package app.galaxyvitals.data.protocol
 
 import app.galaxyvitals.domain.EcgSample
 import app.galaxyvitals.domain.CaptureSource
+import app.galaxyvitals.domain.LiveBpmObservation
 import app.galaxyvitals.domain.TimingTrust
 import app.galaxyvitals.domain.Wrist
 import java.io.BufferedReader
@@ -48,6 +49,23 @@ data class ParsedEcgFile(
     val acquisitionFlags: Int = 0,
     val minThresholdMv: Float? = null,
     val maxThresholdMv: Float? = null,
+    val analysisClockSource: String? = null,
+    val rawClockSource: String? = null,
+    val rawTimingTrust: TimingTrust? = null,
+    val rawSensorDurationMs: Long? = null,
+    val listenerDurationMs: Long? = null,
+    val missingSampleCountKnown: Boolean = true,
+    val repeatedTimestampCount: Int = 0,
+    val batchCount: Int = 0,
+    val sensorSdk: String? = null,
+    val sensorAarSha256: String? = null,
+    val bpmObservations: List<LiveBpmObservation> = emptyList(),
+    val liveBpmMedian: Double? = null,
+    val liveBpmMin: Double? = null,
+    val liveBpmMax: Double? = null,
+    val liveBpmReliableCoveragePct: Double = 0.0,
+    val liveBpmAlgorithmId: String? = null,
+    val liveBpmObservationCount: Int = 0,
 )
 
 class EcgParseException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -219,7 +237,7 @@ object EcgCsvParser {
         }
         val meta = MetaJson(first.substring(6).trim())
         val schemaVersion = meta.int("schema_version", 1)
-        if (schemaVersion !in 1..2) {
+        if (schemaVersion !in 1..3) {
             throw EcgParseException("Unsupported ECG schema version: $schemaVersion")
         }
         if (schemaVersion == 2) {
@@ -242,6 +260,32 @@ object EcgCsvParser {
                 if (!meta.has(key)) throw EcgParseException("Missing $key metadata for ECG schema v2")
             }
         }
+        if (schemaVersion == 3) {
+            listOf(
+                "schema_version",
+                "sr_hz",
+                "effective_sr_hz",
+                "unit",
+                "ts_start",
+                "sensor_start_ms",
+                "format",
+                "capture_source",
+                "timing_trust",
+                "analysis_clock_source",
+                "raw_clock_source",
+                "raw_timing_trust",
+                "raw_sensor_duration_ms",
+                "listener_duration_ms",
+                "sample_count",
+                "duration_ms",
+                "missing_sample_count_known",
+                "wrist",
+                "signFactor",
+                "polarityNormalized",
+            ).forEach { key ->
+                if (!meta.has(key)) throw EcgParseException("Missing $key metadata for ECG schema v3")
+            }
+        }
         val srHz = meta.int("sr_hz", EcgWearContract.DEFAULT_SR_HZ)
         if (srHz !in MIN_SR_HZ..MAX_SR_HZ) {
             throw EcgParseException("Invalid ECG sample rate: $srHz")
@@ -251,11 +295,14 @@ object EcgCsvParser {
             throw EcgParseException("Unsupported ECG amplitude unit: $unit")
         }
         val format = meta.string("format", "csv_mv")
-        if (format !in setOf("csv_mv", "csv_mv_v2")) {
+        if (format !in setOf("csv_mv", "csv_mv_v2", EcgWearContract.FORMAT_CSV_MV_V3)) {
             throw EcgParseException("Unsupported ECG row format: $format")
         }
         if (schemaVersion == 2 && format != "csv_mv_v2") {
             throw EcgParseException("ECG schema v2 requires csv_mv_v2 rows")
+        }
+        if (schemaVersion == 3 && format != EcgWearContract.FORMAT_CSV_MV_V3) {
+            throw EcgParseException("ECG schema v3 requires csv_mv_v3 rows")
         }
         val tsStart = meta.long("ts_start", 0L)
         if (tsStart < 0L) throw EcgParseException("Invalid ECG start timestamp")
@@ -272,12 +319,16 @@ object EcgCsvParser {
         val captureSource = parseCaptureSource(
             meta.string("capture_source", if (schemaVersion == 1) "LEGACY" else ""),
         )
-        if (schemaVersion == 2 && captureSource == CaptureSource.LEGACY) {
-            throw EcgParseException("ECG schema v2 requires HARDWARE or IMPORT capture source")
+        if (schemaVersion >= 2 && captureSource == CaptureSource.LEGACY) {
+            throw EcgParseException("ECG schema v$schemaVersion requires HARDWARE or IMPORT capture source")
         }
-        val timingTrust = parseTimingTrust(
+        val declaredTimingTrust = parseTimingTrust(
             meta.string("timing_trust", if (schemaVersion == 1) "ASSUMED" else ""),
         )
+        val timingTrust = if (schemaVersion == 2) TimingTrust.UNVERIFIED else declaredTimingTrust
+        if (schemaVersion == 3 && timingTrust != TimingTrust.SEQUENCE_RECONSTRUCTED) {
+            throw EcgParseException("ECG schema v3 requires SEQUENCE_RECONSTRUCTED timing trust")
+        }
         val effectiveSrHz = meta.double("effective_sr_hz", srHz.toDouble())
         if (!effectiveSrHz.isFinite() || effectiveSrHz !in MIN_SR_HZ.toDouble()..MAX_SR_HZ.toDouble()) {
             throw EcgParseException("Invalid effective ECG sample rate")
@@ -289,6 +340,40 @@ object EcgCsvParser {
         if (schemaVersion == 2 && meta.string("clock_source", "").isBlank()) {
             throw EcgParseException("Invalid ECG clock source")
         }
+        val analysisClockSource = meta.nullableString("analysis_clock_source")
+        val rawClockSource = meta.nullableString("raw_clock_source")
+        if (schemaVersion == 3) {
+            if (analysisClockSource.isNullOrBlank()) {
+                throw EcgParseException("Invalid ECG analysis clock source")
+            }
+            if (rawClockSource.isNullOrBlank()) {
+                throw EcgParseException("Invalid ECG raw clock source")
+            }
+        }
+        val rawTimingTrust = meta.nullableString("raw_timing_trust")?.let(::parseTimingTrust)
+        val rawSensorDurationMs = meta.nullableLong("raw_sensor_duration_ms")
+        if (rawSensorDurationMs != null && rawSensorDurationMs < 0L) {
+            throw EcgParseException("Invalid ECG raw sensor duration")
+        }
+        val listenerDurationMs = meta.nullableLong("listener_duration_ms")
+        if (listenerDurationMs != null && listenerDurationMs < 0L) {
+            throw EcgParseException("Invalid ECG listener duration")
+        }
+        val missingSampleCountKnown = if (schemaVersion == 3) {
+            meta.bool("missing_sample_count_known", true).also { known ->
+                if (known) {
+                    throw EcgParseException("ECG schema v3 must declare missing_sample_count_known=false")
+                }
+            }
+        } else {
+            meta.bool("missing_sample_count_known", true)
+        }
+        val repeatedTimestampCount = meta.int("repeated_timestamp_count", 0)
+            .requireNonnegative("repeated_timestamp_count")
+        val batchCount = meta.int("batch_count", 0).requireNonnegative("batch_count")
+        val sensorSdk = meta.nullableString("sensor_sdk")
+        val sensorAarSha256 = meta.nullableString("sensor_aar_sha256")
+        val liveBpmAlgorithmId = meta.nullableString("live_bpm_algorithm_id")
         val declaredSampleCount = meta.nullableInt("sample_count")
         if (declaredSampleCount != null && declaredSampleCount !in 1..MAX_SAMPLES) {
             throw EcgParseException("Invalid ECG sample count metadata")
@@ -315,14 +400,25 @@ object EcgCsvParser {
         }
 
         val samples = ArrayList<EcgSample>(minOf(MAX_SAMPLES, srHz * 30))
+        val bpmObservations = ArrayList<LiveBpmObservation>(LiveBpmSummarizer.MAX_OBSERVATIONS)
         var firstRelMs: Long? = null
         var previousRelMs: Long? = null
+        var previousRawTs: Long? = null
         while (true) {
             val rawLine = readBoundedLine(reader) ?: break
-            if (rawLine.isBlank() || rawLine.startsWith("#")) continue
+            if (rawLine.isBlank()) continue
+            if (rawLine.startsWith("#bpm=")) {
+                parseBpmLine(rawLine.substring(5).trim(), bpmObservations)
+                continue
+            }
+            if (rawLine.startsWith("#")) continue
             if (rawLine.startsWith("rel_ms") || rawLine.startsWith("timestamp_ms")) continue
-            val cols = rawLine.split(',', limit = 6)
-            val requiredColumns = if (schemaVersion == 2) 4 else 2
+            val cols = rawLine.split(',')
+            val requiredColumns = when (schemaVersion) {
+                3 -> 9
+                2 -> 4
+                else -> 2
+            }
             if (cols.size < requiredColumns) throw EcgParseException("Invalid ECG sample row")
 
             val rel = cols[0].trim().toLongOrNull()
@@ -338,7 +434,7 @@ object EcgCsvParser {
                 throw EcgParseException("ECG duration exceeds $MAX_DURATION_MS ms")
             }
 
-            val sampleIndex = if (schemaVersion == 2) {
+            val sampleIndex = if (schemaVersion >= 2) {
                 cols[1].trim().toIntOrNull()
                     ?: throw EcgParseException("Invalid ECG sample index")
             } else {
@@ -347,30 +443,80 @@ object EcgCsvParser {
             if (sampleIndex != samples.size) {
                 throw EcgParseException("ECG sample indices must start at zero and be contiguous")
             }
-            val valueColumn = if (schemaVersion == 2) 2 else 1
+            if (schemaVersion == 3) {
+                val expectedRel = sampleIndex.toLong() * 1000L / srHz
+                if (rel != expectedRel) {
+                    throw EcgParseException("ECG reconstructed timestamps must equal sample_index × period")
+                }
+            }
+            val valueColumn = if (schemaVersion >= 2) 2 else 1
             val value = cols[valueColumn].trim().toDoubleOrNull()
                 ?: throw EcgParseException("Invalid ECG amplitude")
             val mv = value.toFloat()
             if (!value.isFinite() || !mv.isFinite()) {
                 throw EcgParseException("ECG amplitude must be finite")
             }
-            val flags = if (schemaVersion == 2) {
+            val flags = if (schemaVersion >= 2) {
                 cols[3].trim().toIntOrNull()?.takeIf { it >= 0 }
                     ?: throw EcgParseException("Invalid ECG sample flags")
             } else {
                 0
             }
-            val hrColumn = if (schemaVersion == 2) 4 else 2
+            val hrColumn = if (schemaVersion >= 2) 4 else 2
             val hr = parseHeartRate(cols.getOrNull(hrColumn)?.trim())
+            val rawTs = if (schemaVersion == 3) {
+                cols[5].trim().toLongOrNull()?.takeIf { it >= 0L }
+                    ?: throw EcgParseException("Invalid ECG raw sensor timestamp")
+            } else {
+                null
+            }
+            if (rawTs != null && previousRawTs?.let { rawTs < it } == true) {
+                throw EcgParseException("ECG raw timestamps must be nonnegative and nondecreasing")
+            }
+            val batchSequence = if (schemaVersion == 3) {
+                cols[6].trim().toIntOrNull()?.takeIf { it in 0..255 }
+                    ?: throw EcgParseException("Invalid ECG batch sequence")
+            } else {
+                null
+            }
+            val batchOffset = if (schemaVersion == 3) {
+                cols[7].trim().toIntOrNull()?.takeIf { it >= 0 }
+                    ?: throw EcgParseException("Invalid ECG batch sample offset")
+            } else {
+                null
+            }
+            val batchSize = if (schemaVersion == 3) {
+                cols[8].trim().toIntOrNull()?.takeIf { it >= 1 }
+                    ?: throw EcgParseException("Invalid ECG batch size")
+            } else {
+                null
+            }
+            if (batchOffset != null && batchSize != null && batchOffset >= batchSize) {
+                throw EcgParseException("ECG batch sample offset must be inside the batch")
+            }
             if (samples.size >= MAX_SAMPLES) {
                 throw EcgParseException("ECG contains more than $MAX_SAMPLES samples")
             }
-            samples.add(EcgSample(rel, mv, hr, sampleIndex, flags))
+            samples.add(
+                EcgSample(
+                    relMs = rel,
+                    valueMv = mv,
+                    hrBpm = hr,
+                    sampleIndex = sampleIndex,
+                    flags = flags,
+                    sensorTimestampMsRaw = rawTs,
+                    batchSequence = batchSequence,
+                    batchSampleOffset = batchOffset,
+                    batchSize = batchSize,
+                ),
+            )
             previousRelMs = rel
+            if (rawTs != null) previousRawTs = rawTs
         }
         if (samples.isEmpty()) {
             throw EcgParseException("No ECG samples")
         }
+        LiveBpmSummarizer.parseValid(bpmObservations)
         val actualDurationMs = samples.last().relMs - samples.first().relMs
         if (declaredSampleCount != null && declaredSampleCount != samples.size) {
             throw EcgParseException("ECG sample count metadata does not match rows")
@@ -402,6 +548,49 @@ object EcgCsvParser {
             acquisitionFlags = acquisitionFlags,
             minThresholdMv = minThresholdMv,
             maxThresholdMv = maxThresholdMv,
+            analysisClockSource = analysisClockSource,
+            rawClockSource = rawClockSource,
+            rawTimingTrust = rawTimingTrust,
+            rawSensorDurationMs = rawSensorDurationMs,
+            listenerDurationMs = listenerDurationMs,
+            missingSampleCountKnown = missingSampleCountKnown,
+            repeatedTimestampCount = repeatedTimestampCount,
+            batchCount = batchCount,
+            sensorSdk = sensorSdk,
+            sensorAarSha256 = sensorAarSha256,
+            bpmObservations = bpmObservations,
+            liveBpmAlgorithmId = liveBpmAlgorithmId,
+        )
+    }
+
+    private fun parseBpmLine(raw: String, observations: ArrayList<LiveBpmObservation>) {
+        if (observations.size >= LiveBpmSummarizer.MAX_OBSERVATIONS) {
+            throw EcgParseException("ECG contains more than ${LiveBpmSummarizer.MAX_OBSERVATIONS} live BPM observations")
+        }
+        val json = MetaJson(raw)
+        val id = json.int("id", -1)
+        if (id != observations.size) {
+            throw EcgParseException("Live BPM observation ids must start at zero and be contiguous")
+        }
+        observations += LiveBpmObservation(
+            atSampleIndex = json.long("at_sample_index", -1L).also { index ->
+                if (index < 0L) throw EcgParseException("Invalid live BPM sample index")
+            },
+            observedCaptureElapsedMs = json.long("observed_capture_elapsed_ms", -1L).also { elapsed ->
+                if (elapsed < 0L) throw EcgParseException("Invalid live BPM elapsed time")
+            },
+            status = json.string("status", "").also { status ->
+                if (status.isBlank()) throw EcgParseException("Invalid live BPM status")
+            },
+            displayedBpm = json.nullableDouble("displayed_bpm"),
+            rawBpm = json.nullableDouble("raw_bpm"),
+            source = json.nullableString("source"),
+            bSqi = json.nullableDouble("b_sqi"),
+            rrCount = json.nullableInt("rr_count"),
+            estimateAgeMs = json.long("estimate_age_ms", 0L).also { age ->
+                if (age < 0L) throw EcgParseException("Invalid live BPM estimate age")
+            },
+            reasonCode = json.nullableString("reason_code"),
         )
     }
 
@@ -460,6 +649,18 @@ object EcgCsvParser {
         acquisitionFlags: Int = 0,
         minThresholdMv: Float? = null,
         maxThresholdMv: Float? = null,
+        analysisClockSource: String? = null,
+        rawClockSource: String? = null,
+        rawTimingTrust: TimingTrust? = null,
+        rawSensorDurationMs: Long? = null,
+        listenerDurationMs: Long? = null,
+        missingSampleCountKnown: Boolean = true,
+        repeatedTimestampCount: Int = 0,
+        batchCount: Int = 0,
+        sensorSdk: String? = null,
+        sensorAarSha256: String? = null,
+        bpmObservations: List<LiveBpmObservation> = emptyList(),
+        liveBpmAlgorithmId: String? = null,
     ): ParsedEcgFile {
         val hrs = samples.mapNotNull { it.hrBpm }.sorted()
         val hrMedian = if (hrs.isEmpty()) null else median(hrs)
@@ -469,6 +670,11 @@ object EcgCsvParser {
             (samples.last().relMs - samples.first().relMs) / 1000.0
         }
         val usable = samples.count { abs(it.valueMv) > 1e-6f }
+        val periodMs = if (srHz > 0) 1000L / srHz else EcgWearContract.SAMPLE_PERIOD_MS
+        val liveSummary = LiveBpmSummarizer.summarize(
+            bpmObservations,
+            sessionDurationMs = samples.size * periodMs,
+        )
         return ParsedEcgFile(
             sessionId = sessionId,
             srHz = srHz,
@@ -499,6 +705,23 @@ object EcgCsvParser {
             acquisitionFlags = acquisitionFlags,
             minThresholdMv = minThresholdMv,
             maxThresholdMv = maxThresholdMv,
+            analysisClockSource = analysisClockSource,
+            rawClockSource = rawClockSource,
+            rawTimingTrust = rawTimingTrust,
+            rawSensorDurationMs = rawSensorDurationMs,
+            listenerDurationMs = listenerDurationMs,
+            missingSampleCountKnown = missingSampleCountKnown,
+            repeatedTimestampCount = repeatedTimestampCount,
+            batchCount = batchCount,
+            sensorSdk = sensorSdk,
+            sensorAarSha256 = sensorAarSha256,
+            bpmObservations = bpmObservations,
+            liveBpmMedian = liveSummary.median,
+            liveBpmMin = liveSummary.min,
+            liveBpmMax = liveSummary.max,
+            liveBpmReliableCoveragePct = liveSummary.reliableCoveragePct,
+            liveBpmAlgorithmId = liveBpmAlgorithmId ?: liveSummary.algorithmId,
+            liveBpmObservationCount = liveSummary.observationCount,
         )
     }
 
@@ -524,6 +747,12 @@ object EcgCsvParser {
 
         fun string(key: String, default: String): String = when (val value = values[key]) {
             null -> default
+            is JsonValue.StringValue -> value.value
+            else -> throw EcgParseException("Invalid $key metadata")
+        }
+
+        fun nullableString(key: String): String? = when (val value = values[key]) {
+            null, JsonValue.NullValue -> null
             is JsonValue.StringValue -> value.value
             else -> throw EcgParseException("Invalid $key metadata")
         }

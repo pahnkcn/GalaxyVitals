@@ -33,6 +33,11 @@ object EcgWearContract {
     const val FILE_SUFFIX = ".csv.gz"
 
     const val DEFAULT_SR_HZ = 500
+    const val SAMPLE_PERIOD_MS = 2L
+    const val SCHEMA_VERSION_V3 = 3
+    const val FORMAT_CSV_MV_V3 = "csv_mv_v3"
+    const val ANALYSIS_CLOCK_SOURCE = "SAMPLE_INDEX_2MS"
+    const val RAW_CLOCK_SOURCE = "SAMSUNG_DATAPOINT_MS"
     const val MEASURE_DURATION_MS = 30_000L
     const val ASSET_TIMEOUT_SEC = 30L
     const val OFF_BODY_BLOCK_MS = 1_800L

@@ -29,7 +29,7 @@ class PhoneWatchBridgeTest {
         val start = 1_700_000_012_345L
         val recorder = EcgSessionRecorder()
         recorder.begin(sessionId, Wrist.LEFT, 1, start)
-        repeat(8) { sec ->
+        repeat(30) { sec ->
             val batch = FloatArray(500) { i -> syntheticSampleMv(sec * 500 + i) }
             recorder.addEcg(batch)
             recorder.addHr(start + sec * 1000L, 64 + sec)
@@ -46,13 +46,14 @@ class PhoneWatchBridgeTest {
         val parsed = EcgCsvParser.parseFile(phoneFile, sessionId)
         assertThat(parsed.sessionId).isEqualTo(sessionId)
         assertThat(parsed.srHz).isEqualTo(500)
-        assertThat(parsed.samples.size).isEqualTo(4000)
+        assertThat(parsed.samples.size).isEqualTo(15_000)
+        assertThat(parsed.schemaVersion).isEqualTo(3)
         assertThat(parsed.wrist).isEqualTo(Wrist.LEFT)
         assertThat(parsed.signFactor).isEqualTo(1)
         assertThat(parsed.polarityNormalized).isFalse()
         assertThat(parsed.hrMin).isNull()
         assertThat(parsed.captureSource.name).isEqualTo("HARDWARE")
-        assertThat(parsed.durationSec).isWithin(0.01).of(7.998)
+        assertThat(parsed.durationSec).isWithin(0.01).of(29.998)
         assertThat(parsed.watchInfo).contains("WatchTest")
     }
 
@@ -103,11 +104,13 @@ class PhoneWatchBridgeTest {
         val recorder = EcgSessionRecorder()
         recorder.begin("9", Wrist.RIGHT, EcgWearContract.signFactorFor(Wrist.RIGHT), 1000L)
         recorder.addEcg(floatArrayOf(0.4f, 0.2f, 0.1f))
+        recorder.addEcg(FloatArray(EcgSessionRecorder.EXPECTED_SAMPLES - 3) { 0.05f })
         recorder.addHr(1000L, 80)
         val parsed = EcgCsvParser.parseBytes(recorder.finish("w").gzip, gzip = true, sessionIdHint = "9")
+        assertThat(parsed.schemaVersion).isEqualTo(3)
         assertThat(parsed.wrist).isEqualTo(Wrist.RIGHT)
         assertThat(parsed.signFactor).isEqualTo(-1)
-        assertThat(parsed.samples.map { it.valueMv }).containsExactly(0.4f, 0.2f, 0.1f).inOrder()
+        assertThat(parsed.samples.take(3).map { it.valueMv }).containsExactly(0.4f, 0.2f, 0.1f).inOrder()
     }
 
     private fun syntheticSampleMv(index: Int): Float {

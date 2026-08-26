@@ -494,7 +494,8 @@ class EcgMeasurementCoordinator(
     private fun finishValidateEncodeSave() {
         if (terminal || _state.value.phase != MeasurePhase.Recording) return
         val snapshot = try {
-            recorder.takeSnapshot().also { it.requireCompleteCapture() }
+            val listenerMs = (elapsedRealtime() - captureStartedAt).coerceAtLeast(0L)
+            recorder.takeSnapshot(listenerDurationMs = listenerMs).also { it.requireCompleteCapture() }
         } catch (error: Exception) {
             failTerminal(
                 "INCOMPLETE_CAPTURE",
