@@ -32,6 +32,7 @@ enum class MeasurePhase {
     Unavailable,
     PermissionRequired,
     ResolutionRequired,
+    WaitingForContact,
     ArmedCountdown,
     Recording,
     Saving,

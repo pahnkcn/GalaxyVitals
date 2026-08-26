@@ -35,17 +35,22 @@ import org.junit.Test
 
 class EcgMeasurementCoordinatorTest {
     @Test
-    fun successfulCaptureOpensExactlyOneOnDemandListener() {
+    fun successfulCaptureUsesOneBoundedProbeAndOneCaptureListener() {
         val harness = Harness()
         startRecording(harness)
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
+        assertThat(harness.sensor.listeners.first().setToCloseMs).isAtMost(30_000L)
         assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
         assertThat(harness.foregroundAcquires).isEqualTo(1)
         assertThat(harness.recorder.isRecording).isTrue()
 
+        // SM-L350 reports one transient lead-off batch whenever the capture listener is reopened.
+        harness.sensor.emit(batch(sequence = 0, leadOff = 5))
+        assertThat(harness.recorder.sampleCount).isEqualTo(0)
+        harness.nextSequence = 1
         streamUntilTerminal(harness, samples = FloatArray(15_000) { 0.12f })
-        assertThat(harness.sensor.startCount).isEqualTo(1)
-        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
+        assertThat(harness.sensor.closeCount).isEqualTo(2)
         assertThat(harness.coordinator.state.value.phase)
             .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
         assertThat(requireNotNull(harness.savedGzip)).isEqualTo(harness.pushedGzip)
@@ -59,15 +64,15 @@ class EcgMeasurementCoordinatorTest {
         streamUntilTerminal(success, samples = FloatArray(15_000) { 0.12f })
         assertThat(success.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
         assertThat(success.sensor.listeners.last().closedAtMs!! - successStart).isAtMost(30_000L)
-        assertThat(success.sensor.closeCount).isEqualTo(1)
+        assertThat(success.sensor.closeCount).isEqualTo(2)
 
         val cancelled = Harness()
         startRecording(cancelled)
         cancelled.advance(100L)
         cancelled.coordinator.cancel()
         assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(cancelled.sensor.startCount).isEqualTo(1)
-        assertThat(cancelled.sensor.closeCount).isEqualTo(1)
+        assertThat(cancelled.sensor.startCount).isEqualTo(2)
+        assertThat(cancelled.sensor.closeCount).isEqualTo(2)
         assertThat(cancelled.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
 
         val errored = Harness()
@@ -75,8 +80,8 @@ class EcgMeasurementCoordinatorTest {
         errored.advance(50L)
         errored.sensor.emitError(EcgSensorError(EcgSensorErrorCode.TRACKER, "tracker failed"))
         assertThat(errored.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(errored.sensor.startCount).isEqualTo(1)
-        assertThat(errored.sensor.closeCount).isEqualTo(1)
+        assertThat(errored.sensor.startCount).isEqualTo(2)
+        assertThat(errored.sensor.closeCount).isEqualTo(2)
         assertThat(errored.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
 
         val deadline = Harness()
@@ -86,8 +91,8 @@ class EcgMeasurementCoordinatorTest {
         deadline.sensor.fireDeadline()
         assertThat(deadline.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
         assertThat(deadline.transitionLogs.joinToString()).contains("INCOMPLETE_CAPTURE")
-        assertThat(deadline.sensor.startCount).isEqualTo(1)
-        assertThat(deadline.sensor.closeCount).isEqualTo(1)
+        assertThat(deadline.sensor.startCount).isEqualTo(2)
+        assertThat(deadline.sensor.closeCount).isEqualTo(2)
         assertThat(deadline.sensor.listeners.last().setToCloseMs).isAtMost(30_000L)
         assertThat(deadline.savedGzip).isNull()
     }
@@ -106,7 +111,7 @@ class EcgMeasurementCoordinatorTest {
             sessionIdHint = requireNotNull(complete.coordinator.state.value.sessionId),
         )
         assertThat(parsed.samples).hasSize(15_000)
-        assertThat(complete.sensor.startCount).isEqualTo(1)
+        assertThat(complete.sensor.startCount).isEqualTo(2)
 
         val incomplete = Harness()
         startRecording(incomplete)
@@ -122,21 +127,91 @@ class EcgMeasurementCoordinatorTest {
         assertThat(incomplete.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
         assertThat(incomplete.transitionLogs.joinToString()).contains("INCOMPLETE_CAPTURE")
         assertThat(incomplete.savedGzip).isNull()
-        assertThat(incomplete.sensor.closeCount).isEqualTo(1)
+        assertThat(incomplete.sensor.closeCount).isEqualTo(2)
     }
 
     @Test
-    fun firstBatchLeadOffFailsClosedAsContactNotReady() {
+    fun contactProbeWaitsForValidContactBeforeStartingCountdown() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Touch the sensor to begin")
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+
+        harness.sensor.emit(batch(sequence = 0, leadOff = 5))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.recorder.isRecording).isFalse()
+        assertThat(harness.sensor.closeCount).isEqualTo(0)
+
+        harness.sensor.emit(batch(sequence = 1, leadOff = 0))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.coordinator.state.value.remainingSec).isEqualTo(3)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+    }
+
+    @Test
+    fun contactLossDuringCountdownReturnsToWaitingAndCancelsOldCountdown() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        harness.sensor.emit(batch(sequence = 0, leadOff = 0))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+
+        harness.advance(1_000L)
+        harness.sensor.emit(batch(sequence = 1, leadOff = 5))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.recorder.isRecording).isFalse()
+        harness.advance(3_000L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+
+        harness.sensor.emit(batch(sequence = 2, leadOff = 0))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        harness.advance(3_000L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
+    }
+
+    @Test
+    fun contactProbeTimesOutAndClosesWithinOnDemandLimit() {
+        val harness = Harness()
+        harness.coordinator.startHardware()
+        val startedAt = harness.sensor.listeners.single().startedAtMs
+        harness.sensor.emit(batch(sequence = 0, leadOff = 5))
+
+        harness.advance(25_000L)
+
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(harness.transitionLogs.joinToString()).contains("CONTACT_TIMEOUT")
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.sensor.listeners.single().closedAtMs!! - startedAt).isAtMost(30_000L)
+        assertThat(harness.recorder.isRecording).isFalse()
+    }
+
+    @Test
+    fun recordingSkipsTransientFirstLeadOffThenFailsClosedOnLaterContactLoss() {
         val harness = Harness()
         startRecording(harness)
         assertThat(harness.recorder.isRecording).isTrue()
         assertThat(harness.recorder.sampleCount).isEqualTo(0)
         harness.sensor.emit(batch(sequence = 0, leadOff = 1))
 
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.transitionLogs.joinToString()).contains("CONTACT_NOT_READY")
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Confirming sensor contact…")
+        assertThat(harness.recorder.sampleCount).isEqualTo(0)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
         assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.savedGzip).isNull()
+
+        harness.sensor.emit(batch(sequence = 1, leadOff = 0))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Recording")
+        assertThat(harness.recorder.sampleCount).isEqualTo(10)
+
+        harness.sensor.emit(batch(sequence = 2, leadOff = 5))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(harness.transitionLogs.joinToString()).contains("CONTACT_LOSS")
+        assertThat(harness.sensor.closeCount).isEqualTo(2)
         assertThat(harness.sensor.stopCount).isEqualTo(1)
         assertThat(harness.sensor.disconnectCount).isEqualTo(1)
         assertThat(harness.foregroundCloses).isEqualTo(1)
@@ -144,6 +219,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.recorder.sampleCount).isEqualTo(0)
         assertThat(harness.savedGzip).isNull()
         assertThat(harness.acquisitionLogs.joinToString("\n")).contains("leadOff=1")
+        assertThat(harness.acquisitionLogs.joinToString("\n")).contains("leadOff=5")
         assertThat(harness.acquisitionLogs.joinToString("\n")).contains("generation=")
         assertThat(harness.acquisitionLogs.none { log -> log.contains("samplesMv") }).isTrue()
     }
@@ -157,7 +233,7 @@ class EcgMeasurementCoordinatorTest {
             .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
         assertThat(harness.savedGzip).isNotNull()
         assertThat(harness.coordinator.state.value.hrBpm).isNull()
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
     }
 
     @Test
@@ -182,38 +258,41 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.coordinator.state.value.phase)
             .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
         assertThat(harness.savedGzip).isNotNull()
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
     }
 
     @Test
     fun staleCallbacksAfterRetryOrCancelAreIgnored() {
         val cancelled = Harness()
         startRecording(cancelled)
-        val cancelledListener = 0
+        val cancelledListener = 1
         cancelled.coordinator.cancel()
         assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
         cancelled.sensor.emit(cancelledListener, batch(sequence = 2, samples = FloatArray(10) { 9f }))
         assertThat(cancelled.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(cancelled.sensor.startCount).isEqualTo(1)
+        assertThat(cancelled.sensor.startCount).isEqualTo(2)
 
         val retried = Harness()
         startRecording(retried)
-        val firstListener = 0
-        retried.sensor.emit(batch(sequence = 0, leadOff = 1))
+        val firstListener = 1
+        retried.sensor.emit(batch(sequence = 0, leadOff = 0))
+        retried.sensor.emit(batch(sequence = 1, leadOff = 1))
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        retried.sensor.emit(firstListener, batch(sequence = 1, samples = FloatArray(10) { 8f }))
+        retried.sensor.emit(firstListener, batch(sequence = 2, samples = FloatArray(10) { 8f }))
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
 
         retried.coordinator.retry()
-        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
-        assertThat(retried.sensor.startCount).isEqualTo(1)
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(retried.sensor.startCount).isEqualTo(3)
         retried.sensor.emit(firstListener, batch(sequence = 5, samples = FloatArray(10) { 7f }))
+        assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        retried.sensor.emit(batch(sequence = 0, leadOff = 0))
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         assertThat(retried.recorder.sampleCount).isEqualTo(0)
 
         retried.advance(3_000L)
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(retried.sensor.startCount).isEqualTo(2)
+        assertThat(retried.sensor.startCount).isEqualTo(4)
         val before = retried.recorder.sampleCount
         retried.sensor.emit(firstListener, batch(sequence = 6, samples = FloatArray(10) { 9f }))
         assertThat(retried.recorder.sampleCount).isEqualTo(before)
@@ -257,29 +336,38 @@ class EcgMeasurementCoordinatorTest {
             .inOrder()
         assertThat(parsed.samples.map { it.valueMv }).doesNotContain(0.6f)
         assertThat(parsed.samples.map { it.valueMv }).doesNotContain(1.0f)
-        assertThat(harness.sensor.startCount).isEqualTo(1)
-        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
+        assertThat(harness.sensor.closeCount).isEqualTo(2)
     }
 
     @Test
     fun closeClosesListenerAndDoesNotLeaveLiveCapturePhase() {
         val recording = Harness()
         startRecording(recording)
-        assertThat(recording.sensor.closeCount).isEqualTo(0)
-        recording.coordinator.close()
         assertThat(recording.sensor.closeCount).isEqualTo(1)
+        recording.coordinator.close()
+        assertThat(recording.sensor.closeCount).isEqualTo(2)
         assertThat(recording.coordinator.state.value.phase)
-            .isNotIn(setOf(MeasurePhase.ArmedCountdown, MeasurePhase.Recording, MeasurePhase.Connecting))
+            .isNotIn(
+                setOf(
+                    MeasurePhase.WaitingForContact,
+                    MeasurePhase.ArmedCountdown,
+                    MeasurePhase.Recording,
+                    MeasurePhase.Connecting,
+                ),
+            )
 
         val countdown = Harness()
         countdown.coordinator.startHardware()
+        assertThat(countdown.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        countdown.sensor.emit(batch(sequence = 0, leadOff = 0))
         assertThat(countdown.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         countdown.coordinator.close()
-        assertThat(countdown.sensor.startCount).isEqualTo(0)
+        assertThat(countdown.sensor.startCount).isEqualTo(1)
         assertThat(countdown.coordinator.state.value.phase)
-            .isNotIn(setOf(MeasurePhase.ArmedCountdown, MeasurePhase.Recording))
+            .isNotIn(setOf(MeasurePhase.WaitingForContact, MeasurePhase.ArmedCountdown, MeasurePhase.Recording))
         countdown.advance(3_000L)
-        assertThat(countdown.sensor.startCount).isEqualTo(0)
+        assertThat(countdown.sensor.startCount).isEqualTo(1)
         assertThat(countdown.coordinator.state.value.phase)
             .isNotEqualTo(MeasurePhase.Recording)
     }
@@ -288,13 +376,15 @@ class EcgMeasurementCoordinatorTest {
     fun countdownTickAfterCancelDoesNotReviveArmedCountdown() {
         val harness = Harness()
         harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        harness.sensor.emit(batch(sequence = 0, leadOff = 0))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         harness.coordinator.cancel()
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
         harness.advance(3_000L)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
-        assertThat(harness.sensor.startCount).isEqualTo(0)
-        assertThat(harness.sensor.closeCount).isEqualTo(0)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
     }
 
     @Test
@@ -325,7 +415,7 @@ class EcgMeasurementCoordinatorTest {
             .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
         assertThat(harness.savedGzip).isNotNull()
         assertThat(harness.transitionLogs.joinToString()).doesNotContain("INCOMPLETE_CAPTURE")
-        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(2)
     }
 
     @Test
@@ -356,24 +446,32 @@ class EcgMeasurementCoordinatorTest {
             .isIn(setOf(MeasurePhase.Saving, MeasurePhase.Success))
         assertThat(harness.savedGzip).isNotNull()
         assertThat(harness.transitionLogs.joinToString()).doesNotContain("INCOMPLETE_CAPTURE")
-        assertThat(harness.sensor.closeCount).isEqualTo(1)
+        assertThat(harness.sensor.closeCount).isEqualTo(2)
     }
 
     @Test
-    fun armedCountdownWaitsThreeSecondsBeforeOpeningListener() {
+    fun validContactStartsThreeSecondCountdownBeforeCaptureListener() {
         val harness = Harness()
         harness.coordinator.startHardware()
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
         assertThat(harness.coordinator.state.value.status)
-            .isEqualTo("ใส่นาฬิกาให้กระชับและวางนิ้วบนปุ่ม")
-        assertThat(harness.sensor.startCount).isEqualTo(0)
+            .isEqualTo("Touch the sensor to begin")
+        assertThat(harness.sensor.startCount).isEqualTo(1)
         assertThat(harness.recorder.isRecording).isFalse()
         harness.advance(2_999L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        harness.sensor.emit(batch(sequence = 0, leadOff = 5))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        harness.sensor.emit(batch(sequence = 1, leadOff = 0))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
-        assertThat(harness.sensor.startCount).isEqualTo(0)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Starting in")
+        harness.advance(2_999L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
+        assertThat(harness.sensor.startCount).isEqualTo(1)
         harness.advance(1L)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
+        assertThat(harness.sensor.closeCount).isEqualTo(1)
         assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
     }
 
@@ -702,7 +800,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(duration).isEqualTo(29_998L)
         val hz = 14_999.0 * 1000.0 / duration
         assertThat(hz).isWithin(5.0).of(500.0)
-        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.startCount).isEqualTo(2)
     }
 
     @Test
@@ -756,9 +854,7 @@ class EcgMeasurementCoordinatorTest {
     fun trackerPermissionErrorAfterConnectShowsPermissionRequired() {
         val harness = Harness()
         harness.coordinator.startHardware()
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
-        assertThat(harness.sensor.startCount).isEqualTo(0)
-        harness.advance(3_000L)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
         assertThat(harness.sensor.startCount).isEqualTo(1)
         harness.sensor.emitError(
             EcgSensorError(
@@ -1020,11 +1116,15 @@ class EcgMeasurementCoordinatorTest {
     companion object {
         private fun startRecording(harness: Harness) {
             harness.coordinator.startHardware()
+            assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+            assertThat(harness.sensor.startCount).isEqualTo(1)
+            assertThat(harness.recorder.isRecording).isFalse()
+            harness.sensor.emit(batch(sequence = 0, leadOff = 0))
             assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
-            assertThat(harness.sensor.startCount).isEqualTo(0)
+            assertThat(harness.sensor.startCount).isEqualTo(1)
             harness.advance(3_000L)
             assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-            assertThat(harness.sensor.startCount).isEqualTo(1)
+            assertThat(harness.sensor.startCount).isEqualTo(2)
             assertThat(harness.sensor.lastMaxDurationMs).isEqualTo(30_000L)
             assertThat(harness.recorder.isRecording).isTrue()
             harness.nextSequence = 0

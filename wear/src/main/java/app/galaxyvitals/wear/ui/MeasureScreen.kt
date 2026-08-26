@@ -52,7 +52,7 @@ fun MeasureScreen(
         onDispose { view.keepScreenOn = previousKeepScreenOn }
     }
 
-    val showHomeKeyHint = state.phase == MeasurePhase.ArmedCountdown
+    val showHomeKeyHint = state.phase == MeasurePhase.WaitingForContact
     ScreenScaffold { contentPadding ->
         Box(Modifier.fillMaxSize()) {
             Column(
@@ -65,20 +65,23 @@ fun MeasureScreen(
             ) {
                 Text(
                     state.status,
+                    modifier = if (state.phase == MeasurePhase.WaitingForContact) {
+                        Modifier
+                            .fillMaxWidth(0.66f)
+                            .padding(top = 56.dp)
+                    } else {
+                        Modifier
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     textAlign = TextAlign.Center,
+                    maxLines = 2,
                 )
                 when (state.phase) {
                     MeasurePhase.Connecting -> {
                         CircularProgressIndicator()
                     }
+                    MeasurePhase.WaitingForContact -> Unit
                     MeasurePhase.ArmedCountdown -> {
-                        Text(
-                            "Wear the watch snugly and rest a finger on the top button",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
                         Text(
                             "%02d".format(state.remainingSec),
                             style = MaterialTheme.typography.displaySmall,
