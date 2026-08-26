@@ -17,6 +17,10 @@ import kotlin.math.abs
  *
  * Numeric gates run on the **locked** split only. Dev metrics are written under
  * `_analysis/` for threshold analysis and must not be used to retune after freeze.
+ *
+ * As of 2026-08-26 the locked assertions are **intentionally unmet** (option 1):
+ * do not lower the 0.99 / 0.80 / 0.05 bars. A green default suite does not
+ * mean this harness passed.
  */
 class PhysioNetBpmBenchmarkTest {
     private lateinit var records: List<PreparedRecord>

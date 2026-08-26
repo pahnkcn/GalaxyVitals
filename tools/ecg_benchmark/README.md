@@ -57,6 +57,29 @@ Gates are locked-split engineering checks, not clinical accuracy claims. Do not
 retune `EcgBeatDetectorConfig` from locked-set output. Do not change live BPM
 estimator thresholds to chase these numbers.
 
+## Status (2026-08-26) — locked gates unmet
+
+Human decision: **option 1**. Keep the opt-in assertions strict. Do not tune
+from locked 119. Do not resplit after seeing the holdout.
+
+`EcgBeatDetectorConfig` v3 was frozen on **dev** only. Default
+`:protocol:test` still skips this harness. When
+`GALAXYVITALS_PHYSIONET_BENCHMARK=1` and the full 44+12 corpus is prepared,
+the **locked** tests are expected to fail:
+
+| Gate | Need | Dev (freeze set) | Locked (holdout) |
+|---|---|---|---|
+| MIT se / PPV | ≥99% / ≥99% | 99.15% / 99.09% | 98.26% / 98.59% |
+| MIT median HR MAE | ≤2 BPM | pass | pass |
+| NSTDB ≥12 dB coverage | ≥80% | 87.6% | 51.9% |
+| High-noise error >10 BPM | ≤5% | 4.62% | 9.27% |
+
+Locked NSTDB is entirely participant **119**. That is an engineering miss, not
+a license to claim the detector passed. Algorithm acceptance remains **NO-GO**.
+Watch9 production also remains NO-GO until SM-L350 hardware validation and
+Samsung package/signing registration. These numbers are not Watch9 wrist-lead
+performance and are not clinical accuracy.
+
 ## Hardware
 
 Watch acceptance on SM-L350 is a human checklist: [HARDWARE_ACCEPTANCE.md](HARDWARE_ACCEPTANCE.md).

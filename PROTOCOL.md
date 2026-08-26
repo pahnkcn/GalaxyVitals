@@ -33,9 +33,12 @@ message creates the exact acknowledgement marker
 history, the watch may remove acknowledged recordings older than the newest
 eight entries, but it never prunes an unacknowledged recording.
 
-The phone then runs ECGFounder 1-lead locally on 10 s windows at 500 Hz and
-stores an N / A / O screen with the top model findings. That step is analysis,
-not part of the on-the-wire contract.
+The phone then derives session BPM from clean ECG ranges and may run the
+on-device NAO3 student. Rhythm output is fail-closed: without a calibrated
+decision-policy artifact the UI must not show N / A / O (`INDETERMINATE`).
+That step is analysis, not part of the on-the-wire contract. Algorithm
+acceptance on PhysioNet locked gates is unmet; production remains NO-GO
+until Watch9 hardware validation and Samsung registration.
 
 ## File format (`format = csv+gz`)
 
