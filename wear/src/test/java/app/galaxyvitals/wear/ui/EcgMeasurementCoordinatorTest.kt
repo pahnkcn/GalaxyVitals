@@ -387,7 +387,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(kotlin.math.abs(bpm!! - 72)).isAtMost(8)
         assertThat(harness.coordinator.state.value.bpm.availability)
             .isEqualTo(LiveBpmAvailability.RELIABLE)
-        assertThat(harness.coordinator.state.value.bpm.estimate!!.source).isEqualTo(BpmSource.ECG)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR)
         assertThat(harness.coordinator.state.value.bpm.estimate!!.epoch).isEqualTo(BpmEpoch.CAPTURE)
     }
 
@@ -401,7 +401,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(bpm).isNotNull()
         assertThat(kotlin.math.abs(bpm!! - 72)).isAtMost(8)
         assertThat(harness.coordinator.state.value.bpm.estimate!!.source)
-            .isEqualTo(BpmSource.ECG_PPG_CORROBORATED)
+            .isEqualTo(BpmSource.APP_ECG_RR_PPG_CORROBORATED)
     }
 
     @Test
@@ -575,6 +575,7 @@ class EcgMeasurementCoordinatorTest {
         startRecording(harness)
         (harness.computeDispatcher as GatedDispatcher).block = true
         val before = harness.recorder.sampleCount
+        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisCopyCount
         var sequence = harness.nextSequence
         repeat(40) {
             harness.now += 20L
@@ -582,8 +583,81 @@ class EcgMeasurementCoordinatorTest {
             sequence += 1
         }
         assertThat(harness.recorder.sampleCount).isEqualTo(before + 400)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.coordinator.liveEcgProcessor.analysisCopyCount - copiesBefore).isEqualTo(1)
         gate.countDown()
         assertThat(gate.await(1, TimeUnit.SECONDS)).isTrue()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+        while (harness.coordinator.bpmComputeCount < 1 && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+        assertThat(harness.coordinator.bpmComputeCount).isEqualTo(1)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+    }
+
+    @Test
+    fun fiveAndTenPointCallbacksCopyAndComputeAtMostOncePerSecond() {
+        val harness = Harness()
+        startRecording(harness)
+        val start = harness.now
+        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisCopyCount
+        var sequence = harness.nextSequence
+        repeat(200) {
+            harness.now += 10L
+            harness.sensor.emit(batch(sequence = sequence, samples = FloatArray(5) { 0.11f }))
+            sequence += 1
+        }
+        repeat(100) {
+            harness.now += 20L
+            harness.sensor.emit(batch(sequence = sequence, samples = FloatArray(10) { 0.11f }))
+            sequence += 1
+        }
+        val elapsed = harness.now - start
+        assertThat(elapsed).isEqualTo(4_000L)
+        val maxAllowed = (elapsed / 1_000L).toInt() + 1
+        val copies = harness.coordinator.liveEcgProcessor.analysisCopyCount - copiesBefore
+        assertThat(copies).isGreaterThan(0)
+        assertThat(copies).isAtMost(maxAllowed)
+        assertThat(harness.coordinator.bpmComputeCount).isGreaterThan(0)
+        assertThat(harness.coordinator.bpmComputeCount).isAtMost(maxAllowed)
+        assertThat(harness.recorder.sampleCount).isEqualTo(2_000)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+    }
+
+    @Test
+    fun liveBpmObservationsRecordDisplayedAndAbstainedResultsWithoutChangingCapture() {
+        val harness = Harness()
+        startRecording(harness)
+        assertThat(harness.recorder.liveBpmObservations().map { it.status })
+            .contains(LiveBpmAvailability.COLLECTING.name)
+        streamQrs(harness, seconds = 10.0, bpm = 72, startSequence = harness.nextSequence)
+        val observations = harness.recorder.liveBpmObservations()
+        assertThat(observations.size).isGreaterThan(1)
+        assertThat(observations.any { it.status == LiveBpmAvailability.RELIABLE.name }).isTrue()
+        assertThat(observations.any { it.source == BpmSource.APP_ECG_RR.name }).isTrue()
+        assertThat(observations.all { it.atSampleIndex >= 0L }).isTrue()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.recorder.isRecording).isTrue()
+    }
+
+    @Test
+    fun abstainedLiveBpmStillRecordsObservationAndKeepsRecording() {
+        val harness = Harness()
+        startRecording(harness)
+        var sequence = harness.nextSequence
+        repeat(100) {
+            harness.now += 20L
+            harness.sensor.emit(batch(sequence = sequence, samples = FloatArray(10) { 0.02f * ((it % 3) - 1) }))
+            sequence += 1
+        }
+        val observations = harness.recorder.liveBpmObservations()
+        assertThat(observations.any { observation ->
+            observation.status != LiveBpmAvailability.RELIABLE.name &&
+                observation.reasonCode != null
+        }).isTrue()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.recorder.sampleCount).isEqualTo(1_000)
+        assertThat(harness.coordinator.state.value.hrBpm).isNull()
     }
 
     @Test

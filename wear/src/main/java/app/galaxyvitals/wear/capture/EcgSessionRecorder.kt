@@ -33,6 +33,7 @@ class EcgSessionRecorder {
     private var acquisitionFlags = 0
     private var minThresholdMv: Float? = null
     private var maxThresholdMv: Float? = null
+    private val bpmObservations = ArrayList<LiveBpmObservation>()
 
     val isRecording: Boolean get() = synchronized(lock) { recording }
     val sampleCount: Int get() = synchronized(lock) { size }
@@ -61,14 +62,31 @@ class EcgSessionRecorder {
             acquisitionFlags = 0
             minThresholdMv = null
             maxThresholdMv = null
+            bpmObservations.clear()
             recording = true
         }
     }
 
     fun addEcgAtomically(batch: EcgBatch) = addEcg(batch)
 
-    @Suppress("UNUSED_PARAMETER")
-    fun addBpmObservation(status: String) = Unit
+    fun addBpmObservation(status: String) {
+        addBpmObservation(
+            LiveBpmObservation(
+                atSampleIndex = synchronized(lock) { size.toLong() },
+                observedCaptureElapsedMs = 0L,
+                status = status,
+            ),
+        )
+    }
+
+    fun addBpmObservation(observation: LiveBpmObservation) {
+        synchronized(lock) {
+            if (!recording) return
+            bpmObservations += observation
+        }
+    }
+
+    fun liveBpmObservations(): List<LiveBpmObservation> = synchronized(lock) { bpmObservations.toList() }
 
     fun addEcg(batch: EcgBatch) {
         synchronized(lock) {
@@ -152,6 +170,7 @@ class EcgSessionRecorder {
         synchronized(lock) {
             recording = false
             size = 0
+            bpmObservations.clear()
         }
     }
 
@@ -263,4 +282,17 @@ data class RecordedSession(
     val sessionId: String,
     val gzip: ByteArray,
     val nSamples: Int,
+)
+
+data class LiveBpmObservation(
+    val atSampleIndex: Long,
+    val observedCaptureElapsedMs: Long,
+    val status: String,
+    val displayedBpm: Double? = null,
+    val rawBpm: Double? = null,
+    val source: String? = null,
+    val bSqi: Double? = null,
+    val rrCount: Int? = null,
+    val estimateAgeMs: Long = 0L,
+    val reasonCode: String? = null,
 )

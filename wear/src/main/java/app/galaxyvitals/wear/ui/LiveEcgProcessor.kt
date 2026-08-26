@@ -9,13 +9,20 @@ import app.galaxyvitals.wear.sensors.EcgBatch
 import kotlin.math.abs
 
 enum class BpmSource {
-    ECG,
-    ECG_PPG_CORROBORATED,
+    APP_ECG_RR,
+    APP_ECG_RR_PPG_CORROBORATED,
 }
 
 enum class SensorRun { PREFLIGHT, CAPTURE }
 
 enum class BpmEpoch { PREFLIGHT, CAPTURE }
+
+enum class BpmAbstainReason {
+    INSUFFICIENT_RR,
+    LOW_BSQI,
+    ECG_PPG_DISAGREEMENT,
+    OUT_OF_RANGE,
+}
 
 data class BpmEstimate(
     val bpm: Double,
@@ -26,9 +33,18 @@ data class BpmEstimate(
     val updatedAtElapsedMs: Long,
 )
 
+data class BpmAssessment(
+    val estimate: BpmEstimate?,
+    val reason: BpmAbstainReason? = null,
+    val bSqi: Double = 0.0,
+    val rrCount: Int = 0,
+    val rawBpm: Double? = null,
+)
+
 enum class LiveBpmAvailability {
     COLLECTING,
     RELIABLE,
+    TRANSITIONING,
     UNRELIABLE,
 }
 
@@ -36,6 +52,7 @@ data class LiveBpmState(
     val availability: LiveBpmAvailability,
     val estimate: BpmEstimate? = null,
     val reason: String? = null,
+    val estimateAgeMs: Long = 0L,
 )
 
 data class LivePpgPoint(
@@ -62,8 +79,12 @@ class LiveEcgProcessor(
 
     val displaySamples: List<Float> get() = display.map { it.valueMv }
 
+    internal var analysisCopyCount: Int = 0
+        private set
+
     val analysisSamples: FloatArray
         get() {
+            analysisCopyCount++
             val out = FloatArray(analysis.size)
             for (index in analysis.indices) out[index] = analysis[index]
             return out
@@ -79,6 +100,7 @@ class LiveEcgProcessor(
         ppgPoints.clear()
         nextEcgSampleIndex = 0L
         lastSequence = -1
+        analysisCopyCount = 0
         displayFilter.reset()
         scale = WaveformScale.Default
     }
@@ -143,7 +165,7 @@ class LiveEcgProcessor(
         )
     }
 
-    fun estimate(nowMs: Long, epoch: BpmEpoch = BpmEpoch.CAPTURE): BpmEstimate? =
+    fun estimate(nowMs: Long, epoch: BpmEpoch = BpmEpoch.CAPTURE): BpmAssessment =
         LiveBpmEstimator.estimate(
             rawWindow = analysisSamples,
             livePpg = livePpg,

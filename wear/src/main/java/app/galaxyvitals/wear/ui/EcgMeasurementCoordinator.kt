@@ -5,6 +5,7 @@ import android.util.Log
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
+import app.galaxyvitals.wear.capture.LiveBpmObservation
 import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
@@ -78,6 +79,7 @@ class EcgMeasurementCoordinator(
     private var countdownJob: Job? = null
     private var streamMonitorJob: Job? = null
     private var bpmWorkerJob: Job? = null
+    private var bpmTickerJob: Job? = null
     private var lastBatchAt = 0L
     private var sensorStopped = true
     private var sensorDisconnected = true
@@ -90,11 +92,14 @@ class EcgMeasurementCoordinator(
     private var awaitingFirstBatch = false
     private var countdownDeadlineAt = 0L
     private var bpmDirty = false
+    private var bpmInFlight = false
+    private var captureStartedAt = 0L
     private var lastAcquisitionLogAt = 0L
-    private val bpmLock = Any()
-    private var pendingBpmSnapshot: BpmSnapshot? = null
     internal val liveEcgProcessor = LiveEcgProcessor()
     private val bpmSmoother = LiveBpmSmoother()
+    @Volatile
+    internal var bpmComputeCount = 0
+        private set
 
     fun startHardware() {
         events.trySend(AcqEvent.Start)
@@ -166,8 +171,13 @@ class EcgMeasurementCoordinator(
                 failTerminal("STREAM_STALLED", "Recording failed", "ECG sensor stopped sending data.")
             }
             is AcqEvent.BpmResult -> {
+                if (event.generation == streamGeneration) bpmInFlight = false
                 if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
-                onBpmEstimate(event.snapshot, event.estimated)
+                onBpmEstimate(event.snapshot, event.assessment)
+            }
+            is AcqEvent.BpmTick -> {
+                if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
+                maybeAdmitBpm(elapsedRealtime())
             }
             is AcqEvent.CountdownTick -> {
                 if (!isCurrent(event.attemptId) || terminal) return
@@ -227,8 +237,10 @@ class EcgMeasurementCoordinator(
         awaitingFirstBatch = false
         countdownDeadlineAt = 0L
         bpmDirty = false
+        bpmInFlight = false
+        captureStartedAt = 0L
         lastAcquisitionLogAt = 0L
-        synchronized(bpmLock) { pendingBpmSnapshot = null }
+        bpmComputeCount = 0
         resetLive()
         transition(MeasurePhase.Connecting, "CONNECTING") {
             MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
@@ -352,8 +364,9 @@ class EcgMeasurementCoordinator(
             lastBpmScheduleAt = 0L
             lastAcquisitionLogAt = 0L
             bpmDirty = false
+            bpmInFlight = false
+            captureStartedAt = elapsedRealtime()
             bpmSmoother.reset()
-            synchronized(bpmLock) { pendingBpmSnapshot = null }
             transition(MeasurePhase.Recording, "RECORDING") {
                 MeasureUiState(
                     phase = MeasurePhase.Recording,
@@ -369,6 +382,7 @@ class EcgMeasurementCoordinator(
             startEcgListener(attemptId)
             lastBatchAt = elapsedRealtime()
             startStreamMonitor(attemptId)
+            startBpmTicker(attemptId)
         } catch (error: RuntimeException) {
             failTerminal(
                 "FOREGROUND_OR_RECORDER_START",
@@ -447,7 +461,7 @@ class EcgMeasurementCoordinator(
         val now = lastBatchAt
         publishWaveformIfDue(now)
         bpmDirty = true
-        requestBpmAnalysis(now, BpmEpoch.CAPTURE)
+        maybeAdmitBpm(now)
         val leftSec = remainingSecFromSamples()
         if (_state.value.remainingSec != leftSec) {
             _state.value = _state.value.copy(remainingSec = leftSec)
@@ -659,7 +673,10 @@ class EcgMeasurementCoordinator(
         streamMonitorJob = null
         bpmWorkerJob?.cancel()
         bpmWorkerJob = null
-        synchronized(bpmLock) { pendingBpmSnapshot = null }
+        bpmTickerJob?.cancel()
+        bpmTickerJob = null
+        bpmInFlight = false
+        bpmDirty = false
     }
 
     private fun closeListenerFirst() {
@@ -696,58 +713,79 @@ class EcgMeasurementCoordinator(
         bpmSmoother.reset()
     }
 
-    private fun requestBpmAnalysis(now: Long, epoch: BpmEpoch) {
-        if (!bpmDirty) return
+    private fun startBpmTicker(id: Long) {
+        val gen = streamGeneration
+        bpmTickerJob?.cancel()
+        bpmTickerJob = scope.launch(mainDispatcher) {
+            while (isCurrent(id) && !terminal) {
+                delayMs(BPM_UI_INTERVAL_MS)
+                events.trySend(AcqEvent.BpmTick(id, gen))
+            }
+        }
+    }
+
+    private fun maybeAdmitBpm(now: Long) {
+        if (terminal || _state.value.phase != MeasurePhase.Recording) return
+        if (!bpmDirty || bpmInFlight) return
+        if (lastBpmScheduleAt != 0L && now - lastBpmScheduleAt < BPM_UI_INTERVAL_MS) return
+        lastBpmScheduleAt = now
+        bpmDirty = false
+        bpmInFlight = true
         val snapshot = BpmSnapshot(
             rawWindow = liveEcgProcessor.analysisSamples,
             livePpg = liveEcgProcessor.livePpg,
             signFactor = liveEcgProcessor.signFactor,
             analysisSampleCount = liveEcgProcessor.analysisSampleCount,
+            atSampleIndex = (liveEcgProcessor.nextEcgSampleIndex - 1L).coerceAtLeast(0L),
+            captureElapsedMs = (now - captureStartedAt).coerceAtLeast(0L),
             now = now,
-            epoch = epoch,
+            epoch = BpmEpoch.CAPTURE,
         )
-        synchronized(bpmLock) { pendingBpmSnapshot = snapshot }
-        val workerActive = bpmWorkerJob?.isActive == true
-        if (workerActive) return
-        if (lastBpmScheduleAt != 0L && now - lastBpmScheduleAt < BPM_UI_INTERVAL_MS) return
-        lastBpmScheduleAt = now
-        bpmDirty = false
         val id = attemptId
         val gen = streamGeneration
         bpmWorkerJob = scope.launch(computeDispatcher) {
-            while (true) {
-                val snap = synchronized(bpmLock) {
-                    val taken = pendingBpmSnapshot
-                    pendingBpmSnapshot = null
-                    taken
-                } ?: break
-                val estimated = LiveBpmEstimator.estimate(
-                    rawWindow = snap.rawWindow,
-                    livePpg = snap.livePpg,
-                    signFactor = snap.signFactor,
-                    nowMs = snap.now,
-                    epoch = snap.epoch,
-                )
-                events.trySend(AcqEvent.BpmResult(id, gen, snap, estimated))
-            }
+            bpmComputeCount++
+            val assessment = LiveBpmEstimator.estimate(
+                rawWindow = snapshot.rawWindow,
+                livePpg = snapshot.livePpg,
+                signFactor = snapshot.signFactor,
+                nowMs = snapshot.now,
+                epoch = snapshot.epoch,
+            )
+            events.trySend(AcqEvent.BpmResult(id, gen, snapshot, assessment))
         }
     }
 
-    private fun onBpmEstimate(snapshot: BpmSnapshot, estimated: BpmEstimate?) {
+    private fun onBpmEstimate(snapshot: BpmSnapshot, assessment: BpmAssessment) {
         if (_state.value.phase != MeasurePhase.Recording) return
+        val estimated = assessment.estimate
         if (estimated != null) {
             bpmLogger(
                 "publish epoch=${estimated.epoch} source=${estimated.source} bSqi=${estimated.bSqi} " +
                     "rr=${estimated.rrCount} bpm=${estimated.bpm}",
             )
-            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, estimated))
         } else {
             bpmLogger(
                 "abstain epoch=${snapshot.epoch} analysisSamples=${snapshot.analysisSampleCount} " +
-                    "ppgPoints=${snapshot.livePpg.size}",
+                    "ppgPoints=${snapshot.livePpg.size} reason=${assessment.reason}",
             )
-            _state.value = _state.value.copy(bpm = bpmSmoother.publish(snapshot.now, null))
         }
+        val state = bpmSmoother.publish(snapshot.now, estimated)
+        _state.value = _state.value.copy(bpm = state)
+        recorder.addBpmObservation(
+            LiveBpmObservation(
+                atSampleIndex = snapshot.atSampleIndex,
+                observedCaptureElapsedMs = snapshot.captureElapsedMs,
+                status = state.availability.name,
+                displayedBpm = state.estimate?.bpm,
+                rawBpm = assessment.rawBpm,
+                source = (state.estimate ?: estimated)?.source?.name,
+                bSqi = assessment.bSqi,
+                rrCount = assessment.rrCount,
+                estimateAgeMs = state.estimateAgeMs,
+                reasonCode = state.reason ?: assessment.reason?.name,
+            ),
+        )
     }
 
     private fun publishWaveformIfDue(now: Long) {
@@ -798,6 +836,8 @@ class EcgMeasurementCoordinator(
         val livePpg: List<LivePpgPoint>,
         val signFactor: Int,
         val analysisSampleCount: Int,
+        val atSampleIndex: Long,
+        val captureElapsedMs: Long,
         val now: Long,
         val epoch: BpmEpoch,
     )
@@ -818,8 +858,9 @@ class EcgMeasurementCoordinator(
             val attemptId: Long,
             val generation: Long,
             val snapshot: BpmSnapshot,
-            val estimated: BpmEstimate?,
+            val assessment: BpmAssessment,
         ) : AcqEvent
+        data class BpmTick(val attemptId: Long, val generation: Long) : AcqEvent
         data class CountdownTick(val attemptId: Long) : AcqEvent
         data class DeadlineSettle(val attemptId: Long, val generation: Long) : AcqEvent
         data class PersistResult(

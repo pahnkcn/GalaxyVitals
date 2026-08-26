@@ -19,7 +19,7 @@ object LiveBpmEstimator {
         nowMs: Long,
         srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
         epoch: BpmEpoch = BpmEpoch.CAPTURE,
-    ): BpmEstimate? {
+    ): BpmAssessment {
         val ecg = EcgBeatAnalyzer.analyzeWindow(rawWindow, srHz, signFactor)
         return publish(ecg, estimateSparsePpgBpm(livePpg, srHz), nowMs, epoch)
     }
@@ -29,34 +29,71 @@ object LiveBpmEstimator {
         ppgBpm: Double?,
         nowMs: Long,
         epoch: BpmEpoch = BpmEpoch.CAPTURE,
-    ): BpmEstimate? {
+    ): BpmAssessment {
         val bpmMedian = ecg.bpmMedian
-        val rrCount = ecg.matchedPeaks.size - 1
-        if (bpmMedian == null || ecg.bSqi < 0.80 || rrCount < MIN_RR_COUNT) return null
-
+        val rrCount = (ecg.matchedPeaks.size - 1).coerceAtLeast(0)
+        if (rrCount < MIN_RR_COUNT || bpmMedian == null) {
+            return abstain(BpmAbstainReason.INSUFFICIENT_RR, ecg.bSqi, rrCount, bpmMedian)
+        }
+        if (bpmMedian < MIN_BPM || bpmMedian > MAX_BPM) {
+            return abstain(BpmAbstainReason.OUT_OF_RANGE, ecg.bSqi, rrCount, bpmMedian)
+        }
+        if (ecg.bSqi < BSQI_MIN) {
+            return abstain(BpmAbstainReason.LOW_BSQI, ecg.bSqi, rrCount, bpmMedian)
+        }
         if (ppgBpm != null) {
-            val allowedDiff = maxOf(5.0, bpmMedian * 0.08)
-            if (abs(ppgBpm - bpmMedian) > allowedDiff) return null
-            return BpmEstimate(
-                bpm = bpmMedian,
-                source = BpmSource.ECG_PPG_CORROBORATED,
-                epoch = epoch,
-                bSqi = ecg.bSqi,
-                rrCount = rrCount,
-                updatedAtElapsedMs = nowMs,
+            val allowedDiff = maxOf(PPG_ABS_BPM, bpmMedian * PPG_REL_FRACTION)
+            if (abs(ppgBpm - bpmMedian) > allowedDiff) {
+                return abstain(BpmAbstainReason.ECG_PPG_DISAGREEMENT, ecg.bSqi, rrCount, bpmMedian)
+            }
+            return assessed(
+                bpmMedian,
+                BpmSource.APP_ECG_RR_PPG_CORROBORATED,
+                epoch,
+                ecg.bSqi,
+                rrCount,
+                nowMs,
             )
         }
+        if (ecg.bSqi < BSQI_ECG_ONLY) {
+            return abstain(BpmAbstainReason.LOW_BSQI, ecg.bSqi, rrCount, bpmMedian)
+        }
+        return assessed(bpmMedian, BpmSource.APP_ECG_RR, epoch, ecg.bSqi, rrCount, nowMs)
+    }
 
-        if (ecg.bSqi < 0.90) return null
-        return BpmEstimate(
-            bpm = bpmMedian,
-            source = BpmSource.ECG,
+    private fun abstain(
+        reason: BpmAbstainReason,
+        bSqi: Double,
+        rrCount: Int,
+        rawBpm: Double?,
+    ) = BpmAssessment(
+        estimate = null,
+        reason = reason,
+        bSqi = bSqi,
+        rrCount = rrCount,
+        rawBpm = rawBpm,
+    )
+
+    private fun assessed(
+        bpm: Double,
+        source: BpmSource,
+        epoch: BpmEpoch,
+        bSqi: Double,
+        rrCount: Int,
+        nowMs: Long,
+    ) = BpmAssessment(
+        estimate = BpmEstimate(
+            bpm = bpm,
+            source = source,
             epoch = epoch,
-            bSqi = ecg.bSqi,
+            bSqi = bSqi,
             rrCount = rrCount,
             updatedAtElapsedMs = nowMs,
-        )
-    }
+        ),
+        bSqi = bSqi,
+        rrCount = rrCount,
+        rawBpm = bpm,
+    )
 
     fun estimateSparsePpgBpm(
         livePpg: List<LivePpgPoint>,
@@ -215,6 +252,10 @@ object LiveBpmEstimator {
     private const val MAX_RR_MS = 1_500.0
     private const val MIN_BPM = 40
     private const val MAX_BPM = 180
+    private const val BSQI_MIN = 0.80
+    private const val BSQI_ECG_ONLY = 0.90
+    private const val PPG_ABS_BPM = 5.0
+    private const val PPG_REL_FRACTION = 0.08
     private const val HP_HZ = 0.5
     private const val LP_HZ = 5.0
     private const val WARMUP_SECONDS = 0.5

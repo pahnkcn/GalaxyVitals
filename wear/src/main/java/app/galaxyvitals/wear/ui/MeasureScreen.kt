@@ -178,7 +178,7 @@ private fun RecordingReadout(
 
 @Composable
 private fun LiveHeartRateReadout(bpm: LiveBpmState) {
-    val estimate = bpm.estimate
+    val estimate = bpm.estimate.takeIf { bpm.availability == LiveBpmAvailability.RELIABLE }
     val scale = remember { Animatable(1f) }
     LaunchedEffect(estimate?.bpm) {
         if (estimate == null) {
