@@ -44,6 +44,7 @@ data class SignalQualityReport(
     val cleanUnionMs: Long,
     val cleanWindowCount: Int,
     val segments: List<ContinuousSegment>,
+    val cleanRanges: List<LongRange> = emptyList(),
 ) {
     val usableForAnalysis: Boolean
         get() = status == SignalQualityStatus.GOOD &&
@@ -165,31 +166,42 @@ object SignalQualityAnalyzer {
         return flags
     }
 
-    internal fun withCleanWindows(
-        report: SignalQualityReport,
-        ranges: List<LongRange>,
-        recordingDurationMs: Long,
-    ): SignalQualityReport {
-        if (ranges.isEmpty()) {
-            return report.copy(
-                status = SignalQualityStatus.LOW_QUALITY,
-                flags = report.flags + QualityFlag.INSUFFICIENT_CLEAN_COVERAGE,
-            )
-        }
+    internal fun mergeRanges(ranges: List<LongRange>): List<LongRange> {
+        if (ranges.isEmpty()) return emptyList()
         val sorted = ranges.sortedBy(LongRange::first)
-        var union = 0L
+        val merged = ArrayList<LongRange>(sorted.size)
         var start = sorted.first().first
         var end = sorted.first().last
-        sorted.drop(1).forEach { range ->
-            if (range.first <= end) end = max(end, range.last)
-            else {
-                union += end - start
+        for (index in 1 until sorted.size) {
+            val range = sorted[index]
+            if (range.first <= end) {
+                end = max(end, range.last)
+            } else {
+                merged += start..end
                 start = range.first
                 end = range.last
             }
         }
-        union += end - start
-        val enough = ranges.size >= MIN_CLEAN_WINDOWS && union >= MIN_CLEAN_UNION_MS
+        merged += start..end
+        return merged
+    }
+
+    internal fun withCleanWindows(
+        report: SignalQualityReport,
+        hopWindows: List<LongRange>,
+        recordingDurationMs: Long,
+        mergedRanges: List<LongRange> = mergeRanges(hopWindows),
+    ): SignalQualityReport {
+        if (hopWindows.isEmpty()) {
+            return report.copy(
+                status = SignalQualityStatus.LOW_QUALITY,
+                flags = report.flags + QualityFlag.INSUFFICIENT_CLEAN_COVERAGE,
+                cleanRanges = emptyList(),
+            )
+        }
+        val stored = if (mergedRanges.isEmpty()) mergeRanges(hopWindows) else mergedRanges
+        val union = mergeRanges(stored).sumOf { it.last - it.first }
+        val enough = hopWindows.size >= MIN_CLEAN_WINDOWS && union >= MIN_CLEAN_UNION_MS
         val newFlags = if (enough) report.flags else report.flags + QualityFlag.INSUFFICIENT_CLEAN_COVERAGE
         val fatalWithoutCoverage = newFlags - QualityFlag.LEGACY_TIMING -
             QualityFlag.BASELINE_DRIFT - QualityFlag.MAINS_INTERFERENCE - QualityFlag.HIGH_FREQUENCY_NOISE
@@ -205,7 +217,8 @@ object SignalQualityAnalyzer {
                 (union * 100.0 / recordingDurationMs).coerceIn(0.0, 100.0)
             } else 0.0,
             cleanUnionMs = union,
-            cleanWindowCount = ranges.size,
+            cleanWindowCount = hopWindows.size,
+            cleanRanges = stored,
         )
     }
 

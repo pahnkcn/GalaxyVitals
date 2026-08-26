@@ -1,5 +1,6 @@
 package app.galaxyvitals.data.protocol
 
+import app.galaxyvitals.domain.EcgSample
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -66,18 +67,21 @@ object EcgBeatAnalyzer {
         val secondary = ArrayList<Int>()
         val matched = ArrayList<Int>()
         val rrMs = ArrayList<Double>()
-        prepared.quality.segments.forEach { segment ->
-            if (segment.samples.size < 2) return@forEach
-            val oriented = FloatArray(segment.samples.size) { index ->
-                segment.samples[index].valueMv * polarity
+        prepared.cleanRanges.forEach { range ->
+            prepared.quality.segments.forEach { segment ->
+                val slice = samplesInRange(segment.samples, range)
+                if (slice.size < 2) return@forEach
+                val oriented = FloatArray(slice.size) { index ->
+                    slice[index].valueMv * polarity
+                }
+                val resampled = EcgFounderPreprocess.resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
+                val local = detectOnResampled(resampled)
+                val offset = (slice.first().relMs * TARGET_HZ / 1_000L).toInt()
+                local.primary.forEach { primary += it + offset }
+                local.secondary.forEach { secondary += it + offset }
+                local.matched.forEach { matched += it + offset }
+                rrMs += local.rrMs
             }
-            val resampled = EcgFounderPreprocess.resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
-            val local = detectOnResampled(resampled)
-            val offset = (segment.startRelMs * TARGET_HZ / 1_000L).toInt()
-            local.primary.forEach { primary += it + offset }
-            local.secondary.forEach { secondary += it + offset }
-            local.matched.forEach { matched += it + offset }
-            rrMs += local.rrMs
         }
         return finish(
             primary = primary.toIntArray(),
@@ -420,6 +424,18 @@ object EcgBeatAnalyzer {
             cleanDurationMs = cleanDurationMs,
             reason = "",
         )
+    }
+
+    private fun samplesInRange(samples: List<EcgSample>, range: LongRange): List<EcgSample> {
+        if (samples.isEmpty()) return emptyList()
+        if (samples.last().relMs < range.first || samples.first().relMs > range.last) return emptyList()
+        val out = ArrayList<EcgSample>()
+        for (sample in samples) {
+            if (sample.relMs < range.first) continue
+            if (sample.relMs > range.last) break
+            out += sample
+        }
+        return out
     }
 
     private fun emptyResult(status: EcgBpmStatus, reason: String, cleanDurationMs: Long) = EcgBeatResult(

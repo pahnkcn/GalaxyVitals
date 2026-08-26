@@ -17,7 +17,9 @@ data class PreparedWindow(
 data class PreparedRecording(
     val windows: List<PreparedWindow>,
     val quality: SignalQualityReport,
-)
+) {
+    val cleanRanges: List<LongRange> get() = quality.cleanRanges
+}
 
 data class SignalQuality(
     val usable: Boolean,
@@ -40,7 +42,8 @@ object EcgFounderPreprocess {
         val baseQuality = SignalQualityAnalyzer.analyze(parsed)
         if (parsed.srHz !in SUPPORTED_INPUT_HZ) return PreparedRecording(emptyList(), baseQuality)
         val out = ArrayList<PreparedWindow>()
-        val cleanRanges = ArrayList<LongRange>()
+        val hopWindows = ArrayList<LongRange>()
+        val mergedRanges = ArrayList<LongRange>()
         val polarity = parsed.effectivePolarity()
         baseQuality.segments.forEach { segment ->
             if (segment.endRelMs - segment.startRelMs < WINDOW_MS - 2L) return@forEach
@@ -50,6 +53,7 @@ object EcgFounderPreprocess {
             val series = resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
             val filtered = filterBandpass(series)
             val hop = TARGET_HZ * (HOP_MS / 1000).toInt()
+            val segmentWindows = ArrayList<LongRange>()
             var start = 0
             while (start + WINDOW_SAMPLES <= filtered.size) {
                 val slice = filtered.copyOfRange(start, start + WINDOW_SAMPLES)
@@ -57,13 +61,21 @@ object EcgFounderPreprocess {
                 val startMs = segment.startRelMs + start * 1000L / TARGET_HZ
                 if (windowFlags.isEmpty()) {
                     out += PreparedWindow(zScore(slice), startMs, rms(slice), windowFlags)
-                    cleanRanges += startMs..(startMs + WINDOW_MS)
+                    val range = startMs..(startMs + WINDOW_MS)
+                    hopWindows += range
+                    segmentWindows += range
                 }
                 start += hop
             }
+            mergedRanges += SignalQualityAnalyzer.mergeRanges(segmentWindows)
         }
         val durationMs = parsed.samples.last().relMs - parsed.samples.first().relMs
-        val finalQuality = SignalQualityAnalyzer.withCleanWindows(baseQuality, cleanRanges, durationMs)
+        val finalQuality = SignalQualityAnalyzer.withCleanWindows(
+            baseQuality,
+            hopWindows,
+            durationMs,
+            mergedRanges,
+        )
         return PreparedRecording(out, finalQuality)
     }
 

@@ -2,6 +2,7 @@ package app.galaxyvitals.data.protocol
 
 import app.galaxyvitals.domain.CaptureSource
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.EcgSampleFlags
 import app.galaxyvitals.domain.TimingTrust
 import app.galaxyvitals.domain.Wrist
 import com.google.common.truth.Truth.assertThat
@@ -187,6 +188,67 @@ class EcgFounderPreprocessTest {
 
         assertThat(encoded).isEqualTo("normal:0.500")
         assertThat(decoded).containsExactly(LabeledScore("normal", 0.5f))
+    }
+
+    @Test
+    fun mergeRangesCollapsesOverlappingAndTouchingWindowsAndKeepsGaps() {
+        val merged = SignalQualityAnalyzer.mergeRanges(
+            listOf(
+                5_000L..15_000L,
+                0L..10_000L,
+                10_000L..20_000L,
+                30_000L..40_000L,
+            ),
+        )
+        assertThat(merged).containsExactly(0L..20_000L, 30_000L..40_000L).inOrder()
+        assertThat(merged[1].first).isGreaterThan(merged[0].last)
+    }
+
+    @Test
+    fun prepareReturnsMergedNonOverlappingCleanRangesForContinuousRecording() {
+        val parsed = parsed(signFactor = 1, polarityNormalized = true)
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+
+        assertThat(prepared.quality.cleanWindowCount).isAtLeast(3)
+        val ranges = prepared.cleanRanges
+        assertThat(ranges).isNotEmpty()
+        for (index in 1 until ranges.size) {
+            assertThat(ranges[index].first).isAtLeast(ranges[index - 1].last)
+        }
+        assertThat(ranges.size).isLessThan(prepared.quality.cleanWindowCount)
+        assertThat(ranges.sumOf { it.last - it.first }).isEqualTo(prepared.quality.cleanUnionMs)
+        assertThat(ranges.single().last - ranges.single().first).isAtLeast(
+            SignalQualityAnalyzer.MIN_CLEAN_UNION_MS,
+        )
+    }
+
+    @Test
+    fun prepareDoesNotMergeCleanRangesSeparatedByTimestampGap() {
+        val left = synthetic(seconds = 15, srHz = 500, hz = 1.2)
+        val right = synthetic(seconds = 15, srHz = 500, hz = 1.2)
+        val gapMs = 2_000L
+        val samples = ArrayList<EcgSample>(left.size + right.size)
+        samples += left
+        val rightStart = left.last().relMs + gapMs + 2L
+        right.forEachIndexed { index, sample ->
+            samples += sample.copy(
+                relMs = rightStart + sample.relMs,
+                sampleIndex = left.size + index,
+                flags = if (index == 0) EcgSampleFlags.TIMESTAMP_GAP else 0,
+            )
+        }
+        val parsed = parsed(samples = samples, signFactor = 1, polarityNormalized = true)
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+
+        assertThat(prepared.quality.cleanWindowCount).isAtLeast(3)
+        val ranges = prepared.cleanRanges
+        assertThat(ranges.size).isAtLeast(2)
+        for (index in 1 until ranges.size) {
+            assertThat(ranges[index].first).isAtLeast(ranges[index - 1].last)
+        }
+        val gapMid = left.last().relMs + gapMs / 2
+        assertThat(ranges.none { gapMid in it }).isTrue()
+        assertThat(ranges.sumOf { it.last - it.first }).isEqualTo(prepared.quality.cleanUnionMs)
     }
 
     @Test

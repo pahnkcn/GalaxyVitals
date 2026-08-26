@@ -175,6 +175,10 @@ class EcgBeatAnalyzerTest {
                 cleanUnionMs = 20_000L,
                 cleanWindowCount = 3,
                 segments = listOf(leftSeg, rightSeg),
+                cleanRanges = listOf(
+                    leftSeg.startRelMs..leftSeg.endRelMs,
+                    rightSeg.startRelMs..rightSeg.endRelMs,
+                ),
             ),
         )
 
@@ -244,6 +248,95 @@ class EcgBeatAnalyzerTest {
         assertThat(result.primaryPeaks.any { it <= leftEnd }).isTrue()
         assertThat(result.primaryPeaks.any { it >= rightStart + 500 }).isTrue()
         assertThat(result.primaryPeaks.none { it in rightStart until rightStart + 500 }).isTrue()
+        assertNonOverlapping(prepared.cleanRanges)
+        assertThat(prepared.cleanRanges.size).isAtLeast(2)
+    }
+
+    @Test
+    fun analyzeUsesMergedCleanRangesNotFullQualitySegments() {
+        val samples = mixedRateCapture(cleanBpm = 72.0, rejectedBpm = 180.0)
+        val parsed = parsedRecording(samples)
+        val prepared = preparedCleanRanges(
+            samples,
+            listOf(0L..10_000L, 20_000L..30_000L),
+        )
+
+        assertThat(prepared.quality.segments).hasSize(1)
+        assertThat(prepared.quality.segments.single().endRelMs).isAtLeast(29_000L)
+
+        val result = EcgBeatAnalyzer.analyze(parsed, prepared)
+        val rejected = 5_000 until 10_000
+        assertThat(result.primaryPeaks.none { it in rejected }).isTrue()
+        assertThat(result.matchedPeaks.none { it in rejected }).isTrue()
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(result.bpmMedian).isNotNull()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(72.0)
+        assertThat(result.bpmMedian!!).isLessThan(100.0)
+    }
+
+    @Test
+    fun analyzeDoesNotFormRrAcrossRejectedRange() {
+        val samples = mixedRateCapture(cleanBpm = 72.0, rejectedBpm = 180.0)
+        val prepared = preparedCleanRanges(
+            samples,
+            listOf(0L..10_000L, 20_000L..30_000L),
+        )
+        val result = EcgBeatAnalyzer.analyze(parsedRecording(samples), prepared)
+
+        val leftEnd = 10_000L * 500L / 1_000L
+        val rightStart = 20_000L * 500L / 1_000L
+        for (index in 1 until result.matchedPeaks.size) {
+            val previous = result.matchedPeaks[index - 1]
+            val current = result.matchedPeaks[index]
+            val spansRejected = previous <= leftEnd && current >= rightStart
+            if (spansRejected) {
+                val intervalMs = (current - previous) * 1_000.0 / 500.0
+                assertThat(intervalMs < 333.0 || intervalMs > 1_500.0).isTrue()
+            }
+        }
+        assertThat(result.matchedPeaks.any { it <= leftEnd }).isTrue()
+        assertThat(result.matchedPeaks.any { it >= rightStart }).isTrue()
+        assertThat(result.bpmMedian!!).isWithin(3.0).of(72.0)
+    }
+
+    @Test
+    fun analyzeDoesNotCountDuplicateBeatsFromOverlappingWindows() {
+        val values = syntheticQrs(seconds = 30.0, bpm = 72.0)
+        val samples = values.toSamples()
+        val parsed = parsedRecording(samples)
+        val prepared = EcgFounderPreprocess.prepare(parsed)
+
+        assertThat(prepared.quality.cleanWindowCount).isAtLeast(5)
+        assertThat(prepared.cleanRanges).hasSize(1)
+        assertNonOverlapping(prepared.cleanRanges)
+
+        val result = EcgBeatAnalyzer.analyze(parsed, prepared)
+        assertThat(result.matchedPeaks.toSet().size).isEqualTo(result.matchedPeaks.size)
+        val fullWindow = EcgBeatAnalyzer.analyzeWindow(values, srHz = 500, signFactor = 1)
+        assertThat(result.matchedPeaks.size).isAtMost(fullWindow.matchedPeaks.size + 2)
+        assertThat(result.bpmMedian!!).isWithin(2.0).of(72.0)
+    }
+
+    @Test
+    fun analyzeOmitsBpmWhenCleanRangesYieldTooFewRr() {
+        val samples = syntheticQrs(seconds = 30.0, bpm = 72.0).toSamples()
+        val prepared = preparedCleanRanges(samples, listOf(0L..1_000L))
+
+        val result = EcgBeatAnalyzer.analyze(parsedRecording(samples), prepared)
+        assertThat(result.bpmMedian).isNull()
+        assertThat(result.status).isEqualTo(EcgBpmStatus.INSUFFICIENT_DATA)
+    }
+
+    @Test
+    fun analyzeDoesNotMutateAlreadySavedCaptureBytes() {
+        val parsed = parsedRecording(syntheticQrs(seconds = 12.0, bpm = 72.0).toSamples())
+        val encoded = EcgCsvWriter.encodeParsed(parsed)
+        val snapshot = parsed.samples.map { it.copy() }
+
+        EcgBeatAnalyzer.analyze(parsed)
+
+        assertThat(EcgCsvWriter.encodeParsed(parsed)).isEqualTo(encoded)
+        assertThat(parsed.samples).isEqualTo(snapshot)
     }
 
     private fun assertWindowBpm(bpm: Double, seconds: Double = 12.0, tolerance: Double = 3.0, srHz: Int = 500) {
@@ -329,6 +422,44 @@ class EcgBeatAnalyzerTest {
                 sampleIndex = index,
                 flags = if (index == split) EcgSampleFlags.TIMESTAMP_GAP else 0,
             )
+        }
+    }
+
+    private fun mixedRateCapture(cleanBpm: Double, rejectedBpm: Double): List<EcgSample> {
+        val values = syntheticQrs(seconds = 10.0, bpm = cleanBpm) +
+            syntheticQrs(seconds = 10.0, bpm = rejectedBpm) +
+            syntheticQrs(seconds = 10.0, bpm = cleanBpm)
+        return values.toSamples()
+    }
+
+    private fun preparedCleanRanges(
+        samples: List<EcgSample>,
+        ranges: List<LongRange>,
+    ): PreparedRecording {
+        val segment = ContinuousSegment(samples, samples.first().relMs, samples.last().relMs)
+        val union = SignalQualityAnalyzer.mergeRanges(ranges).sumOf { it.last - it.first }
+        return PreparedRecording(
+            windows = emptyList(),
+            quality = SignalQualityReport(
+                status = SignalQualityStatus.GOOD,
+                flags = emptySet(),
+                effectiveHz = 500.0,
+                gapCount = 0,
+                missingSampleCount = 0,
+                clippedSampleCount = 0,
+                longestFlatRunMs = 0L,
+                cleanCoveragePct = 100.0,
+                cleanUnionMs = maxOf(union, 20_000L),
+                cleanWindowCount = 3,
+                segments = listOf(segment),
+                cleanRanges = ranges,
+            ),
+        )
+    }
+
+    private fun assertNonOverlapping(ranges: List<LongRange>) {
+        for (index in 1 until ranges.size) {
+            assertThat(ranges[index].first).isAtLeast(ranges[index - 1].last)
         }
     }
 
