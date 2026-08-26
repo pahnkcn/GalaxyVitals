@@ -9,6 +9,8 @@ import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSubscription
+import app.galaxyvitals.wear.sensors.SensorIssueCode
+import app.galaxyvitals.wear.sensors.SensorRecovery
 import app.galaxyvitals.wear.sensors.OffBodyGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -99,6 +101,30 @@ class EcgMeasurementCoordinator(
         }
     }
 
+    fun onHostStop() {
+        scope.launch(mainDispatcher) {
+            val phase = _state.value.phase
+            if (phase == MeasurePhase.PermissionRequired || phase == MeasurePhase.ResolutionRequired) {
+                return@launch
+            }
+            if (!terminal && phase !in setOf(MeasurePhase.Success, MeasurePhase.Failed)) {
+                failTerminal("CANCELLED", "Recording cancelled", "Start again when ready.")
+            } else {
+                cleanupAttempt(releaseLease = true)
+            }
+        }
+    }
+
+    fun onHostResume() {
+        scope.launch(mainDispatcher) {
+            if (_state.value.phase == MeasurePhase.ResolutionRequired) {
+                startNewAttempt()
+            }
+        }
+    }
+
+    fun resolvePending(activity: android.app.Activity): Boolean = sensor.resolvePending(activity)
+
     override fun close() {
         attemptId += 1
         terminal = true
@@ -151,12 +177,41 @@ class EcgMeasurementCoordinator(
                     connectTimeoutJob?.cancel()
                     connectTimeoutJob = null
                     if (!availability.ready) {
-                        val code = if (availability.policyDenied) "SDK_POLICY" else "TRACKER_UNAVAILABLE"
-                        val reason = availability.reason ?: "Samsung ECG is not available for this package."
-                        if (trackerReady) {
-                            failTerminal(code, "Recording failed", reason)
-                        } else {
-                            unavailable(code, reason)
+                        val reason = availability.reason
+                            ?: availability.issue?.message
+                            ?: "Samsung ECG is not available for this package."
+                        when (availability.issue?.recovery) {
+                            SensorRecovery.REQUEST_PERMISSION -> {
+                                transition(MeasurePhase.PermissionRequired, "PERMISSION_REQUIRED") {
+                                    MeasureUiState(
+                                        phase = MeasurePhase.PermissionRequired,
+                                        status = "Body sensors needed",
+                                        error = reason,
+                                    )
+                                }
+                            }
+                            SensorRecovery.RESOLVE_SERVICE -> {
+                                transition(MeasurePhase.ResolutionRequired, "RESOLUTION_REQUIRED") {
+                                    MeasureUiState(
+                                        phase = MeasurePhase.ResolutionRequired,
+                                        status = "Samsung Health setup needed",
+                                        error = reason,
+                                    )
+                                }
+                            }
+                            else -> {
+                                val code = when (availability.issue?.code) {
+                                    SensorIssueCode.SDK_POLICY_ERROR -> "SDK_POLICY"
+                                    SensorIssueCode.TRACKER_UNSUPPORTED -> "TRACKER_UNSUPPORTED"
+                                    SensorIssueCode.CONNECTION_FAILED -> "CONNECTION_FAILED"
+                                    else -> "TRACKER_UNAVAILABLE"
+                                }
+                                if (trackerReady) {
+                                    failTerminal(code, "Recording failed", reason)
+                                } else {
+                                    unavailable(code, reason)
+                                }
+                            }
                         }
                     } else {
                         trackerReady = true
@@ -216,8 +271,10 @@ class EcgMeasurementCoordinator(
         streamGeneration += 1
         val gen = streamGeneration
         val createdSubscription = sensor.startEcg(
+            maxDurationMs = 30_000,
             onError = { error -> dispatch(id, gen) { handleSensorError(error) } },
             onBatch = { batch -> dispatch(id, gen) { handleBatch(batch) } },
+            onDeadline = { /* Task 2 */ },
         )
         if (!isCurrent(id) || terminal || gen != streamGeneration) {
             createdSubscription.close()

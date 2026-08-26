@@ -41,6 +41,8 @@ fun MeasureScreen(
     state: MeasureUiState,
     onRetry: () -> Unit,
     onDone: () -> Unit,
+    onRequestPermission: () -> Unit = {},
+    onResolve: () -> Unit = {},
 ) {
     val view = LocalView.current
     DisposableEffect(view) {
@@ -69,6 +71,28 @@ fun MeasureScreen(
                 when (state.phase) {
                     MeasurePhase.Connecting, MeasurePhase.Warmup -> {
                         CircularProgressIndicator()
+                    }
+                    MeasurePhase.PermissionRequired -> {
+                        Text(
+                            "ECG recording needs body sensor access.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = onRequestPermission, modifier = Modifier.fillMaxWidth()) {
+                            Text("Allow sensors")
+                        }
+                    }
+                    MeasurePhase.ResolutionRequired -> {
+                        Text(
+                            state.error ?: "Samsung Health needs setup.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(onClick = onResolve, modifier = Modifier.fillMaxWidth()) {
+                            Text("Open Samsung Health")
+                        }
                     }
                     MeasurePhase.Ready, MeasurePhase.LeadOff, MeasurePhase.CalculatingBpm,
                     MeasurePhase.StartingCapture,

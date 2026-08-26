@@ -111,10 +111,32 @@ data class EcgSensorError(
     val message: String,
 )
 
+enum class SensorIssueCode {
+    PACKAGE_NOT_INSTALLED,
+    OLD_PLATFORM_VERSION,
+    PERMISSION_ERROR,
+    SDK_POLICY_ERROR,
+    TRACKER_UNSUPPORTED,
+    CONNECTION_FAILED,
+}
+
+enum class SensorRecovery {
+    NONE,
+    REQUEST_PERMISSION,
+    RESOLVE_SERVICE,
+    RETRY,
+}
+
+data class SensorIssue(
+    val code: SensorIssueCode,
+    val message: String,
+    val recovery: SensorRecovery,
+)
+
 data class SensorAvailability(
     val ready: Boolean,
     val reason: String? = null,
-    val policyDenied: Boolean = false,
+    val issue: SensorIssue? = null,
 )
 
 fun interface EcgSubscription : AutoCloseable {
@@ -124,9 +146,12 @@ fun interface EcgSubscription : AutoCloseable {
 interface EcgSensor {
     fun connect(onResult: (SensorAvailability) -> Unit)
     fun startEcg(
+        maxDurationMs: Long,
         onError: (EcgSensorError) -> Unit = {},
         onBatch: (EcgBatch) -> Unit,
+        onDeadline: () -> Unit = {},
     ): EcgSubscription
+    fun resolvePending(activity: android.app.Activity): Boolean
     fun stop()
     fun disconnect()
 }

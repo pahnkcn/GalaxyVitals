@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,20 @@ plugins {
 }
 
 val samsungAar = file("libs/samsung-health-sensor-api.aar")
+val samsungAarSha256 = if (samsungAar.isFile) {
+    val digest = MessageDigest.getInstance("SHA-256")
+    samsungAar.inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    digest.digest().joinToString("") { byte -> "%02X".format(byte) }
+} else {
+    "MISSING"
+}
 
 android {
     namespace = "app.galaxyvitals.wear"
@@ -16,6 +32,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "SAMSUNG_HEALTH_SENSOR_SDK_VERSION", "\"1.4.1\"")
+        buildConfigField("String", "SAMSUNG_HEALTH_SENSOR_AAR_SHA256", "\"$samsungAarSha256\"")
     }
 
     buildTypes {
@@ -71,4 +89,21 @@ dependencies {
     debugImplementation(libs.androidx.wear.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
+    testImplementation(project(":samsung-health-api"))
+}
+
+private fun excludeSamsungAar(files: Iterable<java.io.File>): List<java.io.File> =
+    files.filter { !it.name.contains("samsung-health-sensor-api") }
+
+tasks.withType<Test>().configureEach {
+    doFirst {
+        classpath = files(excludeSamsungAar(classpath))
+    }
+}
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    if (name.contains("UnitTest", ignoreCase = true)) {
+        doFirst {
+            libraries.setFrom(excludeSamsungAar(libraries))
+        }
+    }
 }

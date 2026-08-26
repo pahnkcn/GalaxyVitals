@@ -7,11 +7,11 @@ import com.samsung.android.service.health.tracking.data.HealthTrackerType
  * Compile-time stand-in for the official Samsung Privileged Health SDK client.
  * Drop `wear/libs/samsung-health-sensor-api.aar` to bind the real service.
  */
-class HealthTrackingService(
+open class HealthTrackingService(
     private val connectionListener: ConnectionListener,
     @Suppress("unused") private val context: Context,
 ) {
-    fun connectService() {
+    open fun connectService() {
         connectionListener.onConnectionFailed(
             HealthTrackerException(
                 "Official Samsung Health Tracking client is not packaged. " +
@@ -20,9 +20,9 @@ class HealthTrackingService(
         )
     }
 
-    fun disconnectService() = Unit
+    open fun disconnectService() = Unit
 
-    fun getHealthTracker(@Suppress("unused") type: HealthTrackerType): HealthTracker = HealthTracker()
+    open fun getHealthTracker(@Suppress("unused") type: HealthTrackerType): HealthTracker = HealthTracker()
 
-    fun getTrackingCapability(): HealthTrackerCapability = HealthTrackerCapability()
+    open fun getTrackingCapability(): HealthTrackerCapability = HealthTrackerCapability()
 }

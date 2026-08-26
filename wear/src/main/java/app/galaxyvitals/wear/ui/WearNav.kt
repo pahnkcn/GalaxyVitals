@@ -1,11 +1,16 @@
 package app.galaxyvitals.wear.ui
 
+import android.Manifest
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -38,10 +43,19 @@ fun WearRoot() {
     val settingsVm: SettingsViewModel = viewModel()
     val current = backStack.last()
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val bodySensorsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) measureVm.startSamsung()
+    }
     DisposableEffect(lifecycleOwner, current) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && current is WearRoute.Measure) {
-                measureVm.cancelRecording()
+            if (current !is WearRoute.Measure) return@LifecycleEventObserver
+            when (event) {
+                Lifecycle.Event.ON_STOP -> measureVm.onHostStop()
+                Lifecycle.Event.ON_RESUME -> measureVm.onHostResume()
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -85,6 +99,12 @@ fun WearRoot() {
                             onDone = {
                                 backStack.removeLastOrNull()
                                 homeVm.refresh()
+                            },
+                            onRequestPermission = {
+                                bodySensorsLauncher.launch(Manifest.permission.BODY_SENSORS)
+                            },
+                            onResolve = {
+                                (context as? Activity)?.let(measureVm::resolveSamsung)
                             },
                         )
                     }

@@ -1,5 +1,6 @@
 package app.galaxyvitals.wear.ui
 
+import android.app.Activity
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,6 +30,8 @@ data class HomeUiState(
 enum class MeasurePhase {
     Connecting,
     Unavailable,
+    PermissionRequired,
+    ResolutionRequired,
     Warmup,
     Ready,
     LeadOff,
@@ -165,6 +168,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     fun retry() = coordinator.retry()
 
     fun cancelRecording() = coordinator.cancel()
+
+    fun onHostStop() = coordinator.onHostStop()
+
+    fun onHostResume() = coordinator.onHostResume()
+
+    fun resolveSamsung(activity: Activity) {
+        coordinator.resolvePending(activity)
+    }
 
     override fun onCleared() {
         coordinator.close()

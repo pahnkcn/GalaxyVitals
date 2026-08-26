@@ -1,5 +1,6 @@
 package app.galaxyvitals.wear.debug
 
+import android.app.Activity
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -37,10 +38,19 @@ class DebugReplayEcgSensor(
         }
     }
 
+    override fun resolvePending(activity: Activity): Boolean = false
+
     override fun startEcg(
+        maxDurationMs: Long,
         onError: (EcgSensorError) -> Unit,
         onBatch: (EcgBatch) -> Unit,
+        onDeadline: () -> Unit,
     ): EcgSubscription {
+        if (maxDurationMs > 30_000L) {
+            throw IllegalArgumentException(
+                "ECG_ON_DEMAND maxDurationMs must be <= 30000, was $maxDurationMs",
+            )
+        }
         val startEpoch = synchronized(lock) {
             if (!connected) {
                 main.post {

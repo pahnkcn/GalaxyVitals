@@ -4,10 +4,14 @@ import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
+import android.app.Activity
 import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSubscription
+import app.galaxyvitals.wear.sensors.SensorIssue
+import app.galaxyvitals.wear.sensors.SensorIssueCode
+import app.galaxyvitals.wear.sensors.SensorRecovery
 import app.galaxyvitals.wear.sensors.OffBodyGate
 import app.galaxyvitals.wear.sensors.PpgGreenBatch
 import app.galaxyvitals.wear.sensors.SensorAvailability
@@ -536,6 +540,48 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
+    fun hostStopDuringResolutionRequiredDoesNotCancelAndResumeRetriesConnect() {
+        val harness = Harness()
+        harness.sensor.availability = SensorAvailability(
+            ready = false,
+            reason = "Samsung Health Tracking Service is not installed.",
+            issue = SensorIssue(
+                SensorIssueCode.PACKAGE_NOT_INSTALLED,
+                "Samsung Health Tracking Service is not installed.",
+                SensorRecovery.RESOLVE_SERVICE,
+            ),
+        )
+        harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ResolutionRequired)
+        assertThat(harness.sensor.connectCount).isEqualTo(1)
+        harness.coordinator.onHostStop()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ResolutionRequired)
+        harness.coordinator.onHostResume()
+        assertThat(harness.sensor.connectCount).isEqualTo(2)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ResolutionRequired)
+    }
+
+    @Test
+    fun hostStopDuringPermissionRequiredDoesNotCancel() {
+        val harness = Harness()
+        harness.sensor.availability = SensorAvailability(
+            ready = false,
+            reason = "Body sensors permission is required to record ECG.",
+            issue = SensorIssue(
+                SensorIssueCode.PERMISSION_ERROR,
+                "Body sensors permission is required to record ECG.",
+                SensorRecovery.REQUEST_PERMISSION,
+            ),
+        )
+        harness.coordinator.startHardware()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PermissionRequired)
+        harness.coordinator.onHostStop()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PermissionRequired)
+        harness.coordinator.onHostResume()
+        assertThat(harness.sensor.connectCount).isEqualTo(1)
+    }
+
+    @Test
     fun captureContactTimeoutAfter10SecondsCleansUpWithoutFile() {
         val harness = Harness()
         reachStartingCapture(harness)
@@ -635,18 +681,25 @@ class EcgMeasurementCoordinatorTest {
         )
 
         val listeners = arrayListOf<Listener>()
+        var availability = SensorAvailability(ready = true)
+        var connectCount = 0
         var startCount = 0
         var closeCount = 0
         var stopCount = 0
         var disconnectCount = 0
 
         override fun connect(onResult: (SensorAvailability) -> Unit) {
-            onResult(SensorAvailability(ready = true))
+            connectCount += 1
+            onResult(availability)
         }
 
+        override fun resolvePending(activity: Activity): Boolean = false
+
         override fun startEcg(
+            maxDurationMs: Long,
             onError: (EcgSensorError) -> Unit,
             onBatch: (EcgBatch) -> Unit,
+            onDeadline: () -> Unit,
         ): EcgSubscription {
             startCount += 1
             listeners += Listener(onError, onBatch)
