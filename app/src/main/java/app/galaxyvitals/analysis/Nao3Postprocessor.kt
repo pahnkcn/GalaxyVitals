@@ -4,10 +4,15 @@ import app.galaxyvitals.data.protocol.NaoDecision
 import app.galaxyvitals.data.protocol.NaoLabel
 import kotlin.math.exp
 
+sealed class Nao3Verdict {
+    data class Classified(val decision: NaoDecision) : Nao3Verdict()
+    data object Indeterminate : Nao3Verdict()
+}
+
 object Nao3Postprocessor {
     private val labels = listOf(NaoLabel.N, NaoLabel.A, NaoLabel.O)
 
-    fun fromLogits(logits: FloatArray): NaoDecision {
+    fun fromLogits(logits: FloatArray, policy: Nao3DecisionPolicy): Nao3Verdict {
         require(logits.size == labels.size) {
             "NAO3 must return exactly ${labels.size} logits"
         }
@@ -32,13 +37,30 @@ object Nao3Postprocessor {
         for (index in 1 until probabilities.size) {
             if (probabilities[index] > probabilities[bestIndex]) bestIndex = index
         }
-        return NaoDecision(
-            label = labels[bestIndex],
-            confidence = probabilities[bestIndex],
-            pNormal = probabilities[0],
-            pAf = probabilities[1],
-            pOther = probabilities[2],
-            topFindings = emptyList(),
+        var secondBest = Float.NEGATIVE_INFINITY
+        for (index in probabilities.indices) {
+            if (index == bestIndex) continue
+            if (probabilities[index] > secondBest) secondBest = probabilities[index]
+        }
+        val bestProbability = probabilities[bestIndex]
+        if (bestProbability <= secondBest) return Nao3Verdict.Indeterminate
+        if (bestProbability - secondBest < policy.minMargin) return Nao3Verdict.Indeterminate
+
+        val label = labels[bestIndex]
+        val classPolicy = policy.classes[label] ?: return Nao3Verdict.Indeterminate
+        if (classPolicy.alwaysAbstain) return Nao3Verdict.Indeterminate
+        val minProbability = classPolicy.minProbability ?: return Nao3Verdict.Indeterminate
+        if (bestProbability < minProbability) return Nao3Verdict.Indeterminate
+
+        return Nao3Verdict.Classified(
+            NaoDecision(
+                label = label,
+                confidence = bestProbability,
+                pNormal = probabilities[0],
+                pAf = probabilities[1],
+                pOther = probabilities[2],
+                topFindings = emptyList(),
+            ),
         )
     }
 }

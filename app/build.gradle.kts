@@ -68,14 +68,15 @@ val verifyEcgNao3Bundle by tasks.registering {
         val manifest = groovy.json.JsonSlurper().parse(manifestFile) as? Map<*, *>
             ?: throw GradleException("Invalid ECG NAO3 bundle")
         if (manifest["schema"] != "app.galaxyvitals.ecg.nao3.bundle" ||
-            manifest["compatibility_id"] != "ecg-nao3-student-256hz-v1"
+            manifest["version"] != 2 ||
+            manifest["compatibility_id"] != "ecg-nao3-student-256hz-v2"
         ) {
             throw GradleException("Unexpected ECG NAO3 bundle contract")
         }
         val artifacts = manifest["artifacts"] as? Map<*, *>
             ?: throw GradleException("Invalid ECG analysis bundle artifacts")
-        if (artifacts.keys != setOf("model", "filters")) {
-            throw GradleException("ECG NAO3 bundle must bind exactly model and filters")
+        if (artifacts.keys != setOf("model", "filters", "policy", "split")) {
+            throw GradleException("ECG NAO3 bundle must bind model, filters, policy, and split")
         }
         artifacts.forEach { (rawName, rawEntry) ->
             val name = rawName as? String
@@ -148,6 +149,71 @@ val verifyEcgNao3Bundle by tasks.registering {
                     )
                 }
             }
+        }
+
+        val policyFile = file("src/main/assets/ecg/ecg_nao3_decision_policy.json").canonicalFile
+        val splitFile = file("src/main/assets/ecg/ecg_nao3_cinc2017_split.json").canonicalFile
+        if (!policyFile.isFile) throw GradleException("Missing ECG ecg_nao3_decision_policy.json")
+        if (!splitFile.isFile) throw GradleException("Missing ECG ecg_nao3_cinc2017_split.json")
+        val policy = groovy.json.JsonSlurper().parse(policyFile) as? Map<*, *>
+            ?: throw GradleException("Invalid ECG NAO3 decision policy JSON")
+        val split = groovy.json.JsonSlurper().parse(splitFile) as? Map<*, *>
+            ?: throw GradleException("Invalid ECG NAO3 CinC 2017 split JSON")
+        if (policy["schema"] != "app.galaxyvitals.ecg.nao3.decision_policy") {
+            throw GradleException("Unexpected ECG NAO3 decision policy schema")
+        }
+        if (policy["compatibility_id"] != "ecg-nao3-student-256hz-v2") {
+            throw GradleException("ECG NAO3 decision policy compatibility id mismatch")
+        }
+        val precisionTarget = (policy["precision_target"] as? Number)?.toDouble()
+            ?: throw GradleException("ECG NAO3 decision policy missing precision_target")
+        if (precisionTarget != 0.9) {
+            throw GradleException("ECG NAO3 decision policy precision_target must be 0.9")
+        }
+        val minMargin = (policy["min_margin"] as? Number)?.toDouble()
+            ?: throw GradleException("ECG NAO3 decision policy missing min_margin")
+        if (!minMargin.isFinite() || minMargin < 0.0) {
+            throw GradleException("ECG NAO3 decision policy min_margin must be finite and non-negative")
+        }
+        val classes = policy["classes"] as? Map<*, *>
+            ?: throw GradleException("ECG NAO3 decision policy missing classes")
+        if (classes.keys != setOf("N", "A", "O")) {
+            throw GradleException("ECG NAO3 decision policy must define classes N, A, and O")
+        }
+        if (split["schema"] != "app.galaxyvitals.ecg.nao3.cinc2017.split") {
+            throw GradleException("Unexpected ECG NAO3 CinC 2017 split schema")
+        }
+        if (split["split_rule"] != "record-disjoint") {
+            throw GradleException("ECG NAO3 CinC 2017 split must be record-disjoint")
+        }
+        val splitStatus = split["status"] as? String
+            ?: throw GradleException("ECG NAO3 CinC 2017 split missing status")
+        val calibrationRecords = split["calibration_records"] as? List<*>
+            ?: throw GradleException("ECG NAO3 CinC 2017 split missing calibration_records")
+        val evaluationRecords = split["evaluation_records"] as? List<*>
+            ?: throw GradleException("ECG NAO3 CinC 2017 split missing evaluation_records")
+        val calibrationAbsent = splitStatus == "calibration_data_absent" || calibrationRecords.isEmpty()
+        classes.forEach { (rawName, rawClass) ->
+            val classPolicy = rawClass as? Map<*, *>
+                ?: throw GradleException("Invalid ECG NAO3 class policy: $rawName")
+            val alwaysAbstain = classPolicy["always_abstain"] as? Boolean
+                ?: throw GradleException("ECG NAO3 class $rawName missing always_abstain")
+            val demonstrated = (classPolicy["demonstrated_precision"] as? Number)?.toDouble()
+            if (!alwaysAbstain) {
+                if (demonstrated == null || !demonstrated.isFinite() || demonstrated < 0.9) {
+                    throw GradleException(
+                        "ECG NAO3 class $rawName cannot be enabled without demonstrated precision >= 0.9",
+                    )
+                }
+            }
+            if (calibrationAbsent && !alwaysAbstain) {
+                throw GradleException(
+                    "ECG NAO3 class $rawName cannot be enabled while CinC 2017 calibration data is absent",
+                )
+            }
+        }
+        if (calibrationAbsent && evaluationRecords.isNotEmpty()) {
+            throw GradleException("Absent CinC 2017 calibration cannot claim evaluation records")
         }
     }
 }

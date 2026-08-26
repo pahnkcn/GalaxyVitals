@@ -1,0 +1,10 @@
+{
+  "schema": "app.galaxyvitals.ecg.nao3.cinc2017.split",
+  "dataset": "PhysioNet/CinC Challenge 2017",
+  "split_rule": "record-disjoint",
+  "status": "calibration_data_absent",
+  "precision_target": 0.9,
+  "calibration_records": [],
+  "evaluation_records": [],
+  "notes": "CinC 2017 training and validation records are not present in this workspace. No class has demonstrated precision on a committed record-disjoint split."
+}

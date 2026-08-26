@@ -1,0 +1,20 @@
+{
+  "schema": "app.galaxyvitals.ecg.nao3.decision_policy",
+  "version": 1,
+  "compatibility_id": "ecg-nao3-student-256hz-v2",
+  "precision_target": 0.9,
+  "min_margin": 1.0,
+  "split_status": "calibration_data_absent",
+  "classes": {
+    "N": {
+      "always_abstain": true
+    },
+    "A": {
+      "always_abstain": true
+    },
+    "O": {
+      "always_abstain": true
+    }
+  },
+  "rationale": "Every class abstains until precision >= 0.90 is demonstrated on the committed record-disjoint CinC 2017 split."
+}

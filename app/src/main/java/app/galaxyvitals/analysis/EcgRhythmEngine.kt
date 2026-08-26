@@ -30,6 +30,8 @@ class EcgRhythmEngine(context: Context) : Closeable {
     private val bundle: EcgAnalysisBundle by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         try {
             EcgAnalysisBundle.load(appContext)
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {
@@ -39,6 +41,8 @@ class EcgRhythmEngine(context: Context) : Closeable {
     private val modelBuffer by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         try {
             mapAsset(bundle.model.path)
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {
@@ -55,18 +59,28 @@ class EcgRhythmEngine(context: Context) : Closeable {
     }
 
     @Synchronized
-    private fun infer(input: FloatArray): NaoDecision {
+    private fun infer(input: FloatArray): Nao3Verdict {
         try {
             require(input.size == INPUT_VALUE_COUNT) {
                 "NAO3 input must contain exactly $INPUT_VALUE_COUNT samples"
             }
             require(input.all(Float::isFinite)) { "NAO3 input must be finite" }
 
+            val policy = try {
+                bundle.decisionPolicy
+            } catch (error: PolicyIntegrityException) {
+                throw error
+            } catch (error: Exception) {
+                throw ModelAnalysisException(ModelFailureStage.BUNDLE_LOAD, error)
+            }
+
             inputBuffer.clear()
             input.forEach(inputBuffer::putFloat)
             inputBuffer.rewind()
             interpreterLazy.value.run(inputBuffer, outputBuffer)
-            return Nao3Postprocessor.fromLogits(outputBuffer[0])
+            return Nao3Postprocessor.fromLogits(outputBuffer[0], policy)
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {
@@ -77,6 +91,8 @@ class EcgRhythmEngine(context: Context) : Closeable {
     private fun createInterpreter(): Interpreter {
         val verifiedBundle = try {
             bundle
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {
@@ -84,6 +100,8 @@ class EcgRhythmEngine(context: Context) : Closeable {
         }
         val mappedModel = try {
             modelBuffer
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {
@@ -117,6 +135,8 @@ class EcgRhythmEngine(context: Context) : Closeable {
                 runtime.close()
                 throw error
             }
+        } catch (error: PolicyIntegrityException) {
+            throw error
         } catch (error: ModelAnalysisException) {
             throw error
         } catch (error: Exception) {

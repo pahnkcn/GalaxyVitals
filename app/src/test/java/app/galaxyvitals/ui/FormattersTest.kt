@@ -57,6 +57,22 @@ class FormattersTest {
     }
 
     @Test
+    fun indeterminateDoesNotDisplayStaleRhythmDecision() {
+        val session = session(
+            status = AnalysisStatus.INDETERMINATE,
+            label = "N",
+            confidence = 0.91f,
+            findings = "N:0.91",
+            ecgHrMedian = 72.4,
+        )
+
+        assertThat(session.naoTitle()).isEqualTo("Indeterminate")
+        assertThat(session.naoConfidenceLabel()).isEmpty()
+        assertThat(session.findingRows()).isEmpty()
+        assertThat(session.hrLabel()).isEqualTo("72")
+    }
+
+    @Test
     fun failedAnalysisStillShowsEcgBpmOnHistory() {
         val session = session(
             status = AnalysisStatus.FAILED,

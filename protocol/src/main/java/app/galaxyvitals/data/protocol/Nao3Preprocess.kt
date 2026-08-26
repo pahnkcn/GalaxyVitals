@@ -1,5 +1,7 @@
 package app.galaxyvitals.data.protocol
 
+import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.EcgSampleFlags
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
@@ -10,6 +12,7 @@ import kotlin.math.sqrt
 object Nao3Preprocess {
     const val TARGET_HZ = 256
     const val INPUT_SAMPLES = 7_680
+    const val DURATION_SECONDS = 30
 
     /**
      * Rows from `ecg_filters_256hz.json`, in the contract order: three
@@ -72,6 +75,53 @@ object Nao3Preprocess {
         val fitted = centerFit(normalized, INPUT_SAMPLES)
         check(fitted.all { it.isFinite() }) { "NAO3 preprocessing produced non-finite values" }
         return fitted
+    }
+
+    /** Center 30 s of the first continuous run that is long enough; never concatenates across a gap. */
+    fun selectExactWindow(parsed: ParsedEcgFile): ParsedEcgFile? {
+        if (parsed.srHz <= 0) return null
+        val needed = parsed.srHz * DURATION_SECONDS
+        val run = continuousRuns(parsed.samples).firstOrNull { it.size >= needed } ?: return null
+        val start = (run.size - needed) / 2
+        val slice = run.subList(start, start + needed).toList()
+        return parsed.copy(
+            samples = slice,
+            durationSec = DURATION_SECONDS.toDouble(),
+        )
+    }
+
+    /** Filter and z-score an already-selected 30 s window. Refuses pad or crop. */
+    fun prepareExact(parsed: ParsedEcgFile): FloatArray {
+        require(parsed.samples.isNotEmpty()) { "NAO3 inference requires samples" }
+        val polarity = parsed.effectivePolarity()
+        val oriented = FloatArray(parsed.samples.size) { index ->
+            parsed.samples[index].valueMv * polarity
+        }
+        require(oriented.all { it.isFinite() }) { "NAO3 input contains non-finite ECG samples" }
+        val resampled = linearResample(oriented, parsed.srHz)
+        require(resampled.size == INPUT_SAMPLES) {
+            "NAO3 inference requires exactly $INPUT_SAMPLES samples after resample, found ${resampled.size}"
+        }
+        val filtered = forwardReverseSos(resampled)
+        val normalized = zScore(filtered)
+        check(normalized.size == INPUT_SAMPLES)
+        check(normalized.all { it.isFinite() }) { "NAO3 preprocessing produced non-finite values" }
+        return normalized
+    }
+
+    private fun continuousRuns(samples: List<EcgSample>): List<List<EcgSample>> {
+        if (samples.isEmpty()) return emptyList()
+        val gapMask = EcgSampleFlags.TIMESTAMP_GAP or EcgSampleFlags.SEQUENCE_GAP
+        val runs = ArrayList<List<EcgSample>>()
+        var start = 0
+        for (index in 1 until samples.size) {
+            if (samples[index].flags and gapMask != 0) {
+                runs += samples.subList(start, index)
+                start = index
+            }
+        }
+        runs += samples.subList(start, samples.size)
+        return runs
     }
 
     /** Linear interpolation with GeminiMan's endpoint-duration output length. */

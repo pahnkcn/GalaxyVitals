@@ -15,11 +15,16 @@ class EcgPackagedBundleSmokeTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val bundle = EcgAnalysisBundle.load(context)
 
-        assertThat(bundle.compatibilityId).isEqualTo("ecg-nao3-student-256hz-v1")
+        assertThat(bundle.compatibilityId).isEqualTo("ecg-nao3-student-256hz-v2")
         assertThat(bundle.model.sha256)
             .isEqualTo("7400a2352c79275d5a4860a76a684cc0b6140e8385572de5a68027f7343a20ac")
         assertThat(bundle.filters.sha256)
             .isEqualTo("1c72ace362fdff4ce0dd8d3ac0cbc7e898300a0b866fb53ef48cdc6e6d95dd52")
+        assertThat(bundle.policy.sha256)
+            .isEqualTo("154f13804a6188ef7db1023f1858812384efd201b64789d833fc8d44e58e94b8")
+        assertThat(bundle.split.sha256)
+            .isEqualTo("0e44cb7d4be9760efc06e89b4f5e2fb964b25585c2dc6f6dcca8bdb0ab69b1b2")
+        assertThat(bundle.decisionPolicy.classes.values.all { it.alwaysAbstain }).isTrue()
 
         val parsed = EcgAndroidTestFixtures.clean72BpmRecording()
         assertThat(parsed.schemaVersion).isEqualTo(2)
@@ -30,21 +35,16 @@ class EcgPackagedBundleSmokeTest {
 
         EcgRhythmEngine(context).use { engine ->
             val result = engine.analyze(parsed)
-            assertThat(result.status).isAnyOf(AnalysisStatus.OK, AnalysisStatus.FAILED)
+            assertThat(result.status).isAnyOf(
+                AnalysisStatus.INDETERMINATE,
+                AnalysisStatus.FAILED,
+            )
             assertThat(result.ecgHrMedian).isNotNull()
             assertThat(result.ecgHrMedian!!).isWithin(8.0).of(72.0)
             assertThat(result.quality).isNotNull()
             assertThat(result.analysisBundleId)
                 .isEqualTo(EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID)
-            if (result.status == AnalysisStatus.OK) {
-                val decision = result.decision
-                assertThat(decision).isNotNull()
-                assertThat(decision!!.pNormal).isFinite()
-                assertThat(decision.pAf).isFinite()
-                assertThat(decision.pOther).isFinite()
-            } else {
-                assertThat(result.decision).isNull()
-            }
+            assertThat(result.decision).isNull()
         }
     }
 }

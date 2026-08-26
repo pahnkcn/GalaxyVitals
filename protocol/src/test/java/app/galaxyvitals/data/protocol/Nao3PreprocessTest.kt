@@ -2,9 +2,11 @@ package app.galaxyvitals.data.protocol
 
 import app.galaxyvitals.domain.CaptureSource
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.domain.EcgSampleFlags
 import app.galaxyvitals.domain.TimingTrust
 import app.galaxyvitals.domain.Wrist
 import com.google.common.truth.Truth.assertThat
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import kotlin.math.PI
 import kotlin.math.abs
@@ -76,6 +78,56 @@ class Nao3PreprocessTest {
         }
 
         val output = Nao3Preprocess.prepare(parsed(samples))
+
+        assertThat(output).hasLength(Nao3Preprocess.INPUT_SAMPLES)
+        assertThat(output.all(Float::isFinite)).isTrue()
+    }
+
+    @Test
+    fun selectExactWindowRejectsRecordingsShorterThanThirtySeconds() {
+        val selected = Nao3Preprocess.selectExactWindow(parsed(synthetic(seconds = 20)))
+
+        assertThat(selected).isNull()
+    }
+
+    @Test
+    fun selectExactWindowTakesCenterThirtySeconds() {
+        val source = parsed(synthetic(seconds = 40))
+
+        val selected = Nao3Preprocess.selectExactWindow(source)
+
+        assertThat(selected).isNotNull()
+        assertThat(selected!!.samples).hasSize(source.srHz * Nao3Preprocess.DURATION_SECONDS)
+        assertThat(selected.samples.first().sampleIndex).isEqualTo(5 * source.srHz)
+        assertThat(selected.samples.last().sampleIndex).isEqualTo(35 * source.srHz - 1)
+    }
+
+    @Test
+    fun selectExactWindowDoesNotCrossATimestampGap() {
+        val first = synthetic(seconds = 20)
+        val second = synthetic(seconds = 20).mapIndexed { index, sample ->
+            sample.copy(
+                relMs = sample.relMs + 20_000L,
+                sampleIndex = sample.sampleIndex + first.size,
+                flags = if (index == 0) EcgSampleFlags.TIMESTAMP_GAP else EcgSampleFlags.NONE,
+            )
+        }
+        val parsed = parsed(first + second)
+
+        assertThat(parsed.samples).hasSize(40 * 500)
+        assertThat(Nao3Preprocess.selectExactWindow(parsed)).isNull()
+    }
+
+    @Test
+    fun prepareExactRejectsShortRecordingsInsteadOfZeroPadding() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Nao3Preprocess.prepareExact(parsed(synthetic(seconds = 10)))
+        }
+    }
+
+    @Test
+    fun prepareExactKeepsThirtySecondsAt500HzAt7680WithoutPadding() {
+        val output = Nao3Preprocess.prepareExact(parsed(synthetic(seconds = 30)))
 
         assertThat(output).hasLength(Nao3Preprocess.INPUT_SAMPLES)
         assertThat(output.all(Float::isFinite)).isTrue()

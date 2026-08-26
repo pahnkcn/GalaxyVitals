@@ -15,6 +15,29 @@ object EcgAnalysisFixtures {
     fun clean72BpmRecording(): ParsedEcgFile =
         parsedRecording(syntheticQrs(seconds = 30.0, bpm = 72.0).toSamples())
 
+    fun shortClean20sRecording(): ParsedEcgFile =
+        parsedRecording(syntheticQrs(seconds = 20.0, bpm = 72.0).toSamples())
+
+    fun contaminated30sRecording(): ParsedEcgFile {
+        val samples = syntheticQrs(seconds = 30.0, bpm = 72.0).toSamples().toMutableList()
+        val srHz = 500
+        val start = (13.0 * srHz).toInt()
+        val end = (14.2 * srHz).toInt()
+        for (index in start until end) {
+            samples[index] = samples[index].copy(valueMv = 0.02f)
+        }
+        return parsedRecording(samples)
+    }
+
+    fun fortySecondRecordingWithDirtyPrefix(): ParsedEcgFile {
+        val samples = syntheticQrs(seconds = 40.0, bpm = 72.0).toSamples().toMutableList()
+        val srHz = 500
+        for (index in 0 until 3 * srHz) {
+            samples[index] = samples[index].copy(valueMv = 0.02f)
+        }
+        return parsedRecording(samples)
+    }
+
     fun lowQualityRecording(): ParsedEcgFile {
         val samples = List(1_000) { index ->
             EcgSample(

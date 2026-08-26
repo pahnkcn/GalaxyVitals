@@ -38,19 +38,26 @@ data class EcgAnalysisBundle(
     val output: EcgOutputContract,
     val model: EcgBundleArtifact,
     val filters: EcgBundleArtifact,
+    val policy: EcgBundleArtifact,
+    val split: EcgBundleArtifact,
+    val decisionPolicy: Nao3DecisionPolicy,
 ) {
     companion object {
         const val ASSET = "ecg/ecg_nao3_bundle.json"
-        const val CURRENT_COMPATIBILITY_ID = "ecg-nao3-student-256hz-v1"
+        const val CURRENT_COMPATIBILITY_ID = "ecg-nao3-student-256hz-v2"
 
         private const val SCHEMA = "app.galaxyvitals.ecg.nao3.bundle"
-        private const val VERSION = 1
+        private const val VERSION = 2
         private const val DEFAULT_VARIANT = "fp32"
         private const val MODEL_ASSET = "ecg/ecg_nao3_student_fp32.tflite"
         private const val FILTERS_ASSET = "ecg/ecg_nao3_filters_256hz.json"
+        private const val POLICY_ASSET = "ecg/ecg_nao3_decision_policy.json"
+        private const val SPLIT_ASSET = "ecg/ecg_nao3_cinc2017_split.json"
+        private const val POSTPROCESS = "stable_softmax_fail_closed"
         private val INPUT_SHAPE = listOf(1, 7_680, 1)
         private val OUTPUT_SHAPE = listOf(1, 3)
         private val LABELS = listOf("N", "A", "O")
+        private val REQUIRED_ARTIFACTS = setOf("model", "filters", "policy", "split")
 
         fun load(context: Context): EcgAnalysisBundle {
             val root = context.assets.open(ASSET).bufferedReader().use { reader ->
@@ -112,11 +119,18 @@ data class EcgAnalysisBundle(
             require(output.shape == OUTPUT_SHAPE)
             require(output.dtype == "FLOAT32")
             require(output.semantics == "logits")
-            require(output.postprocess == "stable_softmax")
+            require(output.postprocess == POSTPROCESS)
             require(output.labels == LABELS)
 
-            val artifacts = root.getJSONObject("artifacts").apply {
-                requireKeys("model", "filters")
+            val artifacts = root.getJSONObject("artifacts")
+            val artifactKeys = artifacts.keys().asSequence().toSet()
+            require(artifactKeys.containsAll(setOf("model", "filters"))) {
+                "ECG NAO3 bundle must bind model and filters"
+            }
+            if (artifactKeys != REQUIRED_ARTIFACTS) {
+                throw PolicyIntegrityException(
+                    IllegalStateException("ECG NAO3 bundle must bind model, filters, policy, and split"),
+                )
             }
             val model = artifacts.artifact("model").also { require(it.path == MODEL_ASSET) }
             val filters = artifacts.artifact("filters").also { require(it.path == FILTERS_ASSET) }
@@ -125,6 +139,27 @@ data class EcgAnalysisBundle(
                 require(actual == artifact.sha256) {
                     "ECG analysis bundle hash mismatch: ${artifact.path}"
                 }
+            }
+
+            val policy: EcgBundleArtifact
+            val split: EcgBundleArtifact
+            val decisionPolicy: Nao3DecisionPolicy
+            try {
+                policy = artifacts.artifact("policy").also { require(it.path == POLICY_ASSET) }
+                split = artifacts.artifact("split").also { require(it.path == SPLIT_ASSET) }
+                listOf(policy, split).forEach { artifact ->
+                    val actual = context.assets.open(artifact.path).use(::sha256)
+                    require(actual == artifact.sha256) {
+                        "ECG analysis bundle hash mismatch: ${artifact.path}"
+                    }
+                }
+                val policyJson = context.assets.open(policy.path).bufferedReader().use { it.readText() }
+                val splitJson = context.assets.open(split.path).bufferedReader().use { it.readText() }
+                decisionPolicy = Nao3DecisionPolicy.parse(policyJson, splitJson)
+            } catch (error: PolicyIntegrityException) {
+                throw error
+            } catch (error: Exception) {
+                throw PolicyIntegrityException(error)
             }
 
             return EcgAnalysisBundle(
@@ -136,6 +171,9 @@ data class EcgAnalysisBundle(
                 output = output,
                 model = model,
                 filters = filters,
+                policy = policy,
+                split = split,
+                decisionPolicy = decisionPolicy,
             )
         }
 
