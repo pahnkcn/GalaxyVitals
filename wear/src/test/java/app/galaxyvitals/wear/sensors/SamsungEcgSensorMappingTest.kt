@@ -92,13 +92,13 @@ class SamsungEcgSensorMappingTest {
     }
 
     @Test
-    fun bodySensorsDeniedBlocksConnectBeforeReady() {
-        val denied = SamsungEcgMapping.connectBlockedByBodySensors(granted = false)
+    fun missingSensorPermissionsBlockConnectBeforeReady() {
+        val denied = SamsungEcgMapping.connectBlockedByPermissions(granted = false)
         assertThat(denied).isNotNull()
         assertThat(denied!!.ready).isFalse()
         assertThat(denied.issue!!.code).isEqualTo(SensorIssueCode.PERMISSION_ERROR)
         assertThat(denied.issue!!.recovery).isEqualTo(SensorRecovery.REQUEST_PERMISSION)
-        assertThat(SamsungEcgMapping.connectBlockedByBodySensors(granted = true)).isNull()
+        assertThat(SamsungEcgMapping.connectBlockedByPermissions(granted = true)).isNull()
     }
 
     @Test
@@ -107,6 +107,14 @@ class SamsungEcgSensorMappingTest {
         assertThat(issue.code).isEqualTo(SensorIssueCode.TRACKER_UNSUPPORTED)
         assertThat(issue.recovery).isEqualTo(SensorRecovery.NONE)
         assertThat(issue.message).contains("ECG_ON_DEMAND")
+    }
+
+    @Test
+    fun missingContinuousHeartRateCapabilityMapsToUnsupported() {
+        val issue = SamsungEcgMapping.missingHeartRateTracker("app.galaxyvitals")
+        assertThat(issue.code).isEqualTo(SensorIssueCode.TRACKER_UNSUPPORTED)
+        assertThat(issue.recovery).isEqualTo(SensorRecovery.NONE)
+        assertThat(issue.message).contains("HEART_RATE_CONTINUOUS")
     }
 
     private fun points(size: Int): List<DataPoint> = List(size) { index ->

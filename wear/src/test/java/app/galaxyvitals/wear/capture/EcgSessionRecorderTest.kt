@@ -2,6 +2,7 @@ package app.galaxyvitals.wear.capture
 
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgWearContract
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import app.galaxyvitals.domain.LiveBpmObservation
 import app.galaxyvitals.domain.TimingTrust
 import app.galaxyvitals.domain.Wrist
@@ -43,6 +44,8 @@ class EcgSessionRecorderTest {
         assertThat(parsed.timingTrust).isEqualTo(TimingTrust.SEQUENCE_RECONSTRUCTED)
         assertThat(parsed.signFactor).isEqualTo(1)
         assertThat(parsed.bpmObservations).isNotEmpty()
+        assertThat(parsed.liveBpmAlgorithmId)
+            .isEqualTo(LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID)
         assertThat(parsed.samples[0].sensorTimestampMsRaw).isNotNull()
     }
 

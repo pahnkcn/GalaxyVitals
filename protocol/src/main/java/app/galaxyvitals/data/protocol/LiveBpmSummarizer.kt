@@ -6,7 +6,11 @@ import kotlin.math.min
 
 object LiveBpmSummarizer {
     const val ALGORITHM_ID = "app.galaxyvitals.live_bpm.v1"
+    const val SAMSUNG_PRIMARY_ALGORITHM_ID =
+        "app.galaxyvitals.samsung_hr_primary_with_ecg_fallback.v1"
+    const val SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS = "SAMSUNG_HEART_RATE_CONTINUOUS"
     const val MAX_OBSERVATIONS = 64
+    const val MAX_IBI_PER_OBSERVATION = 4
     const val STALE_AGE_MS = 3_000L
     const val RELIABLE = "RELIABLE"
 
@@ -30,6 +34,18 @@ object LiveBpmSummarizer {
                 return "Live BPM elapsed time must not go backwards"
             }
             previousElapsed = observation.observedCaptureElapsedMs
+            if (observation.sensorTimestampMs?.let { it < 0L } == true) {
+                return "Live BPM sensor timestamp must be nonnegative"
+            }
+            if (observation.ibiMs.size != observation.ibiStatus.size) {
+                return "Live BPM IBI values and statuses must have equal sizes"
+            }
+            if (observation.ibiMs.size > MAX_IBI_PER_OBSERVATION) {
+                return "Live BPM contains more than $MAX_IBI_PER_OBSERVATION IBI values"
+            }
+            if (observation.ibiMs.any { it < 0 }) {
+                return "Live BPM IBI values must be nonnegative"
+            }
             if (observation.status == RELIABLE) {
                 val bpm = observation.displayedBpm
                 if (bpm == null || !bpm.isFinite()) {
@@ -38,13 +54,25 @@ object LiveBpmSummarizer {
                 if (observation.source.isNullOrBlank()) {
                     return "RELIABLE live BPM requires source"
                 }
-                val sqi = observation.bSqi
-                if (sqi == null || !sqi.isFinite()) {
-                    return "RELIABLE live BPM requires bSQI"
-                }
-                val rr = observation.rrCount
-                if (rr == null || rr < 0) {
-                    return "RELIABLE live BPM requires RR count"
+                if (observation.source == SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS) {
+                    if (observation.sensorTimestampMs == null) {
+                        return "RELIABLE Samsung heart rate requires sensor timestamp"
+                    }
+                    if (observation.sensorStatus != 1) {
+                        return "RELIABLE Samsung heart rate requires successful sensor status"
+                    }
+                    if (bpm <= 0.0) {
+                        return "RELIABLE Samsung heart rate requires positive BPM"
+                    }
+                } else {
+                    val sqi = observation.bSqi
+                    if (sqi == null || !sqi.isFinite()) {
+                        return "RELIABLE live BPM requires bSQI"
+                    }
+                    val rr = observation.rrCount
+                    if (rr == null || rr < 0) {
+                        return "RELIABLE live BPM requires RR count"
+                    }
                 }
             }
         }

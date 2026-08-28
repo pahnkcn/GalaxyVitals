@@ -85,12 +85,12 @@ internal object SamsungEcgMapping {
     fun trackerIssue(error: HealthTracker.TrackerError): SensorIssue = when (error) {
         HealthTracker.TrackerError.PERMISSION_ERROR -> SensorIssue(
             SensorIssueCode.PERMISSION_ERROR,
-            "Samsung ECG tracker error: $error",
+            "Samsung Health tracker error: $error",
             SensorRecovery.REQUEST_PERMISSION,
         )
         HealthTracker.TrackerError.SDK_POLICY_ERROR -> SensorIssue(
             SensorIssueCode.SDK_POLICY_ERROR,
-            "Samsung ECG tracker error: $error",
+            "Samsung Health tracker error: $error",
             SensorRecovery.NONE,
         )
     }
@@ -101,15 +101,21 @@ internal object SamsungEcgMapping {
         SensorRecovery.NONE,
     )
 
-    fun bodySensorsDeniedIssue(): SensorIssue = SensorIssue(
+    fun missingHeartRateTracker(packageName: String): SensorIssue = SensorIssue(
+        SensorIssueCode.TRACKER_UNSUPPORTED,
+        "HEART_RATE_CONTINUOUS is not available for $packageName.",
+        SensorRecovery.NONE,
+    )
+
+    fun sensorPermissionsDeniedIssue(): SensorIssue = SensorIssue(
         SensorIssueCode.PERMISSION_ERROR,
-        "Body sensors permission is required to record ECG.",
+        "Samsung ECG and heart-rate permissions are required.",
         SensorRecovery.REQUEST_PERMISSION,
     )
 
-    fun connectBlockedByBodySensors(granted: Boolean): SensorAvailability? {
+    fun connectBlockedByPermissions(granted: Boolean): SensorAvailability? {
         if (granted) return null
-        val issue = bodySensorsDeniedIssue()
+        val issue = sensorPermissionsDeniedIssue()
         return SensorAvailability(ready = false, reason = issue.message, issue = issue)
     }
 

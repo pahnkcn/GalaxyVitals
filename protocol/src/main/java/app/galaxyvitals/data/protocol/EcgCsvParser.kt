@@ -591,6 +591,10 @@ object EcgCsvParser {
                 if (age < 0L) throw EcgParseException("Invalid live BPM estimate age")
             },
             reasonCode = json.nullableString("reason_code"),
+            sensorTimestampMs = json.nullableLong("sensor_timestamp_ms"),
+            sensorStatus = json.nullableInt("sensor_status"),
+            ibiMs = json.intList("ibi_ms"),
+            ibiStatus = json.intList("ibi_status"),
         )
     }
 
@@ -785,6 +789,15 @@ object EcgCsvParser {
             else -> throw EcgParseException("Invalid $key metadata")
         }
 
+        fun intList(key: String): List<Int> = when (val value = values[key]) {
+            null, JsonValue.NullValue -> emptyList()
+            is JsonValue.ArrayValue -> value.values.map { item ->
+                (item as? JsonValue.NumberValue)?.token?.toIntOrNull()
+                    ?: throw EcgParseException("Invalid $key metadata")
+            }
+            else -> throw EcgParseException("Invalid $key metadata")
+        }
+
         fun double(key: String, default: Double): Double = when (val value = values[key]) {
             null -> default
             is JsonValue.NumberValue -> value.token.toDoubleOrNull()
@@ -816,6 +829,7 @@ object EcgCsvParser {
             data class StringValue(val value: String) : JsonValue
             data class NumberValue(val token: String) : JsonValue
             data class BooleanValue(val value: Boolean) : JsonValue
+            data class ArrayValue(val values: List<JsonValue>) : JsonValue
             data object NullValue : JsonValue
             data object ContainerValue : JsonValue
         }
@@ -858,16 +872,17 @@ object EcgCsvParser {
                 }
             }
 
-            private fun parseArray(depth: Int) {
+            private fun parseArray(depth: Int): List<JsonValue> {
                 checkDepth(depth)
                 expect('[')
                 skipWhitespace()
-                if (consume(']')) return
+                val result = ArrayList<JsonValue>()
+                if (consume(']')) return result
                 while (true) {
-                    parseValue(depth + 1)
+                    result += parseValue(depth + 1)
                     skipWhitespace()
                     when {
-                        consume(']') -> return
+                        consume(']') -> return result
                         consume(',') -> {
                             skipWhitespace()
                         }
@@ -885,8 +900,7 @@ object EcgCsvParser {
                         JsonValue.ContainerValue
                     }
                     '[' -> {
-                        parseArray(depth)
-                        JsonValue.ContainerValue
+                        JsonValue.ArrayValue(parseArray(depth))
                     }
                     't' -> {
                         expectLiteral("true")

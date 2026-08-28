@@ -2,6 +2,7 @@ package app.galaxyvitals.ui
 
 import app.galaxyvitals.data.protocol.EcgFounderLabels
 import app.galaxyvitals.data.protocol.NaoLabel
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSession
 import java.text.SimpleDateFormat
@@ -25,10 +26,21 @@ fun EcgSession.durationLabel(): String {
     return if (m > 0) "${m}m ${s}s" else "${s}s"
 }
 
-fun EcgSession.hrLabel(): String = (ecgHrMedian ?: hrMedian)?.let { "${it.roundToInt()}" } ?: "—"
+private fun EcgSession.primaryHrMedian(): Double? =
+    if (liveBpmAlgorithmId == LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID) {
+        liveBpmMedian ?: ecgHrMedian ?: hrMedian
+    } else {
+        ecgHrMedian ?: hrMedian
+    }
 
-fun EcgSession.hrSourceLabel(): String =
-    if (ecgHrMedian != null) "ECG-derived median bpm" else "legacy median bpm"
+fun EcgSession.hrLabel(): String = primaryHrMedian()?.let { "${it.roundToInt()}" } ?: "—"
+
+fun EcgSession.hrSourceLabel(): String = when {
+    liveBpmAlgorithmId == LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID &&
+        liveBpmMedian != null -> "Samsung processed heart-rate median bpm"
+    ecgHrMedian != null -> "ECG-derived median bpm"
+    else -> "legacy median bpm"
+}
 
 fun EcgSession.naoTitle(): String {
     if (analysisStatus == AnalysisStatus.LOW_QUALITY) return "Low quality"

@@ -102,6 +102,37 @@ data class EcgBatch(
             "ppgGreen=$ppgGreen)"
 }
 
+data class HeartRateSample(
+    val sensorTimestampMs: Long,
+    val bpm: Int,
+    val status: Int,
+    val ibiMs: List<Int>,
+    val ibiStatus: List<Int>,
+) {
+    init {
+        require(sensorTimestampMs >= 0L)
+        require(ibiMs.size == ibiStatus.size)
+        require(ibiMs.size <= 4)
+        require(ibiMs.all { it >= 0 })
+    }
+
+    val isHeartRateValid: Boolean get() = status == 1 && bpm > 0
+
+    val validIbiMs: List<Int>
+        get() = ibiMs.indices
+            .filter { index -> ibiStatus[index] == 0 && ibiMs[index] != 0 }
+            .map(ibiMs::get)
+}
+
+data class HeartRateBatch(val samples: List<HeartRateSample>) {
+    init {
+        require(samples.isNotEmpty())
+        for (index in 1 until samples.size) {
+            require(samples[index - 1].sensorTimestampMs <= samples[index].sensorTimestampMs)
+        }
+    }
+}
+
 enum class EcgSensorErrorCode {
     NOT_CONNECTED,
     START_FAILED,
@@ -150,6 +181,10 @@ fun interface EcgSubscription : AutoCloseable {
 
 interface EcgSensor {
     fun connect(onResult: (SensorAvailability) -> Unit)
+    fun startHeartRate(
+        onError: (EcgSensorError) -> Unit = {},
+        onBatch: (HeartRateBatch) -> Unit,
+    ): EcgSubscription = EcgSubscription { }
     fun startEcg(
         maxDurationMs: Long,
         onError: (EcgSensorError) -> Unit = {},

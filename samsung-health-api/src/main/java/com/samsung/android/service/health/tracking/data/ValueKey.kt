@@ -30,6 +30,12 @@ class ValueKey<T> private constructor() {
 
             @JvmField
             val HEART_RATE_STATUS = ValueKey<Int>()
+
+            @JvmField
+            val IBI_LIST = ValueKey<List<Int>?>()
+
+            @JvmField
+            val IBI_STATUS_LIST = ValueKey<List<Int>?>()
         }
     }
 }

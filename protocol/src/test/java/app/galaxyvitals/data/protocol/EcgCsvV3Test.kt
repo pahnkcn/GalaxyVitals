@@ -10,6 +10,66 @@ import org.junit.Test
 
 class EcgCsvV3Test {
     @Test
+    fun samsungHeartRateRoundTripPreservesStatusTimestampAndIbiPairs() {
+        val samsung = LiveBpmObservation(
+            atSampleIndex = 0,
+            observedCaptureElapsedMs = 0,
+            status = LiveBpmSummarizer.RELIABLE,
+            displayedBpm = 72.0,
+            rawBpm = 72.0,
+            source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+            sensorTimestampMs = 1_700_000_001_000L,
+            sensorStatus = 1,
+            ibiMs = listOf(832, 835),
+            ibiStatus = listOf(0, 0),
+        )
+
+        val encoded = encodeV3(bpm = listOf(samsung))
+        val text = encoded.toString(Charsets.UTF_8)
+        assertThat(text).contains("\"sensor_timestamp_ms\":1700000001000")
+        assertThat(text).contains("\"sensor_status\":1")
+        assertThat(text).contains("\"ibi_ms\":[832,835]")
+        assertThat(text).contains("\"ibi_status\":[0,0]")
+
+        val parsed = EcgCsvParser.parseBytes(encoded, gzip = false, sessionIdHint = "samsung-hr")
+        assertThat(parsed.bpmObservations).containsExactly(samsung)
+        assertThat(parsed.liveBpmMedian).isEqualTo(72.0)
+    }
+
+    @Test
+    fun samsungHeartRateObservationValidationRejectsInvalidProvenance() {
+        val valid = LiveBpmObservation(
+            atSampleIndex = 0,
+            observedCaptureElapsedMs = 0,
+            status = LiveBpmSummarizer.RELIABLE,
+            displayedBpm = 72.0,
+            rawBpm = 72.0,
+            source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+            sensorTimestampMs = 1_000L,
+            sensorStatus = 1,
+            ibiMs = listOf(833),
+            ibiStatus = listOf(0),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            encodeV3(bpm = listOf(valid.copy(ibiStatus = emptyList())))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            encodeV3(
+                bpm = listOf(
+                    valid.copy(
+                        ibiMs = listOf(800, 801, 802, 803, 804),
+                        ibiStatus = listOf(0, 0, 0, 0, 0),
+                    ),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            encodeV3(bpm = listOf(valid.copy(sensorStatus = -10)))
+        }
+    }
+
+    @Test
     fun v3RoundTripPreservesRawTimestampsBatchGeometryAndBpmObservations() {
         val encoded = encodeV3(
             values = floatArrayOf(-0.12f, -0.11f, 0.4f),

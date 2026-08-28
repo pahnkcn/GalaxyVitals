@@ -4,6 +4,7 @@ import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgCsvWriter
 import app.galaxyvitals.data.protocol.EcgWearContract
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import app.galaxyvitals.data.protocol.ParsedEcgFile
 import app.galaxyvitals.domain.CaptureSource
 import app.galaxyvitals.domain.EcgSample
@@ -48,6 +49,20 @@ class WatchSessionBpmTest {
         assertThat(WatchSessionBpm.displayBpm(parsed)).isEqualTo(64)
         assertThat(WatchSessionBpm.withDisplayBpm(parsed).hrMedian).isEqualTo(64.0)
         assertThat(WatchSessionBpm.historyLabel(parsed)).isEqualTo("64 bpm")
+    }
+
+    @Test
+    fun samsungPrimaryLiveMedianReplacesLegacyAndEcgDerivedBpm() {
+        val parsed = session(
+            hrMedian = 64.0,
+            samples = syntheticQrs(seconds = 30, bpm = 110).toSamples(),
+            liveBpmMedian = 73.6,
+            liveBpmAlgorithmId = LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID,
+        )
+
+        assertThat(WatchSessionBpm.displayBpm(parsed)).isEqualTo(74)
+        assertThat(WatchSessionBpm.withDisplayBpm(parsed).hrMedian).isEqualTo(74.0)
+        assertThat(WatchSessionBpm.historyLabel(parsed)).isEqualTo("74 bpm")
     }
 
     @Test
@@ -113,6 +128,7 @@ class WatchSessionBpmTest {
         hrMedian: Double?,
         samples: List<EcgSample>,
         liveBpmMedian: Double? = null,
+        liveBpmAlgorithmId: String? = null,
     ) = ParsedEcgFile(
         sessionId = "hist",
         srHz = EcgWearContract.DEFAULT_SR_HZ,
@@ -132,6 +148,7 @@ class WatchSessionBpmTest {
         schemaVersion = 2,
         captureSource = CaptureSource.HARDWARE,
         liveBpmMedian = liveBpmMedian,
+        liveBpmAlgorithmId = liveBpmAlgorithmId,
     )
 
     private fun FloatArray.toSamples(): List<EcgSample> = indices.map { index ->

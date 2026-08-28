@@ -313,6 +313,7 @@ class EcgSessionSnapshot internal constructor(
                 watchInfo = watchInfo,
                 captureSource = CaptureSource.HARDWARE,
                 bpmObservations = bpmObservations,
+                liveBpmAlgorithmId = LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID,
                 listenerDurationMs = listenerDurationMs,
                 gapCount = gapCount,
                 missingSampleCount = missingSampleCount,

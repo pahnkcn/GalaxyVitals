@@ -623,7 +623,28 @@ object EcgCsvWriter {
         out.append("\"estimate_age_ms\":").append(observation.estimateAgeMs).append(',')
         out.append("\"reason_code\":")
         appendNullableString(out, observation.reasonCode)
+        out.append(',')
+        out.append("\"sensor_timestamp_ms\":")
+        appendNullableNumber(out, observation.sensorTimestampMs)
+        out.append(',')
+        out.append("\"sensor_status\":")
+        appendNullableNumber(out, observation.sensorStatus)
+        out.append(',')
+        out.append("\"ibi_ms\":")
+        appendIntArray(out, observation.ibiMs)
+        out.append(',')
+        out.append("\"ibi_status\":")
+        appendIntArray(out, observation.ibiStatus)
         out.append("}\n")
+    }
+
+    private fun appendIntArray(out: StringBuilder, values: List<Int>) {
+        out.append('[')
+        values.forEachIndexed { index, value ->
+            if (index > 0) out.append(',')
+            out.append(value)
+        }
+        out.append(']')
     }
 
     private fun appendNullableNumber(out: StringBuilder, value: Number?) {

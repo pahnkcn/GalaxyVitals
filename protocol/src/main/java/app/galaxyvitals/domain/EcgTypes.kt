@@ -58,6 +58,10 @@ data class LiveBpmObservation(
     val rrCount: Int? = null,
     val estimateAgeMs: Long = 0L,
     val reasonCode: String? = null,
+    val sensorTimestampMs: Long? = null,
+    val sensorStatus: Int? = null,
+    val ibiMs: List<Int> = emptyList(),
+    val ibiStatus: List<Int> = emptyList(),
 )
 
 data class LiveBpmSummary(

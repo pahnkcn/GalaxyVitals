@@ -9,6 +9,7 @@ import app.galaxyvitals.wear.sensors.EcgBatch
 import kotlin.math.abs
 
 enum class BpmSource {
+    SAMSUNG_PROCESSED_HR,
     APP_ECG_RR,
     APP_ECG_RR_PPG_CORROBORATED,
 }
@@ -28,8 +29,8 @@ data class BpmEstimate(
     val bpm: Double,
     val source: BpmSource,
     val epoch: BpmEpoch,
-    val bSqi: Double,
-    val rrCount: Int,
+    val bSqi: Double? = null,
+    val rrCount: Int? = null,
     val updatedAtElapsedMs: Long,
 )
 

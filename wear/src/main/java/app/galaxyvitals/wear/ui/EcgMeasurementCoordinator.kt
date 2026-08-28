@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
 import app.galaxyvitals.wear.capture.LiveBpmObservation
@@ -11,6 +12,7 @@ import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSubscription
+import app.galaxyvitals.wear.sensors.HeartRateBatch
 import app.galaxyvitals.wear.sensors.OffBodyGate
 import app.galaxyvitals.wear.sensors.PpgGreenBatch
 import app.galaxyvitals.wear.sensors.SensorAvailability
@@ -74,6 +76,9 @@ class EcgMeasurementCoordinator(
     private var trackerReady = false
     private var terminal = false
     private var subscription: EcgSubscription? = null
+    private var heartRateSubscription: EcgSubscription? = null
+    private var heartRateGeneration = 0L
+    private var lastValidSamsungHeartRateAt = NO_VALID_HEART_RATE
     private var offBody: OffBodyGate? = null
     private var foregroundLease: AutoCloseable? = null
     private var connectTimeoutJob: Job? = null
@@ -130,9 +135,11 @@ class EcgMeasurementCoordinator(
         if (events.trySend(AcqEvent.Shutdown(done)).isSuccess) {
             if (!done.await(3, TimeUnit.SECONDS)) {
                 subscription?.close()
+                heartRateSubscription?.close()
             }
         } else {
             subscription?.close()
+            heartRateSubscription?.close()
         }
     }
 
@@ -163,6 +170,14 @@ class EcgMeasurementCoordinator(
             is AcqEvent.SensorError -> {
                 if (!isCurrent(event.attemptId) || event.generation != streamGeneration || terminal) return
                 handleSensorError(event.error)
+            }
+            is AcqEvent.HeartRateBatchReceived -> {
+                if (!isCurrent(event.attemptId) || event.generation != heartRateGeneration || terminal) return
+                handleHeartRateBatch(event.batch)
+            }
+            is AcqEvent.HeartRateError -> {
+                if (!isCurrent(event.attemptId) || event.generation != heartRateGeneration || terminal) return
+                handleHeartRateError(event.error)
             }
             is AcqEvent.OffBody -> {
                 if (!isCurrent(event.attemptId) || terminal) return
@@ -263,6 +278,7 @@ class EcgMeasurementCoordinator(
         lastAcquisitionLogAt = 0L
         lastLoggedLeadOff = null
         bpmComputeCount = 0
+        lastValidSamsungHeartRateAt = NO_VALID_HEART_RATE
         resetLive()
         transition(MeasurePhase.Connecting, "CONNECTING") {
             MeasureUiState(phase = MeasurePhase.Connecting, status = "Connecting sensor…")
@@ -315,6 +331,14 @@ class EcgMeasurementCoordinator(
             return
         }
         trackerReady = true
+        try {
+            startHeartRateListener(id)
+        } catch (error: RuntimeException) {
+            bpmLogger(
+                "Samsung heart-rate tracker unavailable; ECG-derived BPM fallback enabled: " +
+                    (error.message ?: "start failed"),
+            )
+        }
         try {
             offBody = offBodyFactory { blocked ->
                 events.trySend(AcqEvent.OffBody(id, blocked))
@@ -455,6 +479,7 @@ class EcgMeasurementCoordinator(
             bpmDirty = false
             bpmInFlight = false
             captureStartedAt = elapsedRealtime()
+            lastValidSamsungHeartRateAt = NO_VALID_HEART_RATE
             bpmSmoother.reset()
             transition(MeasurePhase.Recording, "RECORDING") {
                 MeasureUiState(
@@ -496,6 +521,23 @@ class EcgMeasurementCoordinator(
             return
         }
         subscription = createdSubscription
+    }
+
+    private fun startHeartRateListener(id: Long) {
+        closeHeartRateFirst()
+        heartRateGeneration += 1
+        val generation = heartRateGeneration
+        val createdSubscription = sensor.startHeartRate(
+            onError = { error -> events.trySend(AcqEvent.HeartRateError(id, generation, error)) },
+            onBatch = { batch ->
+                events.trySend(AcqEvent.HeartRateBatchReceived(id, generation, batch))
+            },
+        )
+        if (!isCurrent(id) || terminal || generation != heartRateGeneration) {
+            createdSubscription.close()
+            return
+        }
+        heartRateSubscription = createdSubscription
     }
 
     private fun startStreamMonitor(id: Long) {
@@ -584,6 +626,70 @@ class EcgMeasurementCoordinator(
         if (recorder.sampleCount == EcgSessionRecorder.EXPECTED_SAMPLES) {
             closeListenerFirst()
             finishValidateEncodeSave()
+        }
+    }
+
+    private fun handleHeartRateBatch(batch: HeartRateBatch) {
+        if (_state.value.phase != MeasurePhase.Recording) return
+        batch.samples.forEach { sample ->
+            val now = elapsedRealtime()
+            val captureElapsed = (now - captureStartedAt).coerceAtLeast(0L)
+            val sampleIndex = (recorder.sampleCount - 1L).coerceAtLeast(0L)
+            if (sample.isHeartRateValid) {
+                val estimate = BpmEstimate(
+                    bpm = sample.bpm.toDouble(),
+                    source = BpmSource.SAMSUNG_PROCESSED_HR,
+                    epoch = BpmEpoch.CAPTURE,
+                    bSqi = null,
+                    rrCount = sample.validIbiMs.size,
+                    updatedAtElapsedMs = now,
+                )
+                lastValidSamsungHeartRateAt = now
+                val state = bpmSmoother.seed(now, estimate)
+                _state.value = _state.value.copy(bpm = state)
+                recorder.addBpmObservation(
+                    LiveBpmObservation(
+                        atSampleIndex = sampleIndex,
+                        observedCaptureElapsedMs = captureElapsed,
+                        status = LiveBpmAvailability.RELIABLE.name,
+                        displayedBpm = sample.bpm.toDouble(),
+                        rawBpm = sample.bpm.toDouble(),
+                        source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+                        bSqi = null,
+                        rrCount = sample.validIbiMs.size,
+                        estimateAgeMs = 0L,
+                        sensorTimestampMs = sample.sensorTimestampMs,
+                        sensorStatus = sample.status,
+                        ibiMs = sample.ibiMs,
+                        ibiStatus = sample.ibiStatus,
+                    ),
+                )
+                bpmLogger(
+                    "publish epoch=CAPTURE source=${BpmSource.SAMSUNG_PROCESSED_HR} " +
+                        "status=${sample.status} ibi=${sample.validIbiMs.size} bpm=${sample.bpm}",
+                )
+            } else {
+                val state = bpmSmoother.publish(now, null)
+                _state.value = _state.value.copy(bpm = state)
+                recorder.addBpmObservation(
+                    LiveBpmObservation(
+                        atSampleIndex = sampleIndex,
+                        observedCaptureElapsedMs = captureElapsed,
+                        status = LiveBpmAvailability.UNRELIABLE.name,
+                        rawBpm = sample.bpm.toDouble(),
+                        source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+                        bSqi = null,
+                        rrCount = sample.validIbiMs.size,
+                        estimateAgeMs = state.estimateAgeMs,
+                        reasonCode = "SAMSUNG_HR_STATUS_${sample.status}",
+                        sensorTimestampMs = sample.sensorTimestampMs,
+                        sensorStatus = sample.status,
+                        ibiMs = sample.ibiMs,
+                        ibiStatus = sample.ibiStatus,
+                    ),
+                )
+                maybeAdmitBpm(now)
+            }
         }
     }
 
@@ -750,12 +856,26 @@ class EcgMeasurementCoordinator(
         }
     }
 
+    private fun handleHeartRateError(error: EcgSensorError) {
+        bpmLogger("Samsung heart-rate tracker failed; ECG-derived BPM fallback enabled: ${error.message}")
+        closeHeartRateFirst()
+        lastValidSamsungHeartRateAt = NO_VALID_HEART_RATE
+        bpmSmoother.reset()
+        if (_state.value.phase == MeasurePhase.Recording) {
+            _state.value = _state.value.copy(
+                bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+            )
+            bpmDirty = true
+            maybeAdmitBpm(elapsedRealtime())
+        }
+    }
+
     private fun showPermissionRequired(message: String) {
         cleanupAttempt(releaseLease = true)
         transition(MeasurePhase.PermissionRequired, "PERMISSION_REQUIRED") {
             MeasureUiState(
                 phase = MeasurePhase.PermissionRequired,
-                status = "Body sensors needed",
+                status = "Sensor permissions needed",
                 error = message,
             )
         }
@@ -815,8 +935,16 @@ class EcgMeasurementCoordinator(
         active?.close()
     }
 
+    private fun closeHeartRateFirst() {
+        val active = heartRateSubscription
+        heartRateSubscription = null
+        heartRateGeneration += 1
+        active?.close()
+    }
+
     private fun cleanupAcquisition() {
         closeListenerFirst()
+        closeHeartRateFirst()
         streamGeneration += 1
         if (!sensorStopped) {
             runCatching(sensor::stop)
@@ -856,6 +984,14 @@ class EcgMeasurementCoordinator(
 
     private fun maybeAdmitBpm(now: Long) {
         if (terminal || _state.value.phase != MeasurePhase.Recording) return
+        if (hasFreshSamsungHeartRate(now)) return
+        if (lastValidSamsungHeartRateAt != NO_VALID_HEART_RATE) {
+            lastValidSamsungHeartRateAt = NO_VALID_HEART_RATE
+            bpmSmoother.reset()
+            _state.value = _state.value.copy(
+                bpm = LiveBpmState(LiveBpmAvailability.COLLECTING),
+            )
+        }
         if (!bpmDirty || bpmInFlight) return
         if (lastBpmScheduleAt != 0L && now - lastBpmScheduleAt < BPM_UI_INTERVAL_MS) return
         lastBpmScheduleAt = now
@@ -888,6 +1024,7 @@ class EcgMeasurementCoordinator(
 
     private fun onBpmEstimate(snapshot: BpmSnapshot, assessment: BpmAssessment) {
         if (_state.value.phase != MeasurePhase.Recording) return
+        if (hasFreshSamsungHeartRate(elapsedRealtime())) return
         val estimated = assessment.estimate
         if (estimated != null) {
             bpmLogger(
@@ -917,6 +1054,10 @@ class EcgMeasurementCoordinator(
             ),
         )
     }
+
+    private fun hasFreshSamsungHeartRate(now: Long): Boolean =
+        lastValidSamsungHeartRateAt != NO_VALID_HEART_RATE &&
+            now - lastValidSamsungHeartRateAt <= LiveBpmSummarizer.STALE_AGE_MS
 
     private fun publishWaveformIfDue(now: Long) {
         if (lastUiWaveformAt != 0L && now - lastUiWaveformAt < UI_WAVEFORM_INTERVAL_MS) return
@@ -983,6 +1124,16 @@ class EcgMeasurementCoordinator(
         data class Batch(val attemptId: Long, val generation: Long, val batch: EcgBatch) : AcqEvent
         data class Deadline(val attemptId: Long, val generation: Long) : AcqEvent
         data class SensorError(val attemptId: Long, val generation: Long, val error: EcgSensorError) : AcqEvent
+        data class HeartRateBatchReceived(
+            val attemptId: Long,
+            val generation: Long,
+            val batch: HeartRateBatch,
+        ) : AcqEvent
+        data class HeartRateError(
+            val attemptId: Long,
+            val generation: Long,
+            val error: EcgSensorError,
+        ) : AcqEvent
         data class OffBody(val attemptId: Long, val blocked: Boolean) : AcqEvent
         data class StreamStall(val attemptId: Long, val generation: Long) : AcqEvent
         data class BpmResult(
@@ -1020,6 +1171,7 @@ class EcgMeasurementCoordinator(
         private const val BPM_UI_INTERVAL_MS = 1_000L
         private const val CONTACT_STATUS = "Touch the sensor to begin"
         private const val COUNTDOWN_STATUS = "Starting in"
+        private const val NO_VALID_HEART_RATE = Long.MIN_VALUE
     }
 }
 

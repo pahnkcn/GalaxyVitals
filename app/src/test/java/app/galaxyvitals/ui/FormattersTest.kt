@@ -4,6 +4,7 @@ import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
 import app.galaxyvitals.domain.Wrist
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
 
@@ -98,6 +99,19 @@ class FormattersTest {
         assertThat(session.hrSourceLabel()).isEqualTo("ECG-derived median bpm")
     }
 
+    @Test
+    fun samsungPrimaryAlgorithmUsesProcessedLiveMedianBeforeEcgMedian() {
+        val session = session(
+            hrMedian = 50.0,
+            ecgHrMedian = 72.4,
+            liveBpmMedian = 119.6,
+            liveBpmAlgorithmId = LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID,
+        )
+
+        assertThat(session.hrLabel()).isEqualTo("120")
+        assertThat(session.hrSourceLabel()).isEqualTo("Samsung processed heart-rate median bpm")
+    }
+
     private fun session(
         status: AnalysisStatus = AnalysisStatus.NONE,
         label: String? = null,
@@ -107,6 +121,7 @@ class FormattersTest {
         hrMedian: Double? = 70.0,
         ecgHrMedian: Double? = null,
         liveBpmMedian: Double? = null,
+        liveBpmAlgorithmId: String? = null,
     ) = EcgSession(
         sessionId = "test",
         filePath = "test.csv.gz",
@@ -132,5 +147,6 @@ class FormattersTest {
         findings = findings,
         ecgHrMedian = ecgHrMedian,
         liveBpmMedian = liveBpmMedian,
+        liveBpmAlgorithmId = liveBpmAlgorithmId,
     )
 }

@@ -11,7 +11,12 @@ include vendor UI, assets, or classification models.
 The GalaxyVitals watch app records:
 
 - `HealthTrackerType.ECG_ON_DEMAND` → `ValueKey.EcgSet.ECG_MV` (millivolts)
-- No concurrent continuous tracker; BPM is derived later from ECG R-peaks
+- `HealthTrackerType.HEART_RATE_CONTINUOUS` concurrently supplies Samsung-processed
+  BPM plus IBI values. HR is usable only when `HEART_RATE_STATUS == 1`; an IBI is
+  usable only when its paired `IBI_STATUS_LIST` value is `0` and the IBI is nonzero.
+- Samsung processed HR is the primary displayed/stored BPM. The app-derived
+  ECG/embedded-PPG estimator is a labelled fallback only when no valid Samsung HR
+  has arrived for more than 3 seconds; BPM availability never gates ECG capture.
 - Lead-off, sequence, and saturation thresholds from the first point in each batch;
   every `LEAD_OFF != 0` is invalid contact
 - Exactly 30 s of sensor time (15,000 samples at nominal 500 Hz),
@@ -26,6 +31,12 @@ Samples are written as gzip CSV under `filesDir/ecg/ecg_{sessionId}.csv.gz`.
 Samsung ECG is a privileged tracker. Hardware capture requires both the official
 client AAR and a partner-whitelisted package.
 
+Wear target API 36 requests Samsung
+`com.samsung.android.hardware.sensormanager.permission.READ_ADDITIONAL_HEALTH_DATA`
+for raw ECG and `android.permission.health.READ_HEART_RATE` for processed HR.
+Devices through API 35 use `BODY_SENSORS` instead. Measurement is foreground-only;
+the continuous HR listener is closed on success, cancel, error, host stop, or shutdown.
+
 GalaxyVitals v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
 message creates the exact acknowledgement marker
 `ecg_{sessionId}.csv.gz.synced`; it does not immediately delete the recording.
@@ -33,8 +44,8 @@ message creates the exact acknowledgement marker
 history, the watch may remove acknowledged recordings older than the newest
 eight entries, but it never prunes an unacknowledged recording.
 
-The phone then derives session BPM from clean ECG ranges and may run the
-on-device NAO3 student. Rhythm output is fail-closed: without a calibrated
+The phone retains ECG-derived BPM and morphology analysis as an independent
+fallback/research path and may run the on-device NAO3 student. Rhythm output is fail-closed: without a calibrated
 decision-policy artifact the UI must not show N / A / O (`INDETERMINATE`).
 That step is analysis, not part of the on-the-wire contract. Algorithm
 acceptance on PhysioNet locked gates is unmet; production remains NO-GO
@@ -79,7 +90,7 @@ rel_ms,sample_index,ecg_raw_mv,flags,hr_bpm,sensor_timestamp_ms_raw,batch_sequen
 | `acquisition_flags` | number | Bitmask of acquisition errors. |
 | `min_threshold_mv` / `max_threshold_mv` | number/null | Samsung saturation limits. |
 | `sensor_sdk` / `sensor_aar_sha256` | string/null | SDK version and AAR SHA-256 provenance. |
-| `live_bpm_*` | mixed | Summary of `#bpm` lines (RELIABLE-only median/min/max/coverage). |
+| `live_bpm_*` | mixed | Summary of `#bpm` lines (RELIABLE-only median/min/max/coverage). New hardware capture uses `live_bpm_algorithm_id=app.galaxyvitals.samsung_hr_primary_with_ecg_fallback.v1`. |
 | `watch_info` | string | JSON blob (device, firmware, sensor SDK, app version). |
 | `wrist` | string | `LEFT` or `RIGHT`. |
 | `signFactor` | number | Derived polarity transform (`±1`), not applied to raw rows. |
@@ -104,9 +115,21 @@ downgraded to v2.
 
 `#bpm` lines follow the rows. At most 64 observations; `id` values are
 consecutive from 0; `observed_capture_elapsed_ms` never goes backwards.
-`RELIABLE` requires displayed BPM, source, bSQI, and RR count. Live BPM
-summary uses only `RELIABLE` observations, duration-weighted, and cuts a
-value when its estimate age exceeds 3 s.
+Every observation may include these Samsung provenance fields:
+
+| Field | Meaning |
+|---|---|
+| `sensor_timestamp_ms` | Unmodified timestamp of the Samsung HR `DataPoint`. |
+| `sensor_status` | Raw `HEART_RATE_STATUS`; only `1` can be `RELIABLE`. |
+| `ibi_ms` | Raw `IBI_LIST`, in delivery order (at most four values). |
+| `ibi_status` | Raw status paired one-to-one with `ibi_ms`; `0` plus a nonzero IBI is usable. |
+
+For source `SAMSUNG_HEART_RATE_CONTINUOUS`, `RELIABLE` requires a positive
+displayed BPM, source, sensor timestamp, and `sensor_status == 1`; app bSQI is
+intentionally absent. App-derived fallback sources still require bSQI and RR
+count. Live BPM summary uses only `RELIABLE` observations, duration-weighted,
+and cuts a value when its estimate age exceeds 3 s. The legacy per-sample
+`hr_bpm` column remains empty for hardware capture.
 
 ### Schema v2 `#meta` JSON
 

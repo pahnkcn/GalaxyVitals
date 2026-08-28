@@ -129,7 +129,7 @@ class LiveBpmEstimatorTest {
         val estimate = assessment.estimate
         assertThat(estimate).isNotNull()
         assertThat(estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR)
-        assertThat(estimate.bSqi).isAtLeast(0.90)
+        assertThat(estimate.bSqi!!).isAtLeast(0.90)
         assertThat(abs(estimate.bpm - 72.0)).isAtMost(4.0)
     }
 

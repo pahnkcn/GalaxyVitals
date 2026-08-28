@@ -1,6 +1,5 @@
 package app.galaxyvitals.wear.ui
 
-import android.Manifest
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +21,7 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.navigation3.SwipeDismissableSceneStrategy
+import app.galaxyvitals.wear.sensors.SensorPermissions
 
 sealed interface WearRoute {
     data object Home : WearRoute
@@ -44,10 +44,10 @@ fun WearRoot() {
     val current = backStack.last()
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
-    val bodySensorsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) measureVm.startSamsung()
+    val sensorPermissionsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        if (SensorPermissions.hasAll(context)) measureVm.startSamsung()
     }
     DisposableEffect(lifecycleOwner, current) {
         val observer = LifecycleEventObserver { _, event ->
@@ -101,7 +101,9 @@ fun WearRoot() {
                                 homeVm.refresh()
                             },
                             onRequestPermission = {
-                                bodySensorsLauncher.launch(Manifest.permission.BODY_SENSORS)
+                                sensorPermissionsLauncher.launch(
+                                    SensorPermissions.requiredForDevice().toTypedArray(),
+                                )
                             },
                             onResolve = {
                                 (context as? Activity)?.let(measureVm::resolveSamsung)

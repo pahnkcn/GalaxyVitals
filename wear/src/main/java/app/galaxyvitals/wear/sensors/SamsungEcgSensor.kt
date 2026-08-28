@@ -1,14 +1,11 @@
 package app.galaxyvitals.wear.sensors
 
-import android.Manifest
 import android.app.Activity
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
@@ -19,11 +16,8 @@ import java.util.concurrent.Executors
 
 class SamsungEcgSensor(
     context: Context,
-    private val hasBodySensorsPermission: () -> Boolean = {
-        ContextCompat.checkSelfPermission(
-            context.applicationContext,
-            Manifest.permission.BODY_SENSORS,
-        ) == PackageManager.PERMISSION_GRANTED
+    private val hasRequiredSensorPermissions: () -> Boolean = {
+        SensorPermissions.hasAll(context.applicationContext)
     },
 ) : EcgSensor {
     private val app = context.applicationContext
@@ -47,6 +41,10 @@ class SamsungEcgSensor(
     private var subscriptionEpoch = 0L
     private var activeSubscriptionEpoch = 0L
     private var onDemandClose: EcgSubscription? = null
+    private var heartRateTracker: HealthTracker? = null
+    private var heartRateSubscriptionEpoch = 0L
+    private var activeHeartRateSubscriptionEpoch = 0L
+    private var heartRateClose: EcgSubscription? = null
     private val ppgLogLock = Any()
     private var ppgLogWindowStartMs = 0L
     private var ppgLogBatches = 0
@@ -60,10 +58,14 @@ class SamsungEcgSensor(
 
     override fun connect(onResult: (SensorAvailability) -> Unit) {
         val hasExistingConnection = synchronized(connectionLock) {
-            service != null || ecgTracker != null || activeSubscriptionEpoch != 0L
+            service != null ||
+                ecgTracker != null ||
+                heartRateTracker != null ||
+                activeSubscriptionEpoch != 0L ||
+                activeHeartRateSubscriptionEpoch != 0L
         }
         if (hasExistingConnection) disconnect()
-        SamsungEcgMapping.connectBlockedByBodySensors(hasBodySensorsPermission())?.let { denied ->
+        SamsungEcgMapping.connectBlockedByPermissions(hasRequiredSensorPermissions())?.let { denied ->
             main.post { onResult(denied) }
             return
         }
@@ -102,9 +104,24 @@ class SamsungEcgSensor(
                     )
                     return
                 }
+                if (!supported.contains(HealthTrackerType.HEART_RATE_CONTINUOUS)) {
+                    deliverResult(
+                        candidate,
+                        token,
+                        onResult,
+                        SensorAvailability(
+                            ready = false,
+                            reason = "HEART_RATE_CONTINUOUS is not available for ${app.packageName}.",
+                            issue = SamsungEcgMapping.missingHeartRateTracker(app.packageName),
+                        ),
+                    )
+                    return
+                }
                 val candidateEcg: HealthTracker
+                val candidateHeartRate: HealthTracker
                 try {
                     candidateEcg = candidate.getHealthTracker(HealthTrackerType.ECG_ON_DEMAND)
+                    candidateHeartRate = candidate.getHealthTracker(HealthTrackerType.HEART_RATE_CONTINUOUS)
                 } catch (error: RuntimeException) {
                     deliverResult(
                         candidate,
@@ -117,6 +134,7 @@ class SamsungEcgSensor(
                 val installed = synchronized(connectionLock) {
                     if (connectionToken == token && service === candidate) {
                         ecgTracker = candidateEcg
+                        heartRateTracker = candidateHeartRate
                         true
                     } else {
                         false
@@ -175,6 +193,65 @@ class SamsungEcgSensor(
     }
 
     override fun resolvePending(activity: Activity): Boolean = resolution.resolvePending(activity)
+
+    override fun startHeartRate(
+        onError: (EcgSensorError) -> Unit,
+        onBatch: (HeartRateBatch) -> Unit,
+    ): EcgSubscription {
+        val tracker = synchronized(connectionLock) { heartRateTracker }
+        if (tracker == null) {
+            onError(
+                EcgSensorError(
+                    EcgSensorErrorCode.NOT_CONNECTED,
+                    "Samsung continuous heart rate is not connected.",
+                ),
+            )
+            return EcgSubscription { }
+        }
+        val epoch = synchronized(connectionLock) {
+            check(activeHeartRateSubscriptionEpoch == 0L) {
+                "Samsung heart-rate listener is already active."
+            }
+            ++heartRateSubscriptionEpoch
+            activeHeartRateSubscriptionEpoch = heartRateSubscriptionEpoch
+            heartRateSubscriptionEpoch
+        }
+        val session = SamsungHeartRateSession(
+            tracker = tracker,
+            isCurrent = { isCurrentHeartRateSubscription(epoch) },
+            postMain = { block -> main.post { block() } },
+            execute = { block -> acquisition.execute(block) },
+        )
+        val subscription = try {
+            session.start(onError = onError, onBatch = onBatch)
+        } catch (error: Exception) {
+            synchronized(connectionLock) {
+                if (activeHeartRateSubscriptionEpoch == epoch) {
+                    activeHeartRateSubscriptionEpoch = 0L
+                }
+            }
+            onError(
+                EcgSensorError(
+                    EcgSensorErrorCode.START_FAILED,
+                    error.message ?: "Samsung heart-rate listener could not start.",
+                ),
+            )
+            return EcgSubscription { }
+        }
+        val accepted = synchronized(connectionLock) {
+            if (activeHeartRateSubscriptionEpoch == epoch) {
+                heartRateClose = subscription
+                true
+            } else {
+                false
+            }
+        }
+        if (!accepted) {
+            subscription.close()
+            return EcgSubscription { }
+        }
+        return EcgSubscription { closeHeartRate(epoch, subscription) }
+    }
 
     override fun startEcg(
         maxDurationMs: Long,
@@ -259,14 +336,22 @@ class SamsungEcgSensor(
                 service = service,
                 listeners = ListenerHandles(
                     ecg = ecgTracker.takeIf { activeSubscriptionEpoch != 0L },
-                    session = onDemandClose,
+                    ecgSession = onDemandClose,
+                    heartRate = heartRateTracker.takeIf {
+                        activeHeartRateSubscriptionEpoch != 0L
+                    },
+                    heartRateSession = heartRateClose,
                 ),
             ).also {
                 service = null
                 ecgTracker = null
+                heartRateTracker = null
                 onDemandClose = null
+                heartRateClose = null
                 activeSubscriptionEpoch = 0L
+                activeHeartRateSubscriptionEpoch = 0L
                 subscriptionEpoch += 1
+                heartRateSubscriptionEpoch += 1
             }
         }
         stopListeners(connection.listeners)
@@ -286,6 +371,10 @@ class SamsungEcgSensor(
         activeSubscriptionEpoch == epoch
     }
 
+    private fun isCurrentHeartRateSubscription(epoch: Long): Boolean = synchronized(connectionLock) {
+        activeHeartRateSubscriptionEpoch == epoch
+    }
+
     private fun closeOnDemand(epoch: Long, subscription: EcgSubscription) {
         val current = synchronized(connectionLock) {
             if (onDemandClose === subscription) onDemandClose = null
@@ -297,14 +386,30 @@ class SamsungEcgSensor(
         current.close()
     }
 
+    private fun closeHeartRate(epoch: Long, subscription: EcgSubscription) {
+        val current = synchronized(connectionLock) {
+            if (heartRateClose === subscription) heartRateClose = null
+            if (activeHeartRateSubscriptionEpoch != epoch) return
+            activeHeartRateSubscriptionEpoch = 0L
+            heartRateSubscriptionEpoch += 1
+            subscription
+        }
+        current.close()
+    }
+
     private fun takeActiveListener(): ListenerHandles = synchronized(connectionLock) {
         ListenerHandles(
             ecg = ecgTracker.takeIf { activeSubscriptionEpoch != 0L },
-            session = onDemandClose,
+            ecgSession = onDemandClose,
+            heartRate = heartRateTracker.takeIf { activeHeartRateSubscriptionEpoch != 0L },
+            heartRateSession = heartRateClose,
         ).also {
             onDemandClose = null
+            heartRateClose = null
             activeSubscriptionEpoch = 0L
+            activeHeartRateSubscriptionEpoch = 0L
             subscriptionEpoch += 1
+            heartRateSubscriptionEpoch += 1
         }
     }
 
@@ -332,11 +437,23 @@ class SamsungEcgSensor(
     }
 
     private fun stopListeners(listeners: ListenerHandles) {
-        listeners.session?.close()
-        try {
-            listeners.ecg?.unsetEventListener()
-        } catch (_: Exception) {
-            // Listener may already be unset.
+        if (listeners.ecgSession != null) {
+            listeners.ecgSession.close()
+        } else {
+            try {
+                listeners.ecg?.unsetEventListener()
+            } catch (_: Exception) {
+                // Listener may already be unset.
+            }
+        }
+        if (listeners.heartRateSession != null) {
+            listeners.heartRateSession.close()
+        } else {
+            try {
+                listeners.heartRate?.unsetEventListener()
+            } catch (_: Exception) {
+                // Listener may already be unset.
+            }
         }
     }
 
@@ -411,7 +528,9 @@ class SamsungEcgSensor(
 
     private data class ListenerHandles(
         val ecg: HealthTracker?,
-        val session: EcgSubscription? = null,
+        val ecgSession: EcgSubscription? = null,
+        val heartRate: HealthTracker?,
+        val heartRateSession: EcgSubscription? = null,
     )
 
     private data class ConnectionHandles(
