@@ -209,6 +209,9 @@ class SamsungEcgSensor(
             return EcgSubscription { }
         }
         val epoch = synchronized(connectionLock) {
+            check(activeSubscriptionEpoch == 0L) {
+                "Samsung ECG must stop before heart-rate preflight starts."
+            }
             check(activeHeartRateSubscriptionEpoch == 0L) {
                 "Samsung heart-rate listener is already active."
             }
@@ -266,6 +269,9 @@ class SamsungEcgSensor(
             return EcgSubscription { }
         }
         val epoch = synchronized(connectionLock) {
+            check(activeHeartRateSubscriptionEpoch == 0L) {
+                "Samsung heart-rate preflight must stop before ECG starts."
+            }
             check(activeSubscriptionEpoch == 0L) { "Samsung ECG listener is already active." }
             ++subscriptionEpoch
             activeSubscriptionEpoch = subscriptionEpoch

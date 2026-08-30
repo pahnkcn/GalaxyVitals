@@ -74,6 +74,7 @@ class LiveEcgProcessor(
     private val ppgPoints = ArrayList<LivePpgPoint>(ANALYSIS_WINDOW_SAMPLES / 5)
     private val displayFilter = CausalSosFilter(DISPLAY_SOS_500)
     private var scale = WaveformScale.Default
+    private var preserveFilterForNextSegment = false
     var nextEcgSampleIndex: Long = 0L
         private set
     private var lastSequence = -1
@@ -103,6 +104,7 @@ class LiveEcgProcessor(
         lastSequence = -1
         analysisCopyCount = 0
         displayFilter.reset()
+        preserveFilterForNextSegment = false
         scale = WaveformScale.Default
     }
 
@@ -110,8 +112,19 @@ class LiveEcgProcessor(
         reset(signFactor)
     }
 
-    fun beginCaptureWindow(signFactor: Int) {
-        reset(signFactor)
+    fun beginCaptureWindow(signFactor: Int, preserveDisplaySettling: Boolean = false) {
+        if (!preserveDisplaySettling || signFactor != this.signFactor) {
+            reset(signFactor)
+            return
+        }
+        this.signFactor = signFactor
+        display.clear()
+        analysis.clear()
+        ppgPoints.clear()
+        nextEcgSampleIndex = 0L
+        lastSequence = -1
+        analysisCopyCount = 0
+        preserveFilterForNextSegment = true
     }
 
     fun append(batch: EcgBatch) {
@@ -132,7 +145,9 @@ class LiveEcgProcessor(
             var startsNew = display.isEmpty()
             if (index == 0 && sequenceBreak) startsNew = true
             if (flags and gapFlags != 0) startsNew = true
-            if (startsNew) displayFilter.reset()
+            val canWarmStart = index == 0 && preserveFilterForNextSegment && flags and gapFlags == 0
+            if (startsNew && !canWarmStart) displayFilter.reset()
+            if (index == 0) preserveFilterForNextSegment = false
             analysis += batch.samplesMv[index]
             display += WaveformPoint(
                 sampleIndex = batchStartIndex + index,

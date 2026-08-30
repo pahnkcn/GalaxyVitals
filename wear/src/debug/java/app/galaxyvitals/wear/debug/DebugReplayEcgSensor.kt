@@ -9,6 +9,8 @@ import app.galaxyvitals.wear.sensors.EcgSensor
 import app.galaxyvitals.wear.sensors.EcgSensorError
 import app.galaxyvitals.wear.sensors.EcgSensorErrorCode
 import app.galaxyvitals.wear.sensors.EcgSubscription
+import app.galaxyvitals.wear.sensors.HeartRateBatch
+import app.galaxyvitals.wear.sensors.HeartRateSample
 import app.galaxyvitals.wear.sensors.SensorAvailability
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -22,6 +24,8 @@ class DebugReplayEcgSensor(
     private var connected = false
     private var epoch = 0L
     private var activeEpoch = 0L
+    private var heartRateEpoch = 0L
+    private var activeHeartRateEpoch = 0L
     private var scheduled: ScheduledFuture<*>? = null
     private val replay = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "debug-ecg-replay").apply { isDaemon = true }
@@ -30,6 +34,7 @@ class DebugReplayEcgSensor(
     override fun connect(onResult: (SensorAvailability) -> Unit) {
         synchronized(lock) {
             stopStreamingLocked()
+            stopHeartRateLocked()
             connected = true
         }
         Log.i(TAG, "replay connect fixture=$fixtureName")
@@ -39,6 +44,40 @@ class DebugReplayEcgSensor(
     }
 
     override fun resolvePending(activity: Activity): Boolean = false
+
+    override fun startHeartRate(
+        onError: (EcgSensorError) -> Unit,
+        onBatch: (HeartRateBatch) -> Unit,
+    ): EcgSubscription {
+        val startEpoch = synchronized(lock) {
+            check(activeEpoch == 0L) { "Debug ECG must stop before heart-rate preflight starts." }
+            if (!connected) {
+                main.post {
+                    onError(
+                        EcgSensorError(
+                            EcgSensorErrorCode.NOT_CONNECTED,
+                            "Debug replay sensor is not connected.",
+                        ),
+                    )
+                }
+                return EcgSubscription { }
+            }
+            check(activeHeartRateEpoch == 0L) { "Debug heart-rate listener is already active." }
+            heartRateEpoch += 1
+            activeHeartRateEpoch = heartRateEpoch
+            heartRateEpoch
+        }
+        val bpm = DebugReplayFixtures.Fixture.fromId(fixtureName)?.bpm?.toInt() ?: 72
+        val samples = listOf(
+            HeartRateSample(1_000L, bpm, 1, listOf(60_000 / bpm), listOf(0)),
+            HeartRateSample(2_000L, bpm, 1, listOf(60_000 / bpm), listOf(0)),
+            HeartRateSample(3_000L, bpm, 1, listOf(60_000 / bpm), listOf(0)),
+        )
+        main.post {
+            if (isCurrentHeartRate(startEpoch)) onBatch(HeartRateBatch(samples))
+        }
+        return EcgSubscription { closeHeartRateEpoch(startEpoch) }
+    }
 
     override fun startEcg(
         maxDurationMs: Long,
@@ -52,6 +91,9 @@ class DebugReplayEcgSensor(
             )
         }
         val startEpoch = synchronized(lock) {
+            check(activeHeartRateEpoch == 0L) {
+                "Debug heart-rate preflight must stop before ECG starts."
+            }
             if (!connected) {
                 main.post {
                     onError(
@@ -78,12 +120,16 @@ class DebugReplayEcgSensor(
     }
 
     override fun stop() {
-        synchronized(lock) { stopStreamingLocked() }
+        synchronized(lock) {
+            stopStreamingLocked()
+            stopHeartRateLocked()
+        }
     }
 
     override fun disconnect() {
         synchronized(lock) {
             stopStreamingLocked()
+            stopHeartRateLocked()
             connected = false
         }
     }
@@ -123,6 +169,12 @@ class DebugReplayEcgSensor(
         }
     }
 
+    private fun closeHeartRateEpoch(epoch: Long) {
+        synchronized(lock) {
+            if (activeHeartRateEpoch == epoch) stopHeartRateLocked()
+        }
+    }
+
     private fun stopStreamingLocked() {
         scheduled?.cancel(false)
         scheduled = null
@@ -132,7 +184,17 @@ class DebugReplayEcgSensor(
         }
     }
 
+    private fun stopHeartRateLocked() {
+        if (activeHeartRateEpoch != 0L) {
+            heartRateEpoch += 1
+            activeHeartRateEpoch = 0L
+        }
+    }
+
     private fun isCurrent(epoch: Long): Boolean = synchronized(lock) { activeEpoch == epoch }
+
+    private fun isCurrentHeartRate(epoch: Long): Boolean =
+        synchronized(lock) { activeHeartRateEpoch == epoch }
 
     private fun logBatch(batch: EcgBatch) {
         val offsets = batch.ppgGreen?.ecgSampleOffsets

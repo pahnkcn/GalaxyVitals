@@ -11,12 +11,29 @@ include vendor UI, assets, or classification models.
 The GalaxyVitals watch app records:
 
 - `HealthTrackerType.ECG_ON_DEMAND` → `ValueKey.EcgSet.ECG_MV` (millivolts)
-- `HealthTrackerType.HEART_RATE_CONTINUOUS` concurrently supplies Samsung-processed
-  BPM plus IBI values. HR is usable only when `HEART_RATE_STATUS == 1`; an IBI is
-  usable only when its paired `IBI_STATUS_LIST` value is `0` and the IBI is nonzero.
-- Samsung processed HR is the primary displayed/stored BPM. The app-derived
-  ECG/embedded-PPG estimator is a labelled fallback only when no valid Samsung HR
-  has arrived for more than 3 seconds; BPM availability never gates ECG capture.
+- Before ECG, `HealthTrackerType.HEART_RATE_CONTINUOUS` runs by itself. HR is
+  usable only when `HEART_RATE_STATUS == 1`; an IBI is usable only when its
+  paired `IBI_STATUS_LIST` value is `0` and the IBI is nonzero. Preflight accepts
+  three distinct successful readings spanning at least 1.5 seconds when their
+  spread is at most 5 BPM, with a 15-second timeout.
+- The continuous HR tracker is closed before any on-demand ECG listener starts.
+  A bounded ECG probe then requires 750 consecutive usable samples (1.5 seconds
+  at 500 Hz): valid contact, ordered timestamps/continuous batch sequence,
+  finite values, no acquisition flags, and values inside Samsung's reported
+  saturation thresholds. These conditions must remain true throughout the
+  following 3-second countdown.
+- The probe listener is closed and restarted as the actual 30-second capture.
+  Its raw samples and timer begin at zero; only the causal display filter state
+  is retained to avoid a graph startup transient. Probe samples are never stored
+  as part of the recording.
+- During capture, the UI holds the accepted value under **Heart rate before ECG**
+  until reliable ECG/embedded-PPG BPM is available. The held value is never
+  represented as a concurrent or current Samsung reading. Persisted/final live
+  BPM statistics use the app estimator and remain non-gating for ECG capture.
+
+This is a bounded stabilization/quality gate, not a hardware calibration. It
+does not infer unpublished Samsung gain/ADC constants, rescale `ECG_MV`, or alter
+the raw values written to the recording.
 - Lead-off, sequence, and saturation thresholds from the first point in each batch;
   every `LEAD_OFF != 0` is invalid contact
 - Exactly 30 s of sensor time (15,000 samples at nominal 500 Hz),
@@ -35,7 +52,8 @@ Wear target API 36 requests Samsung
 `com.samsung.android.hardware.sensormanager.permission.READ_ADDITIONAL_HEALTH_DATA`
 for raw ECG and `android.permission.health.READ_HEART_RATE` for processed HR.
 Devices through API 35 use `BODY_SENSORS` instead. Measurement is foreground-only;
-the continuous HR listener is closed on success, cancel, error, host stop, or shutdown.
+the continuous HR listener is closed before ECG and on cancel, error, host stop,
+or shutdown. Runtime guards reject any attempt to overlap continuous HR and ECG.
 
 GalaxyVitals v1 implements session receive, `syncNow`, and `cleanup`. A cleanup
 message creates the exact acknowledgement marker
@@ -90,7 +108,7 @@ rel_ms,sample_index,ecg_raw_mv,flags,hr_bpm,sensor_timestamp_ms_raw,batch_sequen
 | `acquisition_flags` | number | Bitmask of acquisition errors. |
 | `min_threshold_mv` / `max_threshold_mv` | number/null | Samsung saturation limits. |
 | `sensor_sdk` / `sensor_aar_sha256` | string/null | SDK version and AAR SHA-256 provenance. |
-| `live_bpm_*` | mixed | Summary of `#bpm` lines (RELIABLE-only median/min/max/coverage). New hardware capture uses `live_bpm_algorithm_id=app.galaxyvitals.samsung_hr_primary_with_ecg_fallback.v1`. |
+| `live_bpm_*` | mixed | Summary of `#bpm` lines (RELIABLE-only median/min/max/coverage). New hardware capture uses `live_bpm_algorithm_id=app.galaxyvitals.live_bpm.v1`; the older Samsung-primary ID remains readable for existing files. |
 | `watch_info` | string | JSON blob (device, firmware, sensor SDK, app version). |
 | `wrist` | string | `LEFT` or `RIGHT`. |
 | `signFactor` | number | Derived polarity transform (`±1`), not applied to raw rows. |
@@ -124,12 +142,16 @@ Every observation may include these Samsung provenance fields:
 | `ibi_ms` | Raw `IBI_LIST`, in delivery order (at most four values). |
 | `ibi_status` | Raw status paired one-to-one with `ibi_ms`; `0` plus a nonzero IBI is usable. |
 
-For source `SAMSUNG_HEART_RATE_CONTINUOUS`, `RELIABLE` requires a positive
-displayed BPM, source, sensor timestamp, and `sensor_status == 1`; app bSQI is
-intentionally absent. App-derived fallback sources still require bSQI and RR
+For sources `SAMSUNG_HEART_RATE_PREFLIGHT` and the historical
+`SAMSUNG_HEART_RATE_CONTINUOUS`, `RELIABLE` requires a positive displayed BPM,
+source, sensor timestamp, and `sensor_status == 1`; app bSQI is intentionally
+absent. New captures emit the former only, at capture elapsed time zero, with
+reason `PRE_MEASUREMENT_HEART_RATE`. App-derived sources require bSQI and RR
 count. Live BPM summary uses only `RELIABLE` observations, duration-weighted,
-and cuts a value when its estimate age exceeds 3 s. The legacy per-sample
-`hr_bpm` column remains empty for hardware capture.
+and cuts a value when its estimate age exceeds 3 s. The UI may continue showing
+the clearly labelled pre-measurement value after that TTL, but it is not counted
+as current/reliable summary coverage. The legacy per-sample `hr_bpm` column
+remains empty for hardware capture.
 
 ### Schema v2 `#meta` JSON
 

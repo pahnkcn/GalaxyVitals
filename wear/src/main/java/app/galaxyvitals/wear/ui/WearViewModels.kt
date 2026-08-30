@@ -29,6 +29,7 @@ data class HomeUiState(
 
 enum class MeasurePhase {
     Connecting,
+    PreparingHeartRate,
     Unavailable,
     PermissionRequired,
     ResolutionRequired,

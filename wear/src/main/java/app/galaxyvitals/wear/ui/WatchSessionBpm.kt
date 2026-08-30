@@ -8,8 +8,8 @@ import kotlin.math.roundToInt
 /**
  * Watch history/home BPM.
  *
- * New captures prefer Samsung's processed continuous-HR median. Legacy captures
- * keep their historical median behavior, then fall back to ECG R-peak analysis.
+ * Historical Samsung-primary captures keep their processed-HR median. Current
+ * captures use stored legacy HR when present, then ECG R-peak analysis.
  */
 object WatchSessionBpm {
     fun displayBpm(parsed: ParsedEcgFile): Int? {

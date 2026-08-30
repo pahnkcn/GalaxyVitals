@@ -3,6 +3,7 @@ package app.galaxyvitals.wear.ui
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgSyncSemantics
 import app.galaxyvitals.data.protocol.EcgWearContract
+import app.galaxyvitals.data.protocol.LiveBpmSummarizer
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.wear.capture.EcgSessionRecorder
 import android.app.Activity
@@ -146,6 +147,9 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.sensor.closeCount).isEqualTo(0)
 
         harness.sensor.emit(batch(sequence = 1, leadOff = 0))
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.coordinator.state.value.status).isEqualTo("Stabilizing ECG…")
+        stabilizeContact(harness, sequence = 2)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         assertThat(harness.coordinator.state.value.remainingSec).isEqualTo(3)
         assertThat(harness.sensor.startCount).isEqualTo(1)
@@ -155,7 +159,7 @@ class EcgMeasurementCoordinatorTest {
     fun contactLossDuringCountdownReturnsToWaitingAndCancelsOldCountdown() {
         val harness = Harness()
         harness.coordinator.startHardware()
-        harness.sensor.emit(batch(sequence = 0, leadOff = 0))
+        stabilizeContact(harness, sequence = 0)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
 
         harness.advance(1_000L)
@@ -166,7 +170,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
         assertThat(harness.sensor.startCount).isEqualTo(1)
 
-        harness.sensor.emit(batch(sequence = 2, leadOff = 0))
+        stabilizeContact(harness, sequence = 2)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         harness.advance(3_000L)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
@@ -288,7 +292,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(retried.sensor.startCount).isEqualTo(3)
         retried.sensor.emit(firstListener, batch(sequence = 5, samples = FloatArray(10) { 7f }))
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
-        retried.sensor.emit(batch(sequence = 0, leadOff = 0))
+        stabilizeContact(retried, sequence = 0)
         assertThat(retried.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         assertThat(retried.recorder.sampleCount).isEqualTo(0)
 
@@ -362,7 +366,7 @@ class EcgMeasurementCoordinatorTest {
         val countdown = Harness()
         countdown.coordinator.startHardware()
         assertThat(countdown.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
-        countdown.sensor.emit(batch(sequence = 0, leadOff = 0))
+        stabilizeContact(countdown, sequence = 0)
         assertThat(countdown.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         countdown.coordinator.close()
         assertThat(countdown.sensor.startCount).isEqualTo(1)
@@ -379,7 +383,7 @@ class EcgMeasurementCoordinatorTest {
         val harness = Harness()
         harness.coordinator.startHardware()
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
-        harness.sensor.emit(batch(sequence = 0, leadOff = 0))
+        stabilizeContact(harness, sequence = 0)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         harness.coordinator.cancel()
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
@@ -464,7 +468,7 @@ class EcgMeasurementCoordinatorTest {
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
         harness.sensor.emit(batch(sequence = 0, leadOff = 5))
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
-        harness.sensor.emit(batch(sequence = 1, leadOff = 0))
+        stabilizeContact(harness, sequence = 1)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
         assertThat(harness.coordinator.state.value.status).isEqualTo("Starting in")
         harness.advance(2_999L)
@@ -506,53 +510,86 @@ class EcgMeasurementCoordinatorTest {
     }
 
     @Test
-    fun samsungHeartRateIsPrimaryExactAndPreservesStatusTimestampAndIbi() {
-        val harness = Harness()
-        startRecording(harness)
+    fun heartRatePreflightRequiresStableReadingsAndStopsBeforeEcg() {
+        val harness = Harness(autoHeartRate = false)
+        harness.coordinator.startHardware()
+
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PreparingHeartRate)
         assertThat(harness.sensor.heartRateStartCount).isEqualTo(1)
+        assertThat(harness.sensor.heartRateActive).isTrue()
+        assertThat(harness.sensor.startCount).isEqualTo(0)
 
-        harness.advance(100L)
         harness.sensor.emitHeartRate(
-            HeartRateSample(
-                sensorTimestampMs = 10_000L,
-                bpm = 73,
-                status = 1,
-                ibiMs = listOf(820, 0, 830),
-                ibiStatus = listOf(0, 0, -1),
-            ),
+            stableHeartRateSample(1_000L, bpm = 70),
+            stableHeartRateSample(2_000L, bpm = 80),
+            stableHeartRateSample(3_000L, bpm = 70),
+            stableHeartRateSample(4_000L, bpm = 71),
         )
-        streamQrs(harness, seconds = 2.0, bpm = 72, startSequence = harness.nextSequence)
-        assertThat(harness.coordinator.bpmComputeCount).isEqualTo(0)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PreparingHeartRate)
+        assertThat(harness.sensor.startCount).isEqualTo(0)
 
-        harness.advance(1_000L)
-        harness.sensor.emitHeartRate(
-            HeartRateSample(
-                sensorTimestampMs = 11_000L,
-                bpm = 109,
-                status = 1,
-                ibiMs = listOf(550),
-                ibiStatus = listOf(0),
-            ),
-        )
+        harness.sensor.emitHeartRate(stableHeartRateSample(5_000L, bpm = 72))
 
-        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(109)
-        assertThat(harness.coordinator.state.value.bpm.estimate!!.bpm).isEqualTo(109.0)
-        assertThat(harness.coordinator.state.value.bpm.estimate!!.source)
-            .isEqualTo(BpmSource.SAMSUNG_PROCESSED_HR)
-        val observation = harness.recorder.liveBpmObservations().last()
-        assertThat(observation.source).isEqualTo("SAMSUNG_HEART_RATE_CONTINUOUS")
-        assertThat(observation.sensorTimestampMs).isEqualTo(11_000L)
-        assertThat(observation.sensorStatus).isEqualTo(1)
-        assertThat(observation.ibiMs).containsExactly(550)
-        assertThat(observation.ibiStatus).containsExactly(0)
-        assertThat(observation.bSqi).isNull()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(71)
+        assertThat(harness.sensor.heartRateCloseCount).isEqualTo(1)
+        assertThat(harness.sensor.heartRateActive).isFalse()
+        assertThat(harness.sensor.startCount).isEqualTo(1)
+        assertThat(harness.sensor.overlapDetected).isFalse()
     }
 
     @Test
-    fun invalidSamsungHeartRateFallsBackToEcgWithoutFailingCapture() {
-        val harness = Harness()
-        startRecording(harness)
-        harness.advance(100L)
+    fun preflightHeartRateStaysNumericUntilEcgBpmIsReliableAndPreservesLineage() {
+        val harness = Harness(autoHeartRate = false)
+        harness.coordinator.startHardware()
+
+        harness.sensor.emitHeartRate(
+            stableHeartRateSample(10_000L, bpm = 72),
+            stableHeartRateSample(
+                sensorTimestampMs = 11_000L,
+                bpm = 73,
+                ibiMs = listOf(820, 0, 830),
+                ibiStatus = listOf(0, 0, -1),
+            ),
+            stableHeartRateSample(12_000L, bpm = 74),
+        )
+        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(73)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
+        stabilizeContact(harness, sequence = 0)
+        harness.advance(3_000L)
+
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
+        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(73)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.source)
+            .isEqualTo(BpmSource.SAMSUNG_PROCESSED_HR)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
+        val observation = harness.recorder.liveBpmObservations().single()
+        assertThat(observation.source)
+            .isEqualTo(LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_PREFLIGHT)
+        assertThat(observation.sensorTimestampMs).isEqualTo(11_000L)
+        assertThat(observation.sensorStatus).isEqualTo(1)
+        assertThat(observation.ibiMs).containsExactly(820, 0, 830).inOrder()
+        assertThat(observation.ibiStatus).containsExactly(0, 0, -1).inOrder()
+        assertThat(observation.bSqi).isNull()
+
+        streamPrepared(
+            harness,
+            FloatArray(1_000) { 0.01f * ((it % 3) - 1) },
+            startSequence = 0,
+            includePpg = false,
+        )
+        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(73)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
+        assertThat(
+            harness.uiStates.filter { it.phase == MeasurePhase.Recording }.all { it.hrBpm != null },
+        ).isTrue()
+        assertThat(harness.sensor.overlapDetected).isFalse()
+    }
+
+    @Test
+    fun invalidHeartRateNeverStartsEcgAndTimesOut() {
+        val harness = Harness(autoHeartRate = false)
+        harness.coordinator.startHardware()
         harness.sensor.emitHeartRate(
             HeartRateSample(
                 sensorTimestampMs = 10_000L,
@@ -563,28 +600,28 @@ class EcgMeasurementCoordinatorTest {
             ),
         )
 
-        streamQrs(harness, seconds = 10.0, bpm = 72, startSequence = harness.nextSequence)
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.PreparingHeartRate)
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        harness.advance(15_000L)
 
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.coordinator.state.value.bpm.estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR)
-        assertThat(harness.recorder.liveBpmObservations().any { observation ->
-            observation.source == "SAMSUNG_HEART_RATE_CONTINUOUS" &&
-                observation.status == LiveBpmAvailability.UNRELIABLE.name &&
-                observation.sensorStatus == -10
-        }).isTrue()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(harness.transitionLogs.joinToString()).contains("HEART_RATE_TIMEOUT")
+        assertThat(harness.sensor.startCount).isEqualTo(0)
+        assertThat(harness.sensor.heartRateCloseCount).isEqualTo(1)
     }
 
     @Test
-    fun heartRateTrackerErrorKeepsEcgCaptureRunning() {
-        val harness = Harness()
-        startRecording(harness)
+    fun heartRateTrackerErrorFailsBeforeEcgStarts() {
+        val harness = Harness(autoHeartRate = false)
+        harness.coordinator.startHardware()
 
         harness.sensor.emitHeartRateError(
             EcgSensorError(EcgSensorErrorCode.TRACKER, "heart-rate tracker failed"),
         )
 
-        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.recorder.isRecording).isTrue()
+        assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Failed)
+        assertThat(harness.recorder.isRecording).isFalse()
+        assertThat(harness.sensor.startCount).isEqualTo(0)
         assertThat(harness.sensor.heartRateCloseCount).isEqualTo(1)
     }
 
@@ -814,8 +851,8 @@ class EcgMeasurementCoordinatorTest {
     fun liveBpmObservationsRecordDisplayedAndAbstainedResultsWithoutChangingCapture() {
         val harness = Harness()
         startRecording(harness)
-        assertThat(harness.recorder.liveBpmObservations().map { it.status })
-            .contains(LiveBpmAvailability.COLLECTING.name)
+        assertThat(harness.recorder.liveBpmObservations().single().source)
+            .isEqualTo(LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_PREFLIGHT)
         streamQrs(harness, seconds = 10.0, bpm = 72, startSequence = harness.nextSequence)
         val observations = harness.recorder.liveBpmObservations()
         assertThat(observations.size).isGreaterThan(1)
@@ -843,7 +880,8 @@ class EcgMeasurementCoordinatorTest {
         }).isTrue()
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
         assertThat(harness.recorder.sampleCount).isEqualTo(1_000)
-        assertThat(harness.coordinator.state.value.hrBpm).isNull()
+        assertThat(harness.coordinator.state.value.hrBpm).isEqualTo(72)
+        assertThat(harness.coordinator.state.value.bpm.estimate!!.epoch).isEqualTo(BpmEpoch.PREFLIGHT)
     }
 
     @Test
@@ -983,8 +1021,9 @@ class EcgMeasurementCoordinatorTest {
         acquisition: CoroutineDispatcher = Dispatchers.Unconfined,
         main: CoroutineDispatcher = Dispatchers.Unconfined,
         failPush: Boolean = false,
+        autoHeartRate: Boolean = true,
     ) {
-        val sensor = FakeSensor { now }
+        val sensor = FakeSensor(nowMs = { now }, autoHeartRate = autoHeartRate)
         val recorder = EcgSessionRecorder()
         var now = 1L
         var nextSequence = 0
@@ -1105,6 +1144,7 @@ class EcgMeasurementCoordinatorTest {
 
     private class FakeSensor(
         private val nowMs: () -> Long,
+        private val autoHeartRate: Boolean,
     ) : EcgSensor {
         data class Listener(
             val generation: Long,
@@ -1130,6 +1170,9 @@ class EcgMeasurementCoordinatorTest {
         var disconnectCount = 0
         var heartRateStartCount = 0
         var heartRateCloseCount = 0
+        var heartRateActive = false
+        var ecgActive = false
+        var overlapDetected = false
         val maxDurationMsHistory = ArrayList<Long>()
         val lastMaxDurationMs: Long get() = maxDurationMsHistory.lastOrNull() ?: -1L
 
@@ -1145,17 +1188,32 @@ class EcgMeasurementCoordinatorTest {
             onBatch: (HeartRateBatch) -> Unit,
         ): EcgSubscription {
             heartRateStartCount += 1
+            if (ecgActive) overlapDetected = true
+            heartRateActive = true
             heartRateOnError = onError
             heartRateOnBatch = onBatch
             var closed = false
-            return EcgSubscription {
+            val subscription = EcgSubscription {
                 if (!closed) {
                     closed = true
                     heartRateCloseCount += 1
+                    heartRateActive = false
                     heartRateOnError = null
                     heartRateOnBatch = null
                 }
             }
+            if (autoHeartRate) {
+                onBatch(
+                    HeartRateBatch(
+                        listOf(
+                            stableHeartRateSample(1_000L),
+                            stableHeartRateSample(2_000L),
+                            stableHeartRateSample(3_000L),
+                        ),
+                    ),
+                )
+            }
+            return subscription
         }
 
         override fun startEcg(
@@ -1165,6 +1223,8 @@ class EcgMeasurementCoordinatorTest {
             onDeadline: () -> Unit,
         ): EcgSubscription {
             startCount += 1
+            if (heartRateActive) overlapDetected = true
+            ecgActive = true
             maxDurationMsHistory += maxDurationMs
             val listener = Listener(
                 generation = startCount.toLong(),
@@ -1180,6 +1240,7 @@ class EcgMeasurementCoordinatorTest {
                 if (!closed) {
                     closed = true
                     closeCount += 1
+                    ecgActive = false
                     listener.closedAtMs = nowMs()
                 }
             }
@@ -1232,9 +1293,12 @@ class EcgMeasurementCoordinatorTest {
         private fun startRecording(harness: Harness) {
             harness.coordinator.startHardware()
             assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.WaitingForContact)
+            assertThat(harness.sensor.heartRateCloseCount).isEqualTo(1)
+            assertThat(harness.sensor.heartRateActive).isFalse()
+            assertThat(harness.sensor.overlapDetected).isFalse()
             assertThat(harness.sensor.startCount).isEqualTo(1)
             assertThat(harness.recorder.isRecording).isFalse()
-            harness.sensor.emit(batch(sequence = 0, leadOff = 0))
+            stabilizeContact(harness, sequence = 0)
             assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.ArmedCountdown)
             assertThat(harness.sensor.startCount).isEqualTo(1)
             harness.advance(3_000L)
@@ -1244,6 +1308,30 @@ class EcgMeasurementCoordinatorTest {
             assertThat(harness.recorder.isRecording).isTrue()
             harness.nextSequence = 0
         }
+
+        private fun stabilizeContact(harness: Harness, sequence: Int) {
+            harness.now += 1_500L
+            harness.sensor.emit(
+                batch(
+                    sequence = sequence,
+                    leadOff = 0,
+                    samples = FloatArray(750) { 0.1f },
+                ),
+            )
+        }
+
+        private fun stableHeartRateSample(
+            sensorTimestampMs: Long,
+            bpm: Int = 72,
+            ibiMs: List<Int> = listOf(833),
+            ibiStatus: List<Int> = listOf(0),
+        ): HeartRateSample = HeartRateSample(
+            sensorTimestampMs = sensorTimestampMs,
+            bpm = bpm,
+            status = 1,
+            ibiMs = ibiMs,
+            ibiStatus = ibiStatus,
+        )
 
         private fun streamUntilTerminal(harness: Harness, samples: FloatArray) {
             streamPrepared(

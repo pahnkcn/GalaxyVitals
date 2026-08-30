@@ -10,14 +10,14 @@ import org.junit.Test
 
 class EcgCsvV3Test {
     @Test
-    fun samsungHeartRateRoundTripPreservesStatusTimestampAndIbiPairs() {
+    fun samsungPreflightHeartRateRoundTripPreservesStatusTimestampAndIbiPairs() {
         val samsung = LiveBpmObservation(
             atSampleIndex = 0,
             observedCaptureElapsedMs = 0,
             status = LiveBpmSummarizer.RELIABLE,
             displayedBpm = 72.0,
             rawBpm = 72.0,
-            source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+            source = LiveBpmSummarizer.SOURCE_SAMSUNG_HEART_RATE_PREFLIGHT,
             sensorTimestampMs = 1_700_000_001_000L,
             sensorStatus = 1,
             ibiMs = listOf(832, 835),

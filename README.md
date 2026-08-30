@@ -15,8 +15,8 @@ unwell, seek professional care.
 - Import `ecg_*.csv.gz` / `.csv` files that match [PROTOCOL.md](PROTOCOL.md)
 - Wear Data Layer listener on `/ecg/session/{id}` (same app id + signing key)
 - `:wear` GalaxyVitals watch app (`applicationId app.galaxyvitals`) that records and pushes that contract
-- Waveform viewer, Samsung processed HR/IBI stats, source-aware history, and an
-  explicitly labelled ECG-derived BPM fallback
+- Waveform viewer, source-aware HR/BPM history, and an explicitly labelled
+  handoff from pre-measurement Samsung HR to ECG-derived BPM
 - On-device **N / A / O** rhythm screen after each import or watch sync (**N**ormal / **A**F / **O**ther)
 - Architecture stub so blood pressure can be added later
 
@@ -54,10 +54,14 @@ On the watch: **Start ECG**. Hardware ECG needs the official Privileged Health S
 `wear/libs/samsung-health-sensor-api.aar` (see [wear/libs/README.md](wear/libs/README.md))
 *and* a Samsung partner whitelist for `app.galaxyvitals`.
 
-During a measurement the watch runs `HEART_RATE_CONTINUOUS` beside the single
-`ECG_ON_DEMAND` capture. Samsung HR with status `1` is primary; ECG-derived BPM
-is used only if processed HR is invalid or older than 3 seconds. On API 36 this
-requires Samsung `READ_ADDITIONAL_HEALTH_DATA` and Android
+Before a measurement the watch runs `HEART_RATE_CONTINUOUS` alone until three
+successful readings over at least 1.5 seconds agree within 5 BPM. It then closes
+that tracker before opening the bounded ECG contact/stabilization probe. After
+1.5 seconds of usable ECG and a 3-second quality-preserving countdown, the probe
+is restarted as the 30-second `ECG_ON_DEMAND` capture. The pre-measurement HR is
+held on screen with a clear label until reliable ECG-derived BPM is available;
+the continuous HR tracker never overlaps an on-demand ECG tracker. On API 36
+this requires Samsung `READ_ADDITIONAL_HEALTH_DATA` and Android
 `READ_HEART_RATE`; API 35 and earlier use `BODY_SENSORS`.
 
 A differently signed vendor watch app still cannot talk to this phone app.

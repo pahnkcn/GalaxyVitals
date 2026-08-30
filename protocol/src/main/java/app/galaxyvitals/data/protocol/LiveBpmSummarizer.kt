@@ -9,6 +9,7 @@ object LiveBpmSummarizer {
     const val SAMSUNG_PRIMARY_ALGORITHM_ID =
         "app.galaxyvitals.samsung_hr_primary_with_ecg_fallback.v1"
     const val SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS = "SAMSUNG_HEART_RATE_CONTINUOUS"
+    const val SOURCE_SAMSUNG_HEART_RATE_PREFLIGHT = "SAMSUNG_HEART_RATE_PREFLIGHT"
     const val MAX_OBSERVATIONS = 64
     const val MAX_IBI_PER_OBSERVATION = 4
     const val STALE_AGE_MS = 3_000L
@@ -54,7 +55,7 @@ object LiveBpmSummarizer {
                 if (observation.source.isNullOrBlank()) {
                     return "RELIABLE live BPM requires source"
                 }
-                if (observation.source == SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS) {
+                if (observation.source in samsungHeartRateSources) {
                     if (observation.sensorTimestampMs == null) {
                         return "RELIABLE Samsung heart rate requires sensor timestamp"
                     }
@@ -125,4 +126,9 @@ object LiveBpmSummarizer {
         }
         return weighted.maxBy { it.first }.first
     }
+
+    private val samsungHeartRateSources = setOf(
+        SOURCE_SAMSUNG_HEART_RATE_CONTINUOUS,
+        SOURCE_SAMSUNG_HEART_RATE_PREFLIGHT,
+    )
 }

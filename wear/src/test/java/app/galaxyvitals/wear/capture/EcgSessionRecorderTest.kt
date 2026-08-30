@@ -45,7 +45,7 @@ class EcgSessionRecorderTest {
         assertThat(parsed.signFactor).isEqualTo(1)
         assertThat(parsed.bpmObservations).isNotEmpty()
         assertThat(parsed.liveBpmAlgorithmId)
-            .isEqualTo(LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID)
+            .isEqualTo(LiveBpmSummarizer.ALGORITHM_ID)
         assertThat(parsed.samples[0].sensorTimestampMsRaw).isNotNull()
     }
 

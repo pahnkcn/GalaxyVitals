@@ -80,6 +80,15 @@ fun MeasureScreen(
                     MeasurePhase.Connecting -> {
                         CircularProgressIndicator()
                     }
+                    MeasurePhase.PreparingHeartRate -> {
+                        CircularProgressIndicator()
+                        Text(
+                            "Keep still while the optical sensor settles.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     MeasurePhase.WaitingForContact -> Unit
                     MeasurePhase.ArmedCountdown -> {
                         Text(
@@ -163,17 +172,18 @@ private fun RecordingReadout(
     state: MeasureUiState,
     modifier: Modifier = Modifier,
 ) {
+    val sourceLabel = heartRateSourceLabel(state.bpm)
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            EcgSyncSemantics.LIVE_ECG_DERIVED_BPM,
+            sourceLabel,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        LiveHeartRateReadout(state.bpm)
+        LiveHeartRateReadout(state.bpm, sourceLabel)
         Spacer(Modifier.weight(1f))
         EcgWaveformMini(state.waveform, Modifier.fillMaxWidth())
         Spacer(Modifier.weight(1f))
@@ -187,15 +197,20 @@ private fun RecordingReadout(
 }
 
 @Composable
-private fun LiveHeartRateReadout(bpm: LiveBpmState) {
+private fun LiveHeartRateReadout(
+    bpm: LiveBpmState,
+    sourceLabel: String,
+    modifier: Modifier = Modifier,
+) {
     val estimate = bpm.estimate.takeIf { bpm.availability == LiveBpmAvailability.RELIABLE }
+    val animatedEstimate = estimate?.takeIf { it.epoch == BpmEpoch.CAPTURE }
     val scale = remember { Animatable(1f) }
-    LaunchedEffect(estimate?.bpm) {
-        if (estimate == null) {
+    LaunchedEffect(animatedEstimate?.bpm) {
+        if (animatedEstimate == null) {
             scale.snapTo(1f)
             return@LaunchedEffect
         }
-        val pulseBpm = (estimate.bpm.roundToInt().coerceIn(45, 160) / 6) * 6
+        val pulseBpm = (animatedEstimate.bpm.roundToInt().coerceIn(45, 160) / 6) * 6
         val beatMs = (60_000f / pulseBpm).toInt().coerceIn(375, 1_334)
         val systole = (beatMs * 0.18f).toInt().coerceAtLeast(70)
         val diastole = (beatMs * 0.22f).toInt().coerceAtLeast(80)
@@ -210,11 +225,11 @@ private fun LiveHeartRateReadout(bpm: LiveBpmState) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Icon(
             imageVector = Icons.Filled.Favorite,
-            contentDescription = EcgSyncSemantics.LIVE_ECG_DERIVED_BPM,
+            contentDescription = sourceLabel,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .size(18.dp)
@@ -226,10 +241,19 @@ private fun LiveHeartRateReadout(bpm: LiveBpmState) {
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            text = estimate?.bpm?.roundToInt()?.let { "$it bpm" } ?: "Calculating heart rate…",
+            text = estimate?.bpm?.roundToInt()?.let { "$it bpm" } ?: "— bpm",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+private fun heartRateSourceLabel(bpm: LiveBpmState): String {
+    val estimate = bpm.estimate
+    return when {
+        estimate?.epoch == BpmEpoch.PREFLIGHT -> "Heart rate before ECG"
+        estimate?.source == BpmSource.SAMSUNG_PROCESSED_HR -> "Samsung processed heart rate"
+        else -> EcgSyncSemantics.LIVE_ECG_DERIVED_BPM
     }
 }
