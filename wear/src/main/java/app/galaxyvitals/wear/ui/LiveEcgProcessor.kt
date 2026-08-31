@@ -1,5 +1,7 @@
 package app.galaxyvitals.wear.ui
 
+import app.galaxyvitals.data.protocol.EcgLineNoise
+import app.galaxyvitals.data.protocol.EcgSignalChain
 import app.galaxyvitals.data.protocol.EcgWaveformGeometry
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.data.protocol.WaveformPoint
@@ -73,8 +75,14 @@ class LiveEcgProcessor(
     private val analysis = ArrayList<Float>(ANALYSIS_WINDOW_SAMPLES)
     private val ppgPoints = ArrayList<LivePpgPoint>(ANALYSIS_WINDOW_SAMPLES / 5)
     private val displayFilter = CausalSosFilter(DISPLAY_SOS_500)
+    private var lineNotch: CausalSosFilter? = null
+    private var lineEstimateAttempted = false
     private var scale = WaveformScale.Default
     private var preserveFilterForNextSegment = false
+
+    /** Powerline interference measured on this run, once enough samples exist. */
+    var lineNoise: EcgLineNoise? = null
+        private set
     var nextEcgSampleIndex: Long = 0L
         private set
     private var lastSequence = -1
@@ -104,6 +112,9 @@ class LiveEcgProcessor(
         lastSequence = -1
         analysisCopyCount = 0
         displayFilter.reset()
+        lineNotch = null
+        lineNoise = null
+        lineEstimateAttempted = false
         preserveFilterForNextSegment = false
         scale = WaveformScale.Default
     }
@@ -148,16 +159,38 @@ class LiveEcgProcessor(
             val canWarmStart = index == 0 && preserveFilterForNextSegment && flags and gapFlags == 0
             if (startsNew && !canWarmStart) displayFilter.reset()
             if (index == 0) preserveFilterForNextSegment = false
+            if (startsNew && !canWarmStart) lineNotch?.reset()
             analysis += batch.samplesMv[index]
+            val oriented = batch.samplesMv[index] * signFactor
+            val notched = lineNotch?.filter(oriented) ?: oriented
             display += WaveformPoint(
                 sampleIndex = batchStartIndex + index,
-                valueMv = displayFilter.filter(batch.samplesMv[index] * signFactor),
+                valueMv = displayFilter.filter(notched),
                 startsNewSegment = startsNew,
             )
         }
         lastSequence = batch.sequence
         nextEcgSampleIndex += batch.samplesMv.size
         trim()
+        configureLineNotch()
+    }
+
+    /**
+     * Samsung streams raw ECG with no anti-mains filter, and a 40 Hz low-pass
+     * alone leaves the fundamental about the size of a P wave. The grid frequency
+     * is measured once, from the first [LINE_ESTIMATE_SAMPLES] samples of the
+     * pre-capture probe, and the resulting notch is carried into the recording so
+     * the live trace never restarts unfiltered.
+     */
+    private fun configureLineNotch() {
+        if (lineEstimateAttempted || analysis.size < LINE_ESTIMATE_SAMPLES) return
+        lineEstimateAttempted = true
+        val window = DoubleArray(LINE_ESTIMATE_SAMPLES) { index ->
+            analysis[analysis.size - LINE_ESTIMATE_SAMPLES + index].toDouble()
+        }
+        val line = EcgSignalChain.estimateLineNoise(window, srHz.toDouble()) ?: return
+        lineNoise = line
+        lineNotch = CausalSosFilter(notchSos(line.frequencyHz, srHz.toDouble()))
     }
 
     fun waveformFrame(deltaMs: Long): LiveWaveformFrame {
@@ -207,6 +240,28 @@ class LiveEcgProcessor(
     companion object {
         const val DISPLAY_WINDOW_SAMPLES = 1_500
         const val ANALYSIS_WINDOW_SAMPLES = 5_000
+
+        /** 3 s is enough to place a Q=20 notch well inside its own bandwidth. */
+        const val LINE_ESTIMATE_SAMPLES = 1_500
+
+        /** RBJ notch, and its first two harmonics while they stay under Nyquist. */
+        internal fun notchSos(lineHz: Double, srHz: Double): Array<DoubleArray> {
+            val sections = ArrayList<DoubleArray>(3)
+            var harmonic = lineHz
+            var order = 1
+            while (harmonic < 0.45 * srHz && order <= 3) {
+                val w0 = 2.0 * Math.PI * harmonic / srHz
+                val cosine = kotlin.math.cos(w0)
+                val alpha = kotlin.math.sin(w0) / (2.0 * EcgSignalChain.LINE_NOTCH_Q * order)
+                sections += doubleArrayOf(
+                    1.0, -2.0 * cosine, 1.0,
+                    1.0 + alpha, -2.0 * cosine, 1.0 - alpha,
+                )
+                harmonic += lineHz
+                order++
+            }
+            return sections.toTypedArray()
+        }
 
         /** SciPy `butter(4, [0.5, 40], btype="bandpass", fs=500, output="sos")` — causal only. */
         private val DISPLAY_SOS_500 = arrayOf(

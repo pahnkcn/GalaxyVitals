@@ -69,6 +69,49 @@ That step is analysis, not part of the on-the-wire contract. Algorithm
 acceptance on PhysioNet locked gates is unmet; production remains NO-GO
 until Watch9 hardware validation and Samsung registration.
 
+## Signal chain (`EcgSignalChain`)
+
+`ECG_ON_DEMAND` delivers **raw, unfiltered** samples. Everything that draws or
+measures a recording runs through one chain so display, beat detection and
+morphology see the same signal. Stored raw rows are never modified, `ECG_MV` is
+never rescaled, and no undocumented Samsung constant is inferred.
+
+| Stage | What it does |
+|---|---|
+| Clock | Regresses `sensor_timestamp_ms_raw` against `sample_index` (outliers trimmed at 4 MAD). Falls back to nominal when there are fewer than 32 distinct stamps or the fit lands >5% off nominal. |
+| Powerline | Estimates the interference frequency from the recording (Goertzel sweep 39-71 Hz, accepted only within 1.5 Hz of 50 or 60 Hz and 6x above a two-sided local floor), then removes the fundamental and harmonics with zero-phase RBJ notches at `Q = 20`. |
+| Baseline | 200 ms then 600 ms running median, replicate-padded. The first stage removes QRS so the second tracks wander only, which keeps ST and T. Being nonlinear it cannot ring, so the electrode-polarization step is absorbed rather than amplified. |
+| Low-pass | Zero-phase Butterworth, order 4, at the selected bandwidth. |
+
+Two bandwidths, per the AHA/ACC/HRS standardization recommendations:
+
+- `DIAGNOSTIC` (150 Hz) for anything reported as a number.
+- `MONITOR` (40 Hz) for the on-screen trace only. A 40 Hz cutoff costs 15-20% of
+  R-wave amplitude on these captures, so measurements are never taken from it.
+
+Measured on Galaxy Watch (`SM-L350`, sensor SDK 1.4.1) 30 s captures:
+
+| | Declared / previous | Measured |
+|---|---|---|
+| Sample rate | 500 Hz | **501.67 Hz** (two independent estimates agree: timestamp regression, and the mains line landing on 50.01 Hz only at that rate) |
+| Mains fundamental | not removed anywhere | 0.52 mVpp raw, suppressed 30 dB |
+| Start-of-record artifact | 8.3 mV over a 0.62 mV R wave, ~2.5 s unusable | 0.74 mV against a 0.70 mV steady-state peak, `settleSampleIndex = 0` |
+| Baseline estimator | single 0.4 s median (12-13% T attenuation) | 200/600 ms cascade |
+
+The 0.33% clock error made every RR interval, and therefore every reported BPM,
+0.33% low. `ParsedEcgFile.effectiveSrHz` is recomputed from the raw timestamp
+column for schema v3; the `effective_sr_hz` metadata field is derived from the
+reconstructed `sample_index x 2` grid and only ever restates the nominal rate.
+
+Known limits: the 600 ms baseline stage is longer than RR above roughly 150 bpm,
+where it starts to track the beat instead of the baseline; a `Q = 20` notch
+removes ECG energy in a 2.5 Hz band around the line frequency.
+
+The watch's live preview applies the same notch causally. The line frequency is
+estimated once from the first 3 s of the pre-capture probe and the configured
+notch is carried into the recording window, so the live trace never restarts
+unfiltered.
+
 ## File format (`format = csv+gz`)
 
 UTF-8 text, then gzip.

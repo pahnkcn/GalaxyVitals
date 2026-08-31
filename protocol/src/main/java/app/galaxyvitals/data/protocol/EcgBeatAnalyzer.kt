@@ -52,6 +52,7 @@ object EcgBeatAnalyzer {
             )
         }
         val polarity = parsed.effectivePolarity()
+        val analysisSrHz = analysisSrHz(parsed.srHz, parsed.effectiveSrHz)
         val primary = ArrayList<Int>()
         val secondary = ArrayList<Int>()
         val matched = ArrayList<Int>()
@@ -65,7 +66,7 @@ object EcgBeatAnalyzer {
                     slice[index].valueMv * polarity
                 }
                 val resampled = EcgFounderPreprocess.resamplePolyphase(oriented, parsed.srHz, TARGET_HZ)
-                val local = detectWithOptionalDualPolarity(resampled, config)
+                val local = detectWithOptionalDualPolarity(resampled, config, analysisSrHz)
                 val offset = (slice.first().relMs * TARGET_HZ / 1_000L).toInt()
                 local.primary.forEach { primary += it + offset }
                 local.secondary.forEach { secondary += it + offset }
@@ -85,6 +86,22 @@ object EcgBeatAnalyzer {
         )
     }
 
+    /**
+     * Rate of the grid the detector runs on.
+     *
+     * Detection happens after [EcgFounderPreprocess.resamplePolyphase] has mapped
+     * `srHz` index-for-index onto [TARGET_HZ], so the real spacing of those
+     * samples is `TARGET_HZ * effectiveSrHz / srHz`. Galaxy Watch schema-v3 files
+     * measure near 501.67 Hz rather than the declared 500, and using the declared
+     * rate makes every RR interval - and therefore every reported BPM - 0.33% off.
+     */
+    internal fun analysisSrHz(srHz: Int, effectiveSrHz: Double): Double {
+        if (srHz <= 0 || !effectiveSrHz.isFinite() || effectiveSrHz <= 0.0) return TARGET_HZ.toDouble()
+        val rate = TARGET_HZ * effectiveSrHz / srHz
+        val deviation = kotlin.math.abs(rate / TARGET_HZ - 1.0)
+        return if (deviation > EcgSignalChain.MAX_SR_DEVIATION) TARGET_HZ.toDouble() else rate
+    }
+
     fun analyzeWindow(samplesMv: FloatArray, srHz: Int, signFactor: Int): EcgBeatResult =
         analyzeWindow(samplesMv, srHz, signFactor, EcgBeatDetectorConfig.DEFAULT)
 
@@ -93,6 +110,7 @@ object EcgBeatAnalyzer {
         srHz: Int,
         signFactor: Int,
         config: EcgBeatDetectorConfig,
+        effectiveSrHz: Double = srHz.toDouble(),
     ): EcgBeatResult {
         val cleanDurationMs = if (srHz <= 0 || samplesMv.isEmpty()) {
             0L
@@ -108,7 +126,7 @@ object EcgBeatAnalyzer {
         }
         val oriented = FloatArray(samplesMv.size) { samplesMv[it] * signFactor }
         val resampled = EcgFounderPreprocess.resamplePolyphase(oriented, srHz, TARGET_HZ)
-        val local = detectWithOptionalDualPolarity(resampled, config)
+        val local = detectWithOptionalDualPolarity(resampled, config, analysisSrHz(srHz, effectiveSrHz))
         return finish(
             primary = local.primary,
             secondary = local.secondary,
@@ -123,13 +141,18 @@ object EcgBeatAnalyzer {
     private fun detectWithOptionalDualPolarity(
         oriented: FloatArray,
         config: EcgBeatDetectorConfig,
+        analysisSrHz: Double,
     ): SegmentDetections {
-        val upright = detectOnResampled(oriented, config)
+        val upright = detectOnResampled(oriented, config, analysisSrHz)
         if (!config.dualPolarity) return upright
         val polarityInverted = upright.dominantDeflection <= 0.0
         val bsqiPoor = bSqi(upright) < config.minBsqi
         if (!polarityInverted && !bsqiPoor) return upright
-        val inverted = detectOnResampled(FloatArray(oriented.size) { -oriented[it] }, config)
+        val inverted = detectOnResampled(
+            FloatArray(oriented.size) { -oriented[it] },
+            config,
+            analysisSrHz,
+        )
         return betterPolarity(upright, inverted)
     }
 
@@ -149,7 +172,11 @@ object EcgBeatAnalyzer {
         return if (denominator == 0) 0.0 else detection.matched.size.toDouble() / denominator
     }
 
-    private fun detectOnResampled(oriented: FloatArray, config: EcgBeatDetectorConfig): SegmentDetections {
+    private fun detectOnResampled(
+        oriented: FloatArray,
+        config: EcgBeatDetectorConfig,
+        analysisSrHz: Double,
+    ): SegmentDetections {
         if (oriented.size <= EcgQrsFilter.WARMUP_SAMPLES) {
             return SegmentDetections(IntArray(0), IntArray(0), IntArray(0), emptyList(), 0.0, 0.0)
         }
@@ -194,7 +221,7 @@ object EcgBeatAnalyzer {
             primary = primary,
             secondary = secondary,
             matched = matched,
-            rrMs = rrIntervals(matched, config),
+            rrMs = rrIntervals(matched, config, analysisSrHz),
             envelopeSnr = primaryRaw.signalNoise,
             dominantDeflection = dominantDeflection(oriented, primary),
         )
@@ -450,11 +477,16 @@ object EcgBeatAnalyzer {
         return matched.toIntArray()
     }
 
-    private fun rrIntervals(peaks: IntArray, config: EcgBeatDetectorConfig): List<Double> {
+    private fun rrIntervals(
+        peaks: IntArray,
+        config: EcgBeatDetectorConfig,
+        analysisSrHz: Double,
+    ): List<Double> {
         if (peaks.size < 2) return emptyList()
+        val rate = if (analysisSrHz.isFinite() && analysisSrHz > 0.0) analysisSrHz else TARGET_HZ.toDouble()
         val rr = ArrayList<Double>(peaks.size - 1)
         for (index in 1 until peaks.size) {
-            val interval = (peaks[index] - peaks[index - 1]) * 1_000.0 / TARGET_HZ
+            val interval = (peaks[index] - peaks[index - 1]) * 1_000.0 / rate
             if (interval in config.minRrMs..config.maxRrMs) rr += interval
         }
         return rr

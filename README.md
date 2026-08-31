@@ -94,8 +94,20 @@ chain, z-scores the whole record, and center-fits it to 7,680 samples. The model
 returns logits in N / A / O order; the app applies stable softmax and reports the
 argmax model score only after the signal-quality gate.
 
-The detail chart uses a separate display-only 0.5–40 Hz filter and visible-range
-scaling. Display processing never overwrites the stored or exported ECG.
+## Signal chain
+
+`ECG_ON_DEMAND` gives raw, unfiltered samples: a large electrode offset that
+polarizes over the first second, and mains interference that on a wrist capture
+is comparable to the R wave. `EcgSignalChain` measures the real sample rate from
+the stored Samsung timestamps (501.67 Hz on Galaxy Watch, not the declared 500),
+finds the powerline frequency in the recording instead of assuming 50 or 60 Hz,
+removes it with zero-phase notches, and takes out baseline with a 200/600 ms
+median cascade that absorbs the polarization step rather than ringing on it.
+
+Display uses monitor bandwidth (40 Hz); anything reported as a number uses
+diagnostic bandwidth (150 Hz), because a 40 Hz cutoff costs 15-20% of R-wave
+amplitude. See [PROTOCOL.md](PROTOCOL.md) for the measured before/after numbers.
+Display processing never overwrites the stored or exported ECG.
 
 Host invocation and FP16 numerical parity are verified. Android uses the FP32
 reference until quantized numerical behavior is validated on an ADB-connected

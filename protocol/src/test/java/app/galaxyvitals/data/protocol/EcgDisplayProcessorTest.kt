@@ -45,15 +45,18 @@ class EcgDisplayProcessorTest {
     }
 
     @Test
-    fun displayFilterAttenuatesSlowRampAnd80HzNoiseWhileKeepingOneHzWave() {
+    fun displayFilterRemovesDriftAndMainsWhileKeepingTheRWave() {
+        // Probes are ECG-shaped on purpose: the baseline estimator is a median
+        // cascade tuned for QRS/T morphology, so a sine tells you nothing useful
+        // about what it does to a real recording.
         val srHz = 500
-        val seconds = 30
-        val count = seconds * srHz
+        val count = 30 * srHz
         val samples = List(count) { index ->
             val timeSec = index.toDouble() / srHz
-            val ramp = 1.2 * index / (count - 1).toDouble()
-            val value = ramp +
-                0.7 * sin(2 * PI * timeSec) +
+            val drift = 1.2 * index / (count - 1).toDouble()
+            val value = drift +
+                syntheticBeatAt(timeSec) +
+                0.26 * sin(2 * PI * 50.0 * timeSec) +
                 0.35 * sin(2 * PI * 80.0 * timeSec)
             EcgSample(index * 1000L / srHz, value.toFloat(), 70, index)
         }
@@ -66,9 +69,14 @@ class EcgDisplayProcessorTest {
         assertThat(abs(linearSlope(filteredValues, skip)))
             .isLessThan(abs(linearSlope(rawValues, skip)) * 0.2)
         assertThat(toneAmplitude(filteredValues, srHz, 80.0, skip))
-            .isLessThan(toneAmplitude(rawValues, srHz, 80.0, skip) * 0.55)
-        assertThat(toneAmplitude(filteredValues, srHz, 1.0, skip))
-            .isGreaterThan(toneAmplitude(rawValues, srHz, 1.0, skip) * 0.75)
+            .isLessThan(toneAmplitude(rawValues, srHz, 80.0, skip) * 0.1)
+        // Samsung delivers unfiltered ECG; without a notch the 50 Hz fundamental
+        // stays the size of a P wave even after a 40 Hz low-pass.
+        assertThat(toneAmplitude(filteredValues, srHz, 50.0, skip))
+            .isLessThan(toneAmplitude(rawValues, srHz, 50.0, skip) * 0.05)
+        val beatWindow = (10 * srHz) until (11 * srHz)
+        val rawR = beatWindow.maxOf { syntheticBeatAt(it.toDouble() / srHz) }
+        assertThat(beatWindow.maxOf { filteredValues[it] }.toDouble()).isGreaterThan(rawR * 0.8)
     }
 
     @Test
@@ -102,16 +110,29 @@ class EcgDisplayProcessorTest {
         val samples = List(count) { index ->
             val timeSec = index.toDouble() / srHz
             val electrodeOffset = 140.0 + 16.0 * kotlin.math.exp(-timeSec / 1.5)
-            val qrs = 0.7 * sin(2 * PI * 1.25 * timeSec)
-            EcgSample(index * 2L, (electrodeOffset + qrs).toFloat(), 75, index)
+            EcgSample(index * 2L, (electrodeOffset + syntheticBeatAt(timeSec)).toFloat(), 75, index)
         }
 
         val filtered = EcgDisplayProcessor.filter(samples, srHz, 1, false)
         val firstTwo = peakToPeak(filtered, 0, 2 * srHz)
         val middle = peakToPeak(filtered, 10 * srHz, 20 * srHz)
 
-        assertThat(middle.toDouble()).isGreaterThan(1.0)
-        assertThat(firstTwo.toDouble()).isLessThan(middle * 1.6)
+        assertThat(middle.toDouble()).isGreaterThan(0.6)
+        // The median-cascade baseline absorbs the polarization step instead of
+        // ringing on it, so the head of the record is the same size as the rest.
+        assertThat(firstTwo.toDouble()).isLessThan(middle * 1.25)
+    }
+
+    /** Narrow R, deep S, broad T at 75 bpm - the shape a Galaxy Watch records. */
+    private fun syntheticBeatAt(timeSec: Double): Double {
+        val rrSec = 60.0 / 75.0
+        var phase = timeSec % rrSec
+        if (phase < 0) phase += rrSec
+        fun bump(centre: Double, width: Double): Double {
+            val z = (phase - centre) / width
+            return kotlin.math.exp(-0.5 * z * z)
+        }
+        return 0.62 * bump(0.0, 0.016) - 0.47 * bump(0.030, 0.020) + 0.38 * bump(0.230, 0.048)
     }
 
     private fun linearSlope(values: FloatArray, start: Int): Double {

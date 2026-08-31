@@ -83,6 +83,71 @@ class LiveEcgProcessorTest {
         sampleFlags = IntArray(sampleCount),
     )
 
+    @Test
+    fun liveTraceNotchesMainsOnceTheProbeHasEnoughSamples() {
+        val srHz = 500.0
+        val lineHz = 49.85
+        val count = 2_000
+        val values = FloatArray(count) { index ->
+            val t = index / srHz
+            (beatAt(t) + 0.26 * sin(2 * PI * lineHz * t)).toFloat()
+        }
+        val processor = LiveEcgProcessor()
+        // Batches of ten, the way Samsung delivers them.
+        for (start in 0 until count step 10) {
+            processor.append(
+                batch(sequence = (start / 10) and 0xff, values = values.copyOfRange(start, start + 10)),
+            )
+        }
+
+        val line = processor.lineNoise
+        assertThat(line).isNotNull()
+        assertThat(line!!.frequencyHz).isWithin(0.3).of(lineHz)
+
+        // The notch turns on after the estimate, so measure the tail of the
+        // display window, which is entirely post-configuration.
+        val display = processor.displaySamples
+        val tail = display.subList(display.size - 500, display.size)
+        assertThat(toneAmplitude(tail, srHz, lineHz)).isLessThan(0.02)
+    }
+
+    @Test
+    fun liveTraceLeavesTheSignalAloneWhenThereIsNoMains() {
+        val srHz = 500.0
+        val count = 2_000
+        val values = FloatArray(count) { (beatAt(it / srHz)).toFloat() }
+        val processor = LiveEcgProcessor()
+        for (start in 0 until count step 10) {
+            processor.append(
+                batch(sequence = (start / 10) and 0xff, values = values.copyOfRange(start, start + 10)),
+            )
+        }
+
+        assertThat(processor.lineNoise).isNull()
+    }
+
+    private fun beatAt(timeSec: Double): Double {
+        val rrSec = 60.0 / (75.0 + 5.0 * sin(2 * PI * 0.25 * timeSec))
+        var phase = timeSec % rrSec
+        if (phase < 0) phase += rrSec
+        fun bump(centre: Double, width: Double): Double {
+            val z = (phase - centre) / width
+            return kotlin.math.exp(-0.5 * z * z)
+        }
+        return 0.62 * bump(0.0, 0.016) - 0.47 * bump(0.030, 0.020) + 0.38 * bump(0.230, 0.048)
+    }
+
+    private fun toneAmplitude(values: List<Float>, srHz: Double, frequencyHz: Double): Double {
+        var sine = 0.0
+        var cosine = 0.0
+        for (index in values.indices) {
+            val angle = 2 * PI * frequencyHz * index / srHz
+            sine += values[index] * sin(angle)
+            cosine += values[index] * kotlin.math.cos(angle)
+        }
+        return 2.0 * kotlin.math.sqrt(sine * sine + cosine * cosine) / values.size
+    }
+
     private fun batch(sequence: Int, values: FloatArray): EcgBatch = EcgBatch(
         samplesMv = values,
         sensorTimestampsMs = LongArray(values.size) { 1_000L + it * 2L },

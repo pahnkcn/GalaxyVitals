@@ -524,6 +524,17 @@ object EcgCsvParser {
         if (declaredDurationMs != null && kotlin.math.abs(declaredDurationMs - actualDurationMs) > 2L) {
             throw EcgParseException("ECG duration metadata does not match sensor timestamps")
         }
+        // Schema v3 stores the unmodified Samsung DataPoint timestamps, so the
+        // real sample rate is measurable instead of assumed. `effective_sr_hz`
+        // in the metadata is derived from the reconstructed `sample_index x 2`
+        // grid and therefore always restates the nominal rate; on Galaxy Watch
+        // hardware the true rate is near 501.67 Hz, which biases every interval
+        // built on the nominal grid by ~0.33%. Prefer the measured value.
+        val measuredSrHz = if (schemaVersion >= 3) {
+            EcgSignalChain.estimateSampleRateHz(samples, srHz)
+        } else {
+            effectiveSrHz
+        }
         return summarize(
             sessionId = sessionId,
             srHz = srHz,
@@ -537,7 +548,7 @@ object EcgCsvParser {
             schemaVersion = schemaVersion,
             captureSource = captureSource,
             timingTrust = timingTrust,
-            effectiveSrHz = effectiveSrHz,
+            effectiveSrHz = measuredSrHz,
             sensorStartMs = sensorStartMs,
             declaredSampleCount = declaredSampleCount,
             gapCount = gapCount,
