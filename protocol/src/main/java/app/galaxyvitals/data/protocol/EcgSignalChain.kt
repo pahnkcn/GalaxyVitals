@@ -406,7 +406,7 @@ object EcgSignalChain {
         return runningMedian(stageOne, oddKernel(BASELINE_STAGE_TWO_MS, srHz))
     }
 
-    private fun oddKernel(milliseconds: Int, srHz: Double): Int {
+    internal fun oddKernel(milliseconds: Int, srHz: Double): Int {
         var kernel = (milliseconds * srHz / 1_000.0).roundToInt()
         if (kernel % 2 == 0) kernel += 1
         return max(3, kernel)
@@ -436,7 +436,7 @@ object EcgSignalChain {
         return out
     }
 
-    private fun removeSorted(window: DoubleArray, size: Int, value: Double) {
+    internal fun removeSorted(window: DoubleArray, size: Int, value: Double) {
         var position = lowerBound(window, size, value)
         if (position >= size || window[position] != value) {
             // Guard against a binary-search miss on repeated values.
@@ -446,7 +446,7 @@ object EcgSignalChain {
         System.arraycopy(window, position + 1, window, position, size - position - 1)
     }
 
-    private fun insertSorted(window: DoubleArray, size: Int, value: Double) {
+    internal fun insertSorted(window: DoubleArray, size: Int, value: Double) {
         val position = lowerBound(window, size - 1, value)
         System.arraycopy(window, position, window, position + 1, size - position - 1)
         window[position] = value

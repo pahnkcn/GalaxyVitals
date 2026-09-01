@@ -4,6 +4,7 @@ import app.galaxyvitals.data.protocol.WaveformScale
 import app.galaxyvitals.wear.sensors.EcgBatch
 import com.google.common.truth.Truth.assertThat
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 import org.junit.Test
 
@@ -13,13 +14,13 @@ class LiveEcgProcessorTest {
         val processor = LiveEcgProcessor()
         processor.append(
             EcgBatch(
-                samplesMv = FloatArray(200) { index -> if (index % 20 == 0) 3f else 0.05f },
-                sensorTimestampsMs = LongArray(200) { 1_000L + it * 2L },
+                samplesMv = FloatArray(800) { index -> if (index % 20 == 0) 3f else 0.05f },
+                sensorTimestampsMs = LongArray(800) { 1_000L + it * 2L },
                 sequence = 0,
                 leadOff = 0,
                 minThresholdMv = -5f,
                 maxThresholdMv = 5f,
-                sampleFlags = IntArray(200),
+                sampleFlags = IntArray(800),
             ),
         )
         val polluted = processor.waveformFrame(50L)
@@ -52,25 +53,56 @@ class LiveEcgProcessorTest {
     }
 
     @Test
-    fun captureWindowCanReuseSettledDisplayFilterWithoutKeepingPreflightSamples() {
-        val values = FloatArray(751) { index ->
-            (0.2 * sin(2.0 * PI * 7.0 * index / 500.0)).toFloat()
-        }
-        val continuous = LiveEcgProcessor().also { processor ->
-            processor.append(batch(sequence = 0, values = values))
-        }
-        val warmStarted = LiveEcgProcessor().also { processor ->
-            processor.append(batch(sequence = 0, values = values.copyOf(750)))
-            processor.beginCaptureWindow(signFactor = 1, preserveDisplaySettling = true)
-            processor.append(batch(sequence = 0, values = floatArrayOf(values.last())))
-        }
+    fun displayDrawsNothingUntilTheMedianCascadeCanCentreAWindow() {
+        val processor = LiveEcgProcessor()
+        val hold = LiveEcgProcessor.DISPLAY_BASELINE_LOOKAHEAD_SAMPLES +
+            LiveEcgProcessor.DISPLAY_WARMUP_SAMPLES
 
-        assertThat(warmStarted.nextEcgSampleIndex).isEqualTo(1L)
-        assertThat(warmStarted.analysisSamples.toList()).containsExactly(values.last())
-        assertThat(warmStarted.displaySamples).hasSize(1)
-        assertThat(warmStarted.displaySamples.single())
-            .isWithin(1e-6f)
-            .of(continuous.displaySamples.last())
+        val next = appendInBatches(processor, FloatArray(hold) { 0.1f })
+        assertThat(processor.displaySamples).isEmpty()
+
+        appendInBatches(processor, FloatArray(10) { 0.1f }, startSequence = next)
+        assertThat(processor.displaySamples).hasSize(10)
+        // Anchored on the newest drawable sample, not the newest received one.
+        assertThat(processor.waveformFrame(100L).lastSampleIndex).isEqualTo(
+            processor.nextEcgSampleIndex - 1L -
+                LiveEcgProcessor.DISPLAY_BASELINE_LOOKAHEAD_SAMPLES,
+        )
+    }
+
+    @Test
+    fun electrodePolarisationAtCaptureStartDoesNotDominateTheFirstDrawnSecond() {
+        val srHz = 500.0
+        // The probe settles on one electrode offset. The capture runs on a
+        // restarted sensor session, which polarises from its own and ramps ~17 mV
+        // in 250 ms - what the watch does at the top of every recording, and 17x
+        // the size of the QRS riding on it.
+        val settledOffsetMv = 58f
+        val sessionStartMv = 41f
+        val rampSamples = 125
+        val processor = LiveEcgProcessor()
+        appendInBatches(
+            processor,
+            FloatArray(2_000) { settledOffsetMv + beatAt(it / srHz).toFloat() },
+        )
+
+        processor.beginCaptureWindow(signFactor = 1)
+        appendInBatches(
+            processor,
+            FloatArray(1_800) { index ->
+                val polarisation = if (index >= rampSamples) {
+                    settledOffsetMv
+                } else {
+                    sessionStartMv + (settledOffsetMv - sessionStartMv) * index / rampSamples
+                }
+                polarisation + beatAt(index / srHz).toFloat()
+            },
+        )
+
+        val drawn = processor.displaySamples
+        val steadyPeak = drawn.drop(500).maxOf { abs(it) }
+        assertThat(peakToPeak(drawn.take(500))).isLessThan(3f * steadyPeak)
+        assertThat(drawn.take(500).maxOf { abs(it) }).isLessThan(1.5f * steadyPeak)
     }
 
     @Test
@@ -165,11 +197,30 @@ class LiveEcgProcessorTest {
             )
         }
         val beforeCapture = processor.effectiveSrHz
-        processor.beginCaptureWindow(signFactor = 1, preserveDisplaySettling = true)
+        processor.beginCaptureWindow(signFactor = 1)
 
         assertThat(processor.conditionedSamples).isEmpty()
         // The sensor clock does not restart with the analysis window.
         assertThat(processor.effectiveSrHz).isWithin(1e-9).of(beforeCapture)
+    }
+
+    /**
+     * Feeds [values] the way Samsung delivers them, in contiguous batches of ten,
+     * returning the sequence number the next batch must carry to stay contiguous.
+     */
+    private fun appendInBatches(
+        processor: LiveEcgProcessor,
+        values: FloatArray,
+        startSequence: Int = 0,
+    ): Int {
+        var sequence = startSequence
+        for (start in values.indices step 10) {
+            val end = minOf(start + 10, values.size)
+            processor.append(
+                batch(sequence = sequence++, values = values.copyOfRange(start, end)),
+            )
+        }
+        return sequence
     }
 
     private fun peakToPeak(values: List<Float>): Float =
@@ -189,7 +240,9 @@ class LiveEcgProcessorTest {
     fun liveTraceNotchesMainsOnceTheProbeHasEnoughSamples() {
         val srHz = 500.0
         val lineHz = 49.85
-        val count = 2_000
+        // The notch reaches the display DISPLAY_BASELINE_LOOKAHEAD_SAMPLES after it
+        // is configured, so leave room for the measured tail to sit past that.
+        val count = 2_600
         val values = FloatArray(count) { index ->
             val t = index / srHz
             (beatAt(t) + 0.26 * sin(2 * PI * lineHz * t)).toFloat()

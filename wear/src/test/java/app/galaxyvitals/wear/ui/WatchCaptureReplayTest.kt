@@ -56,6 +56,7 @@ class WatchCaptureReplayTest {
                 offline = offline,
                 hrv = EcgHrvAnalyzer.analyze(offline),
                 displacement = refineDisplacementMs(parsed),
+                display = replayDisplayTrace(parsed),
                 recordedCoveragePct = recordedCoveragePct(parsed),
             )
         }
@@ -86,6 +87,14 @@ class WatchCaptureReplayTest {
             assertThat(m.replay.firstReliableSec).isAtMost(MAX_RAMP_SEC)
             assertThat(m.replay.coveragePct).isGreaterThan(m.recordedCoveragePct)
             assertThat(m.replay.coveragePct).isAtLeast(COVERAGE_FLOOR_PCT)
+
+            // The trace the wearer actually sees. Samsung's AFE restarts with the
+            // capture listener and polarises over the first quarter second; run
+            // through a linear high-pass that step drew at up to 17x the size of
+            // the QRS and pinned the autoscale wide for the next ten seconds.
+            assertThat(m.display.steadyPeakMv).isGreaterThan(0.0)
+            assertThat(m.display.startupPeakMv)
+                .isAtMost(DISPLAY_STARTUP_RATIO * m.display.steadyPeakMv)
         }
     }
 
@@ -96,6 +105,7 @@ class WatchCaptureReplayTest {
         val offline: app.galaxyvitals.data.protocol.EcgBeatResult,
         val hrv: app.galaxyvitals.data.protocol.EcgHrvResult,
         val displacement: Displacement,
+        val display: DisplayTrace,
         val recordedCoveragePct: Double,
     ) {
         fun describe(): String = buildString {
@@ -120,6 +130,9 @@ class WatchCaptureReplayTest {
             append(" rmssd=").append(hrv.rmssdMs?.let { "%.1f".format(it) })
             append(" pnn50=").append(hrv.pnn50Pct?.let { "%.1f".format(it) })
             append(" nn=").append(hrv.nnCount)
+            append(" displayStartup=").append("%.3f".format(display.startupPeakMv))
+            append(" displaySteady=").append("%.3f".format(display.steadyPeakMv))
+            append(" displayRatio=").append("%.2f".format(display.startupRatio))
             append("\n    timeline=").append(replay.timeline)
         }
     }
@@ -182,6 +195,35 @@ class WatchCaptureReplayTest {
                     "${second}s:${observation.status}/${observation.reasonCode}/rr=${observation.rrCount}"
                 }
             },
+        )
+    }
+
+    /**
+     * Collects the waveform the watch would have drawn, in order.
+     *
+     * `displaySamples` only keeps the last three seconds, so the frames are read
+     * as they are published - the same way `EcgMeasurementCoordinator` does - and
+     * points are taken once each, by sample index.
+     */
+    private fun replayDisplayTrace(parsed: ParsedEcgFile): DisplayTrace {
+        val processor = LiveEcgProcessor()
+        processor.beginCaptureWindow(signFactor = parsed.signFactor)
+        val drawn = ArrayList<Float>(parsed.samples.size)
+        var nextIndex = Long.MIN_VALUE
+        batches(parsed).forEach { batch ->
+            processor.append(batch)
+            processor.waveformFrame(UI_WAVEFORM_INTERVAL_MS).points.forEach { point ->
+                if (point.sampleIndex >= nextIndex) {
+                    drawn += point.valueMv
+                    nextIndex = point.sampleIndex + 1L
+                }
+            }
+        }
+        val second = (1_000L / PERIOD_MS).toInt()
+        val steady = drawn.drop(2 * second).map { abs(it.toDouble()) }.sorted()
+        return DisplayTrace(
+            startupPeakMv = drawn.take(second).maxOfOrNull { abs(it.toDouble()) } ?: 0.0,
+            steadyPeakMv = if (steady.isEmpty()) 0.0 else steady[((steady.size - 1) * 995) / 1_000],
         )
     }
 
@@ -274,6 +316,15 @@ class WatchCaptureReplayTest {
         val timeline: String,
     )
 
+    private data class DisplayTrace(
+        /** Largest drawn excursion in the first second of the trace. */
+        val startupPeakMv: Double,
+        /** P99.5 of the drawn magnitude from two seconds on - the QRS, in effect. */
+        val steadyPeakMv: Double,
+    ) {
+        val startupRatio: Double get() = if (steadyPeakMv <= 0.0) 0.0 else startupPeakMv / steadyPeakMv
+    }
+
     private data class Displacement(
         val p50: Double,
         val p95: Double,
@@ -295,5 +346,12 @@ class WatchCaptureReplayTest {
         const val LIVE_VS_OFFLINE_BPM = 2.0
         const val REFINE_DISPLACEMENT_MS = 20.0
         const val SEARCH_RADIUS_MS = 60.0
+        const val UI_WAVEFORM_INTERVAL_MS = 100L
+
+        /**
+         * How much taller than the QRS the first drawn second may be. Anything
+         * above 1 is the electrode ramp still showing; the old chain ran to 17.
+         */
+        const val DISPLAY_STARTUP_RATIO = 1.5
     }
 }

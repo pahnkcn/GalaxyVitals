@@ -709,7 +709,8 @@ class EcgMeasurementCoordinatorTest {
     fun samsungBatchTimestampsStayOneDisplaySegmentAndKeepCausalFilter() {
         val uniform = LiveEcgProcessor()
         val samsung = LiveEcgProcessor()
-        val batchCount = 8
+        // Enough batches to clear the display lookahead and warm-up hold.
+        val batchCount = 48
         val batchSize = 10
         val values = FloatArray(batchCount * batchSize) { index ->
             140f + 0.8f * sin(2 * PI * 5.0 * index / 500.0).toFloat()
@@ -748,10 +749,12 @@ class EcgMeasurementCoordinatorTest {
         samsungPoints.indices.forEach { index ->
             assertThat(samsungPoints[index].valueMv).isWithin(1e-5f).of(uniformValues[index])
         }
-        val laterBatchStarts = (1 until batchCount).map {
-            kotlin.math.abs(samsungPoints[it * batchSize].valueMv)
-        }
-        assertThat(laterBatchStarts.maxOrNull()!!).isGreaterThan(0.2f)
+        // A per-batch filter reset would DC-prime every batch boundary to zero.
+        val batchStartMagnitudes = samsungPoints
+            .filter { it.sampleIndex % batchSize == 0L }
+            .map { kotlin.math.abs(it.valueMv) }
+        assertThat(batchStartMagnitudes).isNotEmpty()
+        assertThat(batchStartMagnitudes.maxOrNull()!!).isGreaterThan(0.2f)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package app.galaxyvitals.wear.ui
 
 import app.galaxyvitals.data.protocol.CausalSosFilter
+import app.galaxyvitals.data.protocol.DelayedMedianBaseline
 import app.galaxyvitals.data.protocol.EcgCausalConditioning
 import app.galaxyvitals.data.protocol.EcgLineNoise
 import app.galaxyvitals.data.protocol.EcgSignalChain
@@ -93,13 +94,21 @@ class LiveEcgProcessor(
     private val analysis = ArrayList<Float>(ANALYSIS_WINDOW_SAMPLES)
     private val conditioned = ArrayList<Float>(ANALYSIS_WINDOW_SAMPLES)
     private val ppgPoints = ArrayList<LivePpgPoint>(ANALYSIS_WINDOW_SAMPLES / 5)
-    private val displayFilter = CausalSosFilter(EcgCausalConditioning.BANDPASS_SOS_500)
+    private val displayBaseline = DelayedMedianBaseline(srHz.toDouble())
+    private val displayLowPass = EcgCausalConditioning.lowPass(srHz)
     private val analysisFilter = EcgCausalConditioning.bandpass(srHz)
     private var lineNotch: CausalSosFilter? = null
     private var analysisNotch: CausalSosFilter? = null
     private var lineEstimateAttempted = false
     private var scale = WaveformScale.Default
-    private var preserveFilterForNextSegment = false
+
+    // Display conditioning lags the stream by the median cascade's lookahead and
+    // holds back the head of every segment, so the newest drawable sample is not
+    // the newest one received.
+    private var streamOpen = false
+    private var pendingSegmentStart = true
+    private var displayWarmupLeft = DISPLAY_WARMUP_SAMPLES
+    private var lastEmittedIndex = -1L
 
     // One timestamp per batch is a real clock observation; the rest of the batch
     // repeats it. Kept across a capture window so the measured rate sharpens
@@ -177,15 +186,29 @@ class LiveEcgProcessor(
         nextEcgSampleIndex = 0L
         lastSequence = -1
         analysisWindowCopyCount = 0
-        displayFilter.reset()
+        displayBaseline.reset()
+        displayLowPass.reset()
         analysisFilter.reset()
         lineNotch = null
         analysisNotch = null
         lineNoise = null
         lineEstimateAttempted = false
-        preserveFilterForNextSegment = false
-        scale = WaveformScale.Default
+        restartDisplayWindow()
         resetClock()
+    }
+
+    /**
+     * Drop everything the display path knows about where it is in the stream.
+     *
+     * The filters themselves are re-armed by the discontinuity branch of [append],
+     * which [streamOpen] forces on the next sample.
+     */
+    private fun restartDisplayWindow() {
+        streamOpen = false
+        pendingSegmentStart = true
+        displayWarmupLeft = DISPLAY_WARMUP_SAMPLES
+        lastEmittedIndex = -1L
+        scale = WaveformScale.Default
     }
 
     private fun resetClock() {
@@ -199,12 +222,21 @@ class LiveEcgProcessor(
         reset(signFactor)
     }
 
-    fun beginCaptureWindow(signFactor: Int, preserveDisplaySettling: Boolean = false) {
-        if (!preserveDisplaySettling || signFactor != this.signFactor) {
+    /**
+     * Open the recording window on the sensor session that has just restarted.
+     *
+     * Samsung caps a listener at 30 s, so a capture always runs on a session the
+     * probe did not: its AFE re-polarises from its own offset and the display
+     * conditioning has nothing valid to carry across - warm-starting it there put
+     * a step the size of the whole electrode offset through the filters. The
+     * measured sample clock and the mains estimate do survive, because neither
+     * restarts with the listener.
+     */
+    fun beginCaptureWindow(signFactor: Int) {
+        if (signFactor != this.signFactor) {
             reset(signFactor)
             return
         }
-        this.signFactor = signFactor
         display.clear()
         analysis.clear()
         conditioned.clear()
@@ -215,7 +247,7 @@ class LiveEcgProcessor(
         nextEcgSampleIndex = 0L
         lastSequence = -1
         analysisWindowCopyCount = 0
-        preserveFilterForNextSegment = true
+        restartDisplayWindow()
     }
 
     /** Re-express the retained clock observations against the new sample origin. */
@@ -241,19 +273,19 @@ class LiveEcgProcessor(
         val gapFlags = EcgSampleFlags.TIMESTAMP_GAP or EcgSampleFlags.SEQUENCE_GAP
         for (index in batch.samplesMv.indices) {
             val flags = batch.sampleFlags[index]
-            var startsNew = display.isEmpty()
-            if (index == 0 && sequenceBreak) startsNew = true
-            if (flags and gapFlags != 0) startsNew = true
-            val canWarmStart = index == 0 && preserveFilterForNextSegment && flags and gapFlags == 0
-            if (startsNew && !canWarmStart) {
-                displayFilter.reset()
+            var discontinuity = !streamOpen
+            if (index == 0 && sequenceBreak) discontinuity = true
+            if (flags and gapFlags != 0) discontinuity = true
+            if (discontinuity) {
+                displayBaseline.reset()
+                displayLowPass.reset()
                 analysisFilter.reset()
-            }
-            if (index == 0) preserveFilterForNextSegment = false
-            if (startsNew && !canWarmStart) {
                 lineNotch?.reset()
                 analysisNotch?.reset()
+                displayWarmupLeft = DISPLAY_WARMUP_SAMPLES
+                pendingSegmentStart = true
             }
+            streamOpen = true
             val raw = batch.samplesMv[index]
             analysis += raw
             // Conditioned on the unoriented sample: the chain is linear, so the
@@ -261,17 +293,40 @@ class LiveEcgProcessor(
             conditioned += analysisFilter.filter(analysisNotch?.filter(raw) ?: raw)
             val oriented = raw * signFactor
             val notched = lineNotch?.filter(oriented) ?: oriented
-            display += WaveformPoint(
-                sampleIndex = batchStartIndex + index,
-                valueMv = displayFilter.filter(notched),
-                startsNewSegment = startsNew,
-            )
+            emitDisplaySample(displayBaseline.push(notched), batchStartIndex + index)
             recordClockObservation(batchStartIndex + index, batch.sensorTimestampsMs.getOrNull(index))
         }
         lastSequence = batch.sequence
         nextEcgSampleIndex += batch.samplesMv.size
         trim()
         configureLineNotch()
+    }
+
+    /**
+     * Low-pass [detrended] and add it to the display window.
+     *
+     * [detrended] belongs to the sample [DelayedMedianBaseline.lookaheadSamples]
+     * before [pushedIndex], and is null until the cascade has seen enough of the
+     * stream to centre a window. The first [DISPLAY_WARMUP_SAMPLES] of a segment
+     * are still filtered - the low-pass has to see them - but not drawn: they are
+     * the tail of the electrode ramp, and at 20x the size of a QRS they would set
+     * the autoscale for the next fifteen seconds.
+     */
+    private fun emitDisplaySample(detrended: Float?, pushedIndex: Long) {
+        if (detrended == null) return
+        val filtered = displayLowPass.filter(detrended)
+        if (displayWarmupLeft > 0) {
+            displayWarmupLeft--
+            return
+        }
+        val sampleIndex = pushedIndex - displayBaseline.lookaheadSamples
+        display += WaveformPoint(
+            sampleIndex = sampleIndex,
+            valueMv = filtered,
+            startsNewSegment = pendingSegmentStart,
+        )
+        pendingSegmentStart = false
+        lastEmittedIndex = sampleIndex
     }
 
     /**
@@ -318,7 +373,10 @@ class LiveEcgProcessor(
     }
 
     fun waveformFrame(deltaMs: Long): LiveWaveformFrame {
-        val last = (nextEcgSampleIndex - 1L).coerceAtLeast(0L)
+        // Anchored on the newest drawable sample, not the newest received one:
+        // display conditioning runs a fixed lookahead behind the stream, and
+        // anchoring ahead of it would park a permanent gap at the right edge.
+        val last = lastEmittedIndex.coerceAtLeast(0L)
         val first = last - (DISPLAY_WINDOW_SAMPLES - 1L)
         val points = when {
             display.isEmpty() -> emptyList()
@@ -370,6 +428,18 @@ class LiveEcgProcessor(
 
         /** 3 s is enough to place a Q=20 notch well inside its own bandwidth. */
         const val LINE_ESTIMATE_SAMPLES = 1_500
+
+        /**
+         * Held back at the head of every display segment.
+         *
+         * The median cascade absorbs the electrode-polarisation step but cannot
+         * centre a window on samples that have nothing before them, so the first
+         * conditioned samples still carry part of the ramp.
+         */
+        const val DISPLAY_WARMUP_SAMPLES = 100
+
+        /** [DelayedMedianBaseline.lookaheadSamples] at the declared 500 Hz. */
+        const val DISPLAY_BASELINE_LOOKAHEAD_SAMPLES = 200
 
         /** One clock observation per batch; 60 s of 10-sample batches at 500 Hz. */
         internal const val MAX_CLOCK_OBSERVATIONS = 3_000

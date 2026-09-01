@@ -115,11 +115,135 @@ object EcgCausalConditioning {
         doubleArrayOf(1.0, -2.0, 1.0, 1.0, -1.995246749028118, 0.9952864068099667),
     )
 
+    /**
+     * SciPy `butter(4, 40, btype="low", fs=500, output="sos")`.
+     *
+     * The display chain pairs this with [DelayedMedianBaseline] instead of the
+     * high-pass half of [BANDPASS_SOS_500]. These are not the first two sections
+     * of that cascade - those are 0.8% low across the passband.
+     */
+    val LOWPASS_SOS_500: Array<DoubleArray> = arrayOf(
+        doubleArrayOf(
+            0.00223489169808233, 0.00446978339616465, 0.00223489169808233,
+            1.0, -1.2128120926202186, 0.3840041622865537,
+        ),
+        doubleArrayOf(1.0, 2.0, 1.0, 1.0, -1.479798894397217, 0.6886769530538618),
+    )
+
+    /** The 40 Hz low-pass as a fresh, unprimed filter. */
+    fun lowPass(srHz: Int): CausalSosFilter {
+        require(srHz == EcgWearContract.DEFAULT_SR_HZ) {
+            "Causal ECG conditioning is only designed for ${EcgWearContract.DEFAULT_SR_HZ} Hz"
+        }
+        return CausalSosFilter(LOWPASS_SOS_500)
+    }
+
     /** The 0.5-40 Hz passband as a fresh, unprimed filter. */
     fun bandpass(srHz: Int): CausalSosFilter {
         require(srHz == EcgWearContract.DEFAULT_SR_HZ) {
             "Causal ECG conditioning is only designed for ${EcgWearContract.DEFAULT_SR_HZ} Hz"
         }
         return CausalSosFilter(BANDPASS_SOS_500)
+    }
+}
+
+/**
+ * Sliding median over a stream, centred on a sample [radius] back.
+ *
+ * Same window mechanics as [EcgSignalChain.runningMedian] - a sorted array kept
+ * by insert/remove rather than a per-sample sort - and the same head policy:
+ * the first sample is replicated [radius] times so the window is full from the
+ * start. The tail cannot be padded on a live stream, so output simply lags the
+ * input by [radius] samples.
+ */
+internal class StreamingMedian(private val kernel: Int) {
+    val radius: Int = kernel / 2
+
+    private val window = DoubleArray(kernel)
+    private val ring = DoubleArray(kernel)
+    private var filled = 0
+    private var head = 0
+    private var started = false
+
+    fun reset() {
+        filled = 0
+        head = 0
+        started = false
+    }
+
+    /** The median centred on the sample pushed [radius] calls ago, once one exists. */
+    fun push(value: Double): Double? {
+        if (!started) {
+            started = true
+            repeat(radius) { admit(value) }
+        }
+        admit(value)
+        return if (filled == kernel) window[radius] else null
+    }
+
+    private fun admit(value: Double) {
+        if (filled < kernel) {
+            EcgSignalChain.insertSorted(window, filled + 1, value)
+            ring[filled] = value
+            filled++
+            return
+        }
+        EcgSignalChain.removeSorted(window, kernel, ring[head])
+        EcgSignalChain.insertSorted(window, kernel, value)
+        ring[head] = value
+        head = (head + 1) % kernel
+    }
+}
+
+/**
+ * Streaming twin of [EcgSignalChain.baseline]: a 200 ms -> 600 ms median cascade,
+ * subtracted from the sample it was measured around.
+ *
+ * The live display used to remove baseline with the 0.5 Hz corner of
+ * [EcgCausalConditioning.BANDPASS_SOS_500]. Samsung's AFE restarts at the top of a
+ * capture and ramps ~17 mV while the electrode polarises; a linear high-pass rings
+ * on that step for seconds, which is exactly why the offline chain uses medians
+ * instead. Medians need samples on both sides, so this runs [lookaheadSamples]
+ * behind the stream - the price of a trace that starts clean.
+ */
+class DelayedMedianBaseline(srHz: Double) {
+    private val stageOne = StreamingMedian(
+        EcgSignalChain.oddKernel(EcgSignalChain.BASELINE_STAGE_ONE_MS, srHz),
+    )
+    private val stageTwo = StreamingMedian(
+        EcgSignalChain.oddKernel(EcgSignalChain.BASELINE_STAGE_TWO_MS, srHz),
+    )
+
+    /** How far behind the newest pushed sample the returned value sits. */
+    val lookaheadSamples: Int = stageOne.radius + stageTwo.radius
+
+    private val delayLine = DoubleArray(lookaheadSamples + 1)
+    private var cursor = 0
+
+    fun reset() {
+        stageOne.reset()
+        stageTwo.reset()
+        delayLine.fill(0.0)
+        cursor = 0
+    }
+
+    /** Detrended value for the sample pushed [lookaheadSamples] calls ago. */
+    fun push(value: Float): Float? {
+        val delayed = pushDelay(value.toDouble())
+        val stageOneMedian = stageOne.push(value.toDouble()) ?: return null
+        val baseline = stageTwo.push(stageOneMedian) ?: return null
+        return (delayed - baseline).toFloat()
+    }
+
+    /**
+     * Rotates [value] into the delay line and returns the sample [lookaheadSamples]
+     * behind it. The line holds exactly one more sample than the lookahead, so the
+     * slot the cursor lands on after advancing is the oldest one; it is only read
+     * once the cascade has a baseline to pair it with.
+     */
+    private fun pushDelay(value: Double): Double {
+        delayLine[cursor] = value
+        cursor = (cursor + 1) % delayLine.size
+        return delayLine[cursor]
     }
 }

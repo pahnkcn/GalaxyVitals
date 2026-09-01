@@ -550,10 +550,7 @@ class EcgMeasurementCoordinator(
             )
             countdownJob?.cancel()
             countdownJob = null
-            liveEcgProcessor.beginCaptureWindow(
-                signFactor = EcgWearContract.signFactorFor(selectedWrist),
-                preserveDisplaySettling = true,
-            )
+            liveEcgProcessor.beginCaptureWindow(EcgWearContract.signFactorFor(selectedWrist))
             awaitingFirstBatch = true
             lastUiWaveformAt = 0L
             lastBpmScheduleAt = 0L
