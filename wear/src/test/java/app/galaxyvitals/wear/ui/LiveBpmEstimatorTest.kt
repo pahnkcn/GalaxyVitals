@@ -198,6 +198,22 @@ class LiveBpmEstimatorTest {
     }
 
     @Test
+    fun aRateSittingExactlyOnABoundDoesNotFlicker() {
+        // Sub-millisecond RR resolution dithers a steady 40 bpm subject by
+        // fractions of a bpm; the clean_40 replay fixture abstained eight times
+        // in a 30 s capture because of it.
+        listOf(40.0, 39.9999, 39.6, 180.0, 180.0001, 180.4).forEach { bpm ->
+            val assessment = LiveBpmEstimator.publish(
+                beatResult(bpm = bpm, bSqi = 0.95, matched = 8),
+                ppgBpm = null,
+                nowMs = 1L,
+            )
+            assertThat(assessment.reason).isNull()
+            assertThat(assessment.estimate).isNotNull()
+        }
+    }
+
+    @Test
     fun outOfRangeBpmAbstains() {
         val high = beatResult(bpm = 181.0, bSqi = 0.95, matched = 8)
         val highAssessment = LiveBpmEstimator.publish(high, ppgBpm = null, nowMs = 1L)

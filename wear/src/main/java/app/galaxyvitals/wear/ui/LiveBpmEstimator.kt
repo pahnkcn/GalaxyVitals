@@ -53,7 +53,7 @@ object LiveBpmEstimator {
         if (rrCount < MIN_RR_COUNT || bpmMedian == null) {
             return abstain(BpmAbstainReason.INSUFFICIENT_RR, ecg.bSqi, rrCount, bpmMedian, corroboration, ppgBpm)
         }
-        if (bpmMedian < MIN_BPM || bpmMedian > MAX_BPM) {
+        if (!publishable(bpmMedian)) {
             return abstain(BpmAbstainReason.OUT_OF_RANGE, ecg.bSqi, rrCount, bpmMedian, corroboration, ppgBpm)
         }
         // One bar, whether or not a second sensor happens to be reporting.
@@ -69,6 +69,18 @@ object LiveBpmEstimator {
         }
         return assessed(bpmMedian, source, epoch, ecg.bSqi, rrCount, nowMs, corroboration, ppgBpm)
     }
+
+    /**
+     * Whether a rate is inside the publishable range.
+     *
+     * [MIN_BPM] and [MAX_BPM] are plausibility bounds, not physiological cliffs,
+     * and sub-millisecond RR resolution dithers a subject sitting exactly on one
+     * of them by fractions of a bpm. Without the tolerance a steady 40.0 bpm
+     * flickers in and out of range - a false abstain manufactured by the
+     * detector's own precision.
+     */
+    private fun publishable(bpm: Double): Boolean =
+        bpm >= MIN_BPM - BPM_BOUND_TOLERANCE && bpm <= MAX_BPM + BPM_BOUND_TOLERANCE
 
     private fun corroborationOf(ecgBpm: Double?, referenceBpm: Double?): BpmCorroboration {
         if (ecgBpm == null || referenceBpm == null) return BpmCorroboration.UNAVAILABLE
@@ -99,7 +111,7 @@ object LiveBpmEstimator {
             (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
         }
         val bpm = 60_000.0 / median
-        return if (bpm in MIN_BPM.toDouble()..MAX_BPM.toDouble()) bpm else null
+        return if (publishable(bpm)) bpm else null
     }
 
     private fun abstain(
@@ -167,7 +179,7 @@ object LiveBpmEstimator {
             (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
         }
         val bpm = 60_000.0 / median
-        return if (bpm in MIN_BPM.toDouble()..MAX_BPM.toDouble()) bpm else null
+        return if (publishable(bpm)) bpm else null
     }
 
     private fun contiguousRuns(points: List<LivePpgPoint>): List<List<LivePpgPoint>> {
@@ -302,6 +314,9 @@ object LiveBpmEstimator {
     private const val MAX_RR_MS = 1_500.0
     private const val MIN_BPM = 40
     private const val MAX_BPM = 180
+
+    /** Half a bpm of slack so a rate sitting on a bound does not flicker. */
+    private const val BPM_BOUND_TOLERANCE = 0.5
     private const val BSQI_MIN = 0.80
     private const val MIN_IBI_COUNT = 3
     private const val PPG_ABS_BPM = 5.0
