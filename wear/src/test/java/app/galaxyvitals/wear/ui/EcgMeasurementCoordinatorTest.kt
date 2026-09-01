@@ -798,7 +798,7 @@ class EcgMeasurementCoordinatorTest {
         startRecording(harness)
         (harness.computeDispatcher as GatedDispatcher).block = true
         val before = harness.recorder.sampleCount
-        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisCopyCount
+        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisWindowCopyCount
         var sequence = harness.nextSequence
         repeat(40) {
             harness.now += 20L
@@ -807,7 +807,7 @@ class EcgMeasurementCoordinatorTest {
         }
         assertThat(harness.recorder.sampleCount).isEqualTo(before + 400)
         assertThat(harness.coordinator.state.value.phase).isEqualTo(MeasurePhase.Recording)
-        assertThat(harness.coordinator.liveEcgProcessor.analysisCopyCount - copiesBefore).isEqualTo(1)
+        assertThat(harness.coordinator.liveEcgProcessor.analysisWindowCopyCount - copiesBefore).isEqualTo(1)
         gate.countDown()
         assertThat(gate.await(1, TimeUnit.SECONDS)).isTrue()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
@@ -823,7 +823,7 @@ class EcgMeasurementCoordinatorTest {
         val harness = Harness()
         startRecording(harness)
         val start = harness.now
-        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisCopyCount
+        val copiesBefore = harness.coordinator.liveEcgProcessor.analysisWindowCopyCount
         var sequence = harness.nextSequence
         repeat(200) {
             harness.now += 10L
@@ -838,7 +838,7 @@ class EcgMeasurementCoordinatorTest {
         val elapsed = harness.now - start
         assertThat(elapsed).isEqualTo(4_000L)
         val maxAllowed = (elapsed / 1_000L).toInt() + 1
-        val copies = harness.coordinator.liveEcgProcessor.analysisCopyCount - copiesBefore
+        val copies = harness.coordinator.liveEcgProcessor.analysisWindowCopyCount - copiesBefore
         assertThat(copies).isGreaterThan(0)
         assertThat(copies).isAtMost(maxAllowed)
         assertThat(harness.coordinator.bpmComputeCount).isGreaterThan(0)

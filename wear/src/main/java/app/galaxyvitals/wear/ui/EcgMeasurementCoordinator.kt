@@ -1043,9 +1043,11 @@ class EcgMeasurementCoordinator(
         bpmDirty = false
         bpmInFlight = true
         val snapshot = BpmSnapshot(
-            rawWindow = liveEcgProcessor.analysisSamples,
+            analysisWindow = liveEcgProcessor.conditionedSamples,
             livePpg = liveEcgProcessor.livePpg,
             signFactor = liveEcgProcessor.signFactor,
+            effectiveSrHz = liveEcgProcessor.effectiveSrHz,
+            samsungIbiMs = preMeasurementHeartRate?.validIbiMs.orEmpty(),
             analysisSampleCount = liveEcgProcessor.analysisSampleCount,
             atSampleIndex = (liveEcgProcessor.nextEcgSampleIndex - 1L).coerceAtLeast(0L),
             captureElapsedMs = (now - captureStartedAt).coerceAtLeast(0L),
@@ -1057,11 +1059,13 @@ class EcgMeasurementCoordinator(
         bpmWorkerJob = scope.launch(computeDispatcher) {
             bpmComputeCount++
             val assessment = LiveBpmEstimator.estimate(
-                rawWindow = snapshot.rawWindow,
+                analysisWindow = snapshot.analysisWindow,
                 livePpg = snapshot.livePpg,
                 signFactor = snapshot.signFactor,
                 nowMs = snapshot.now,
+                effectiveSrHz = snapshot.effectiveSrHz,
                 epoch = snapshot.epoch,
+                samsungIbiMs = snapshot.samsungIbiMs,
             )
             events.trySend(AcqEvent.BpmResult(id, gen, snapshot, assessment))
         }
@@ -1073,7 +1077,8 @@ class EcgMeasurementCoordinator(
         if (estimated != null) {
             bpmLogger(
                 "publish epoch=${estimated.epoch} source=${estimated.source} bSqi=${estimated.bSqi} " +
-                    "rr=${estimated.rrCount} bpm=${estimated.bpm}",
+                    "rr=${estimated.rrCount} bpm=${estimated.bpm} " +
+                    "corroboration=${estimated.corroboration} srHz=${snapshot.effectiveSrHz}",
             )
         } else {
             bpmLogger(
@@ -1167,9 +1172,11 @@ class EcgMeasurementCoordinator(
     }
 
     private data class BpmSnapshot(
-        val rawWindow: FloatArray,
+        val analysisWindow: FloatArray,
         val livePpg: List<LivePpgPoint>,
         val signFactor: Int,
+        val effectiveSrHz: Double,
+        val samsungIbiMs: List<Int>,
         val analysisSampleCount: Int,
         val atSampleIndex: Long,
         val captureElapsedMs: Long,

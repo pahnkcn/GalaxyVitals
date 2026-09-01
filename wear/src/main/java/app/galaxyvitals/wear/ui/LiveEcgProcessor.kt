@@ -1,5 +1,7 @@
 package app.galaxyvitals.wear.ui
 
+import app.galaxyvitals.data.protocol.CausalSosFilter
+import app.galaxyvitals.data.protocol.EcgCausalConditioning
 import app.galaxyvitals.data.protocol.EcgLineNoise
 import app.galaxyvitals.data.protocol.EcgSignalChain
 import app.galaxyvitals.data.protocol.EcgWaveformGeometry
@@ -8,7 +10,6 @@ import app.galaxyvitals.data.protocol.WaveformPoint
 import app.galaxyvitals.data.protocol.WaveformScale
 import app.galaxyvitals.domain.EcgSampleFlags
 import app.galaxyvitals.wear.sensors.EcgBatch
-import kotlin.math.abs
 
 enum class BpmSource {
     SAMSUNG_PROCESSED_HR,
@@ -23,8 +24,21 @@ enum class BpmEpoch { PREFLIGHT, CAPTURE }
 enum class BpmAbstainReason {
     INSUFFICIENT_RR,
     LOW_BSQI,
-    ECG_PPG_DISAGREEMENT,
     OUT_OF_RANGE,
+}
+
+/**
+ * What a second sensor had to say about the ECG estimate.
+ *
+ * Annotation only. ECG R-peak timing is the better measurement by a wide margin,
+ * so a wrist PPG that disagrees is a reason to record lower confidence, never a
+ * reason to publish nothing: a Samsung preflight PPG reading 83 bpm against 62
+ * bpm from ECG used to suppress an entire capture.
+ */
+enum class BpmCorroboration {
+    UNAVAILABLE,
+    AGREES,
+    DISAGREES,
 }
 
 data class BpmEstimate(
@@ -34,6 +48,7 @@ data class BpmEstimate(
     val bSqi: Double? = null,
     val rrCount: Int? = null,
     val updatedAtElapsedMs: Long,
+    val corroboration: BpmCorroboration = BpmCorroboration.UNAVAILABLE,
 )
 
 data class BpmAssessment(
@@ -42,6 +57,9 @@ data class BpmAssessment(
     val bSqi: Double = 0.0,
     val rrCount: Int = 0,
     val rawBpm: Double? = null,
+    val corroboration: BpmCorroboration = BpmCorroboration.UNAVAILABLE,
+    /** BPM the corroborating sensor reported, when there was one. */
+    val corroboratingBpm: Double? = null,
 )
 
 enum class LiveBpmAvailability {
@@ -73,12 +91,25 @@ class LiveEcgProcessor(
 
     private val display = ArrayList<WaveformPoint>(DISPLAY_WINDOW_SAMPLES)
     private val analysis = ArrayList<Float>(ANALYSIS_WINDOW_SAMPLES)
+    private val conditioned = ArrayList<Float>(ANALYSIS_WINDOW_SAMPLES)
     private val ppgPoints = ArrayList<LivePpgPoint>(ANALYSIS_WINDOW_SAMPLES / 5)
-    private val displayFilter = CausalSosFilter(DISPLAY_SOS_500)
+    private val displayFilter = CausalSosFilter(EcgCausalConditioning.BANDPASS_SOS_500)
+    private val analysisFilter = EcgCausalConditioning.bandpass(srHz)
     private var lineNotch: CausalSosFilter? = null
+    private var analysisNotch: CausalSosFilter? = null
     private var lineEstimateAttempted = false
     private var scale = WaveformScale.Default
     private var preserveFilterForNextSegment = false
+
+    // One timestamp per batch is a real clock observation; the rest of the batch
+    // repeats it. Kept across a capture window so the measured rate sharpens
+    // instead of restarting at the declared 500 Hz.
+    private val clockSampleIndices = LongArray(MAX_CLOCK_OBSERVATIONS)
+    private val clockTimestampsMs = LongArray(MAX_CLOCK_OBSERVATIONS)
+    private var clockObservationCount = 0
+    private var lastClockTimestampMs = -1L
+    private var cachedEffectiveSrHz = srHz.toDouble()
+    private var cachedEffectiveSrAtCount = -1
 
     /** Powerline interference measured on this run, once enough samples exist. */
     var lineNoise: EcgLineNoise? = null
@@ -89,12 +120,12 @@ class LiveEcgProcessor(
 
     val displaySamples: List<Float> get() = display.map { it.valueMv }
 
-    internal var analysisCopyCount: Int = 0
+    /** Copies of the detector's analysis window handed out, for cadence tests. */
+    internal var analysisWindowCopyCount: Int = 0
         private set
 
     val analysisSamples: FloatArray
         get() {
-            analysisCopyCount++
             val out = FloatArray(analysis.size)
             for (index in analysis.indices) out[index] = analysis[index]
             return out
@@ -103,20 +134,65 @@ class LiveEcgProcessor(
     val livePpg: List<LivePpgPoint> get() = ppgPoints.toList()
     val analysisSampleCount: Int get() = analysis.size
 
+    /**
+     * The analysis window after causal 0.5-40 Hz conditioning - the trace the
+     * beat detector reads. Wrist baseline wander is larger than the QRS riding
+     * on it, so a detector fed [analysisSamples] measures the wander instead of
+     * the beat; this is the same passband the offline path applies zero-phase.
+     */
+    val conditionedSamples: FloatArray
+        get() {
+            analysisWindowCopyCount++
+            val out = FloatArray(conditioned.size)
+            for (index in conditioned.indices) out[index] = conditioned[index]
+            return out
+        }
+
+    /**
+     * Sample rate measured from the Samsung `DataPoint` timestamps, or the
+     * declared rate until enough batches have arrived to fit one. Galaxy Watch
+     * runs near 501.67 Hz, which biases every live RR interval by 0.33% when
+     * the declared 500 is used instead.
+     */
+    val effectiveSrHz: Double
+        get() {
+            if (cachedEffectiveSrAtCount != clockObservationCount) {
+                cachedEffectiveSrHz = EcgSignalChain.estimateSampleRateHz(
+                    clockSampleIndices,
+                    clockTimestampsMs,
+                    clockObservationCount,
+                    srHz,
+                )
+                cachedEffectiveSrAtCount = clockObservationCount
+            }
+            return cachedEffectiveSrHz
+        }
+
     fun reset(signFactor: Int = this.signFactor) {
         this.signFactor = signFactor
         display.clear()
         analysis.clear()
+        conditioned.clear()
         ppgPoints.clear()
         nextEcgSampleIndex = 0L
         lastSequence = -1
-        analysisCopyCount = 0
+        analysisWindowCopyCount = 0
         displayFilter.reset()
+        analysisFilter.reset()
         lineNotch = null
+        analysisNotch = null
         lineNoise = null
         lineEstimateAttempted = false
         preserveFilterForNextSegment = false
         scale = WaveformScale.Default
+        resetClock()
+    }
+
+    private fun resetClock() {
+        clockObservationCount = 0
+        lastClockTimestampMs = -1L
+        cachedEffectiveSrHz = srHz.toDouble()
+        cachedEffectiveSrAtCount = -1
     }
 
     fun beginSettledWindow(signFactor: Int) {
@@ -131,11 +207,23 @@ class LiveEcgProcessor(
         this.signFactor = signFactor
         display.clear()
         analysis.clear()
+        conditioned.clear()
         ppgPoints.clear()
+        // The sensor clock does not restart with the window, and the probe has
+        // already collected observations worth keeping.
+        rebaseClock(nextEcgSampleIndex)
         nextEcgSampleIndex = 0L
         lastSequence = -1
-        analysisCopyCount = 0
+        analysisWindowCopyCount = 0
         preserveFilterForNextSegment = true
+    }
+
+    /** Re-express the retained clock observations against the new sample origin. */
+    private fun rebaseClock(origin: Long) {
+        for (index in 0 until clockObservationCount) {
+            clockSampleIndices[index] -= origin
+        }
+        cachedEffectiveSrAtCount = -1
     }
 
     fun append(batch: EcgBatch) {
@@ -157,17 +245,28 @@ class LiveEcgProcessor(
             if (index == 0 && sequenceBreak) startsNew = true
             if (flags and gapFlags != 0) startsNew = true
             val canWarmStart = index == 0 && preserveFilterForNextSegment && flags and gapFlags == 0
-            if (startsNew && !canWarmStart) displayFilter.reset()
+            if (startsNew && !canWarmStart) {
+                displayFilter.reset()
+                analysisFilter.reset()
+            }
             if (index == 0) preserveFilterForNextSegment = false
-            if (startsNew && !canWarmStart) lineNotch?.reset()
-            analysis += batch.samplesMv[index]
-            val oriented = batch.samplesMv[index] * signFactor
+            if (startsNew && !canWarmStart) {
+                lineNotch?.reset()
+                analysisNotch?.reset()
+            }
+            val raw = batch.samplesMv[index]
+            analysis += raw
+            // Conditioned on the unoriented sample: the chain is linear, so the
+            // caller's sign factor still means what it means downstream.
+            conditioned += analysisFilter.filter(analysisNotch?.filter(raw) ?: raw)
+            val oriented = raw * signFactor
             val notched = lineNotch?.filter(oriented) ?: oriented
             display += WaveformPoint(
                 sampleIndex = batchStartIndex + index,
                 valueMv = displayFilter.filter(notched),
                 startsNewSegment = startsNew,
             )
+            recordClockObservation(batchStartIndex + index, batch.sensorTimestampsMs.getOrNull(index))
         }
         lastSequence = batch.sequence
         nextEcgSampleIndex += batch.samplesMv.size
@@ -190,7 +289,32 @@ class LiveEcgProcessor(
         }
         val line = EcgSignalChain.estimateLineNoise(window, srHz.toDouble()) ?: return
         lineNoise = line
-        lineNotch = CausalSosFilter(notchSos(line.frequencyHz, srHz.toDouble()))
+        val sections = EcgCausalConditioning.notchSos(line.frequencyHz, srHz.toDouble())
+        if (sections.isEmpty()) return
+        lineNotch = CausalSosFilter(sections)
+        analysisNotch = CausalSosFilter(sections)
+    }
+
+    /**
+     * One distinct `DataPoint` timestamp per batch is a real observation of the
+     * sensor clock; the other nine samples repeat it and carry no information.
+     */
+    private fun recordClockObservation(sampleIndex: Long, timestampMs: Long?) {
+        if (timestampMs == null || timestampMs < 0L || timestampMs == lastClockTimestampMs) return
+        lastClockTimestampMs = timestampMs
+        if (clockObservationCount >= MAX_CLOCK_OBSERVATIONS) {
+            // Drop the oldest half rather than stop observing: the fit stays
+            // anchored to the most recent, longest-span stretch of the capture.
+            val keep = MAX_CLOCK_OBSERVATIONS / 2
+            val from = clockObservationCount - keep
+            System.arraycopy(clockSampleIndices, from, clockSampleIndices, 0, keep)
+            System.arraycopy(clockTimestampsMs, from, clockTimestampsMs, 0, keep)
+            clockObservationCount = keep
+        }
+        clockSampleIndices[clockObservationCount] = sampleIndex
+        clockTimestampsMs[clockObservationCount] = timestampMs
+        clockObservationCount++
+        cachedEffectiveSrAtCount = -1
     }
 
     fun waveformFrame(deltaMs: Long): LiveWaveformFrame {
@@ -216,11 +340,12 @@ class LiveEcgProcessor(
 
     fun estimate(nowMs: Long, epoch: BpmEpoch = BpmEpoch.CAPTURE): BpmAssessment =
         LiveBpmEstimator.estimate(
-            rawWindow = analysisSamples,
+            analysisWindow = conditionedSamples,
             livePpg = livePpg,
             signFactor = signFactor,
             nowMs = nowMs,
             srHz = srHz,
+            effectiveSrHz = effectiveSrHz,
             epoch = epoch,
         )
 
@@ -229,6 +354,8 @@ class LiveEcgProcessor(
         if (extraDisplay > 0) display.subList(0, extraDisplay).clear()
         val extraAnalysis = analysis.size - ANALYSIS_WINDOW_SAMPLES
         if (extraAnalysis > 0) analysis.subList(0, extraAnalysis).clear()
+        val extraConditioned = conditioned.size - ANALYSIS_WINDOW_SAMPLES
+        if (extraConditioned > 0) conditioned.subList(0, extraConditioned).clear()
         val minIndex = nextEcgSampleIndex - analysis.size
         if (ppgPoints.isNotEmpty()) {
             ppgPoints.removeAll { point ->
@@ -244,88 +371,8 @@ class LiveEcgProcessor(
         /** 3 s is enough to place a Q=20 notch well inside its own bandwidth. */
         const val LINE_ESTIMATE_SAMPLES = 1_500
 
-        /** RBJ notch, and its first two harmonics while they stay under Nyquist. */
-        internal fun notchSos(lineHz: Double, srHz: Double): Array<DoubleArray> {
-            val sections = ArrayList<DoubleArray>(3)
-            var harmonic = lineHz
-            var order = 1
-            while (harmonic < 0.45 * srHz && order <= 3) {
-                val w0 = 2.0 * Math.PI * harmonic / srHz
-                val cosine = kotlin.math.cos(w0)
-                val alpha = kotlin.math.sin(w0) / (2.0 * EcgSignalChain.LINE_NOTCH_Q * order)
-                sections += doubleArrayOf(
-                    1.0, -2.0 * cosine, 1.0,
-                    1.0 + alpha, -2.0 * cosine, 1.0 - alpha,
-                )
-                harmonic += lineHz
-                order++
-            }
-            return sections.toTypedArray()
-        }
-
-        /** SciPy `butter(4, [0.5, 40], btype="bandpass", fs=500, output="sos")` — causal only. */
-        private val DISPLAY_SOS_500 = arrayOf(
-            doubleArrayOf(
-                0.0021387987326912015, 0.004277597465382403, 0.0021387987326912015,
-                1.0, -1.22787587909828, 0.39352306024517103,
-            ),
-            doubleArrayOf(1.0, 2.0, 1.0, 1.0, -1.486663673168146, 0.6949675580253452),
-            doubleArrayOf(1.0, -2.0, 1.0, 1.0, -1.9882154714982394, 0.9882564156624591),
-            doubleArrayOf(1.0, -2.0, 1.0, 1.0, -1.995246749028118, 0.9952864068099667),
-        )
+        /** One clock observation per batch; 60 s of 10-sample batches at 500 Hz. */
+        internal const val MAX_CLOCK_OBSERVATIONS = 3_000
     }
 }
 
-/** Direct-form II transposed SOS; DC-primes so a constant electrode offset does not spike. */
-private class CausalSosFilter(private val sos: Array<DoubleArray>) {
-    private val z0 = DoubleArray(sos.size)
-    private val z1 = DoubleArray(sos.size)
-    private var primed = false
-
-    fun reset() {
-        z0.fill(0.0)
-        z1.fill(0.0)
-        primed = false
-    }
-
-    fun filter(input: Float): Float {
-        var x = input.toDouble()
-        if (!primed) {
-            prime(x)
-            primed = true
-        }
-        for (sectionIndex in sos.indices) {
-            val section = sos[sectionIndex]
-            val a0 = if (abs(section[3]) < 1e-12) 1.0 else section[3]
-            val b0 = section[0] / a0
-            val b1 = section[1] / a0
-            val b2 = section[2] / a0
-            val a1 = section[4] / a0
-            val a2 = section[5] / a0
-            val y = b0 * x + z0[sectionIndex]
-            z0[sectionIndex] = b1 * x - a1 * y + z1[sectionIndex]
-            z1[sectionIndex] = b2 * x - a2 * y
-            x = y
-        }
-        return x.toFloat()
-    }
-
-    private fun prime(x0: Double) {
-        var x = x0
-        for (sectionIndex in sos.indices) {
-            val section = sos[sectionIndex]
-            val a0 = if (abs(section[3]) < 1e-12) 1.0 else section[3]
-            val b0 = section[0] / a0
-            val b1 = section[1] / a0
-            val b2 = section[2] / a0
-            val a1 = section[4] / a0
-            val a2 = section[5] / a0
-            val denominator = 1.0 + a1 + a2
-            val gain = if (abs(denominator) > 1e-12) (b0 + b1 + b2) / denominator else 0.0
-            val y = gain * x
-            z1[sectionIndex] = b2 * x - a2 * y
-            z0[sectionIndex] = b1 * x - a1 * y + z1[sectionIndex]
-            x = y
-        }
-    }
-}

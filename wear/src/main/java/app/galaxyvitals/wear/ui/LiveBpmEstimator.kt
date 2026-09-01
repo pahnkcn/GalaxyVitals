@@ -1,7 +1,9 @@
 package app.galaxyvitals.wear.ui
 
 import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
+import app.galaxyvitals.data.protocol.EcgBeatDetectorConfig
 import app.galaxyvitals.data.protocol.EcgBeatResult
+import app.galaxyvitals.data.protocol.EcgDetectorInput
 import app.galaxyvitals.data.protocol.EcgWearContract
 import kotlin.math.abs
 import kotlin.math.exp
@@ -9,19 +11,34 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Live BPM publish helper. ECG is the displayed source; sparse PPG only corroborates.
+ * Live BPM publish helper.
+ *
+ * ECG is authoritative. A second opinion - Samsung's own per-beat `IBI_LIST`
+ * where the tracker supplied one, otherwise the sparse green PPG that rides on
+ * the ECG datapoint - only annotates the published estimate; it never vetoes it.
  */
 object LiveBpmEstimator {
     fun estimate(
-        rawWindow: FloatArray,
+        analysisWindow: FloatArray,
         livePpg: List<LivePpgPoint>,
         signFactor: Int,
         nowMs: Long,
         srHz: Int = EcgWearContract.DEFAULT_SR_HZ,
+        effectiveSrHz: Double = srHz.toDouble(),
         epoch: BpmEpoch = BpmEpoch.CAPTURE,
+        samsungIbiMs: List<Int> = emptyList(),
+        input: EcgDetectorInput = EcgDetectorInput.CONDITIONED,
     ): BpmAssessment {
-        val ecg = EcgBeatAnalyzer.analyzeWindow(rawWindow, srHz, signFactor)
-        return publish(ecg, estimateSparsePpgBpm(livePpg, srHz), nowMs, epoch)
+        val ecg = EcgBeatAnalyzer.analyzeWindow(
+            samplesMv = analysisWindow,
+            srHz = srHz,
+            signFactor = signFactor,
+            config = EcgBeatDetectorConfig.DEFAULT,
+            effectiveSrHz = effectiveSrHz,
+            input = input,
+        )
+        val reference = samsungIbiBpm(samsungIbiMs) ?: estimateSparsePpgBpm(livePpg, srHz)
+        return publish(ecg, reference, nowMs, epoch)
     }
 
     fun publish(
@@ -32,33 +49,57 @@ object LiveBpmEstimator {
     ): BpmAssessment {
         val bpmMedian = ecg.bpmMedian
         val rrCount = (ecg.matchedPeaks.size - 1).coerceAtLeast(0)
+        val corroboration = corroborationOf(bpmMedian, ppgBpm)
         if (rrCount < MIN_RR_COUNT || bpmMedian == null) {
-            return abstain(BpmAbstainReason.INSUFFICIENT_RR, ecg.bSqi, rrCount, bpmMedian)
+            return abstain(BpmAbstainReason.INSUFFICIENT_RR, ecg.bSqi, rrCount, bpmMedian, corroboration, ppgBpm)
         }
         if (bpmMedian < MIN_BPM || bpmMedian > MAX_BPM) {
-            return abstain(BpmAbstainReason.OUT_OF_RANGE, ecg.bSqi, rrCount, bpmMedian)
+            return abstain(BpmAbstainReason.OUT_OF_RANGE, ecg.bSqi, rrCount, bpmMedian, corroboration, ppgBpm)
         }
+        // One bar, whether or not a second sensor happens to be reporting.
+        // Requiring 0.90 without PPG and 0.80 with it made PPG availability
+        // loosen the ECG bar, which is backwards.
         if (ecg.bSqi < BSQI_MIN) {
-            return abstain(BpmAbstainReason.LOW_BSQI, ecg.bSqi, rrCount, bpmMedian)
+            return abstain(BpmAbstainReason.LOW_BSQI, ecg.bSqi, rrCount, bpmMedian, corroboration, ppgBpm)
         }
-        if (ppgBpm != null) {
-            val allowedDiff = maxOf(PPG_ABS_BPM, bpmMedian * PPG_REL_FRACTION)
-            if (abs(ppgBpm - bpmMedian) > allowedDiff) {
-                return abstain(BpmAbstainReason.ECG_PPG_DISAGREEMENT, ecg.bSqi, rrCount, bpmMedian)
-            }
-            return assessed(
-                bpmMedian,
-                BpmSource.APP_ECG_RR_PPG_CORROBORATED,
-                epoch,
-                ecg.bSqi,
-                rrCount,
-                nowMs,
-            )
+        val source = if (corroboration == BpmCorroboration.AGREES) {
+            BpmSource.APP_ECG_RR_PPG_CORROBORATED
+        } else {
+            BpmSource.APP_ECG_RR
         }
-        if (ecg.bSqi < BSQI_ECG_ONLY) {
-            return abstain(BpmAbstainReason.LOW_BSQI, ecg.bSqi, rrCount, bpmMedian)
+        return assessed(bpmMedian, source, epoch, ecg.bSqi, rrCount, nowMs, corroboration, ppgBpm)
+    }
+
+    private fun corroborationOf(ecgBpm: Double?, referenceBpm: Double?): BpmCorroboration {
+        if (ecgBpm == null || referenceBpm == null) return BpmCorroboration.UNAVAILABLE
+        val allowedDiff = maxOf(PPG_ABS_BPM, ecgBpm * PPG_REL_FRACTION)
+        return if (abs(referenceBpm - ecgBpm) > allowedDiff) {
+            BpmCorroboration.DISAGREES
+        } else {
+            BpmCorroboration.AGREES
         }
-        return assessed(bpmMedian, BpmSource.APP_ECG_RR, epoch, ecg.bSqi, rrCount, nowMs)
+    }
+
+    /**
+     * Median of Samsung's own per-beat intervals.
+     *
+     * `HEART_RATE_CONTINUOUS` already computes beat timings with a status flag,
+     * which is a far better second opinion than re-deriving beats from two green
+     * PPG points per batch. The tracker often supplies none - two of three
+     * observed preflights returned `ibi_ms: []` - so the sparse-PPG estimator
+     * stays as the fallback.
+     */
+    internal fun samsungIbiBpm(ibiMs: List<Int>): Double? {
+        val valid = ibiMs.map(Int::toDouble).filter { it in MIN_RR_MS..MAX_RR_MS }
+        if (valid.size < MIN_IBI_COUNT) return null
+        val sorted = valid.sorted()
+        val median = if (sorted.size % 2 == 1) {
+            sorted[sorted.size / 2]
+        } else {
+            (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
+        }
+        val bpm = 60_000.0 / median
+        return if (bpm in MIN_BPM.toDouble()..MAX_BPM.toDouble()) bpm else null
     }
 
     private fun abstain(
@@ -66,12 +107,16 @@ object LiveBpmEstimator {
         bSqi: Double,
         rrCount: Int,
         rawBpm: Double?,
+        corroboration: BpmCorroboration,
+        corroboratingBpm: Double?,
     ) = BpmAssessment(
         estimate = null,
         reason = reason,
         bSqi = bSqi,
         rrCount = rrCount,
         rawBpm = rawBpm,
+        corroboration = corroboration,
+        corroboratingBpm = corroboratingBpm,
     )
 
     private fun assessed(
@@ -81,6 +126,8 @@ object LiveBpmEstimator {
         bSqi: Double,
         rrCount: Int,
         nowMs: Long,
+        corroboration: BpmCorroboration,
+        corroboratingBpm: Double?,
     ) = BpmAssessment(
         estimate = BpmEstimate(
             bpm = bpm,
@@ -89,10 +136,13 @@ object LiveBpmEstimator {
             bSqi = bSqi,
             rrCount = rrCount,
             updatedAtElapsedMs = nowMs,
+            corroboration = corroboration,
         ),
         bSqi = bSqi,
         rrCount = rrCount,
         rawBpm = bpm,
+        corroboration = corroboration,
+        corroboratingBpm = corroboratingBpm,
     )
 
     fun estimateSparsePpgBpm(
@@ -253,7 +303,7 @@ object LiveBpmEstimator {
     private const val MIN_BPM = 40
     private const val MAX_BPM = 180
     private const val BSQI_MIN = 0.80
-    private const val BSQI_ECG_ONLY = 0.90
+    private const val MIN_IBI_COUNT = 3
     private const val PPG_ABS_BPM = 5.0
     private const val PPG_REL_FRACTION = 0.08
     private const val HP_HZ = 0.5

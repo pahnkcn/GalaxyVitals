@@ -73,6 +73,108 @@ class LiveEcgProcessorTest {
             .of(continuous.displaySamples.last())
     }
 
+    @Test
+    fun conditionedBufferRemovesWanderTheDetectorWouldOtherwiseMeasure() {
+        val srHz = 500.0
+        val count = 5_000
+        // 0.9 mV peak-to-peak of wander under a 1.2 mV R wave, which is what a
+        // wrist capture actually delivers.
+        val values = FloatArray(count) { index ->
+            val t = index / srHz
+            (beatAt(t) + 0.45 * sin(2 * PI * 0.3 * t)).toFloat()
+        }
+        val processor = LiveEcgProcessor()
+        for (start in 0 until count step 10) {
+            processor.append(batch(sequence = (start / 10) and 0xff, values = values.copyOfRange(start, start + 10)))
+        }
+
+        assertThat(processor.conditionedSamples).hasLength(processor.analysisSamples.size)
+        // Raw keeps the wander; the conditioned trace does not.
+        val rawTail = processor.analysisSamples.toList().takeLast(2_000)
+        val conditionedTail = processor.conditionedSamples.toList().takeLast(2_000)
+        assertThat(peakToPeak(rawTail)).isGreaterThan(1.5f)
+        val rawWander = toneAmplitude(rawTail, srHz, 0.3)
+        val conditionedWander = toneAmplitude(conditionedTail, srHz, 0.3)
+        assertThat(rawWander).isGreaterThan(0.4)
+        // Four poles at 0.5 Hz leave about an eighth of a 0.3 Hz component, which
+        // takes the wander from larger than the R wave to a small fraction of it.
+        assertThat(conditionedWander).isLessThan(0.2 * rawWander)
+        assertThat(conditionedWander).isLessThan(0.1)
+    }
+
+    @Test
+    fun conditioningIsLinearSoTheCallersSignFactorStillApplies() {
+        val values = FloatArray(1_000) { index -> beatAt(index / 500.0).toFloat() }
+        val upright = LiveEcgProcessor(signFactor = 1)
+        val inverted = LiveEcgProcessor(signFactor = -1)
+        for (start in 0 until 1_000 step 10) {
+            val slice = values.copyOfRange(start, start + 10)
+            upright.append(batch(sequence = (start / 10) and 0xff, values = slice))
+            inverted.append(batch(sequence = (start / 10) and 0xff, values = slice))
+        }
+        // The analysis chain runs on the unoriented sample, so both processors
+        // hold the same conditioned trace and the sign is applied downstream.
+        assertThat(inverted.conditionedSamples.toList()).isEqualTo(upright.conditionedSamples.toList())
+    }
+
+    @Test
+    fun effectiveSampleRateIsMeasuredFromSamsungBatchTimestamps() {
+        val srHz = 501.67
+        val processor = LiveEcgProcessor()
+        val batches = 500
+        for (index in 0 until batches) {
+            val stamp = 1_000L + (index * 10 * 1_000.0 / srHz).toLong()
+            processor.append(
+                EcgBatch(
+                    samplesMv = FloatArray(10) { 0.1f },
+                    sensorTimestampsMs = LongArray(10) { stamp },
+                    sequence = index and 0xff,
+                    leadOff = 0,
+                    minThresholdMv = -5f,
+                    maxThresholdMv = 5f,
+                    sampleFlags = IntArray(10),
+                ),
+            )
+        }
+        assertThat(processor.effectiveSrHz).isWithin(0.3).of(srHz)
+    }
+
+    @Test
+    fun effectiveSampleRateFallsBackToTheDeclaredRateBeforeEnoughBatchesArrive() {
+        val processor = LiveEcgProcessor()
+        processor.append(transientBatch(sequence = 0, valueMv = 0.1f, sampleCount = 10))
+        assertThat(processor.effectiveSrHz).isWithin(1e-9).of(500.0)
+    }
+
+    @Test
+    fun captureWindowKeepsTheClockObservationsTheProbeCollected() {
+        val srHz = 501.67
+        val processor = LiveEcgProcessor()
+        for (index in 0 until 500) {
+            val stamp = 1_000L + (index * 10 * 1_000.0 / srHz).toLong()
+            processor.append(
+                EcgBatch(
+                    samplesMv = FloatArray(10) { 0.1f },
+                    sensorTimestampsMs = LongArray(10) { stamp },
+                    sequence = index and 0xff,
+                    leadOff = 0,
+                    minThresholdMv = -5f,
+                    maxThresholdMv = 5f,
+                    sampleFlags = IntArray(10),
+                ),
+            )
+        }
+        val beforeCapture = processor.effectiveSrHz
+        processor.beginCaptureWindow(signFactor = 1, preserveDisplaySettling = true)
+
+        assertThat(processor.conditionedSamples).isEmpty()
+        // The sensor clock does not restart with the analysis window.
+        assertThat(processor.effectiveSrHz).isWithin(1e-9).of(beforeCapture)
+    }
+
+    private fun peakToPeak(values: List<Float>): Float =
+        (values.max() - values.min())
+
     private fun transientBatch(sequence: Int, valueMv: Float, sampleCount: Int = 10): EcgBatch = EcgBatch(
         samplesMv = FloatArray(sampleCount) { valueMv },
         sensorTimestampsMs = LongArray(sampleCount) { 1_000L + it * 2L },

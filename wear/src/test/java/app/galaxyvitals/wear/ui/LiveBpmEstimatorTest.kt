@@ -1,8 +1,10 @@
 package app.galaxyvitals.wear.ui
 
 import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
+import app.galaxyvitals.data.protocol.EcgBeatDetectorConfig
 import app.galaxyvitals.data.protocol.EcgBpmStatus
 import app.galaxyvitals.data.protocol.EcgBeatResult
+import app.galaxyvitals.data.protocol.EcgDetectorInput
 import app.galaxyvitals.data.protocol.EcgWearContract
 import app.galaxyvitals.wear.sensors.EcgBatch
 import app.galaxyvitals.wear.sensors.PpgGreenBatch
@@ -31,7 +33,14 @@ class LiveBpmEstimatorTest {
         assertThat(estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR_PPG_CORROBORATED)
         assertThat(abs(estimate.bpm - 72.0)).isAtMost(4.0)
         assertThat(estimate.bpm).isWithin(0.01).of(
-            EcgBeatAnalyzer.analyzeWindow(processor.analysisSamples, 500, 1).bpmMedian!!,
+            EcgBeatAnalyzer.analyzeWindow(
+                samplesMv = processor.conditionedSamples,
+                srHz = 500,
+                signFactor = 1,
+                config = EcgBeatDetectorConfig.DEFAULT,
+                effectiveSrHz = processor.effectiveSrHz,
+                input = EcgDetectorInput.CONDITIONED,
+            ).bpmMedian!!,
         )
     }
 
@@ -69,7 +78,7 @@ class LiveBpmEstimatorTest {
     }
 
     @Test
-    fun ppgDisagreementAbstains() {
+    fun ppgDisagreementAnnotatesButStillPublishesEcg() {
         val ecg = syntheticQrs(seconds = 10.0, bpm = 72.0)
         val processor = LiveEcgProcessor()
         feed(processor, ecg, syntheticSparsePpg(ecg.size, bpm = 110), batchSize = 10)
@@ -77,8 +86,42 @@ class LiveBpmEstimatorTest {
         assertThat(LiveBpmEstimator.estimateSparsePpgBpm(processor.livePpg)).isNotNull()
         assertThat(abs(LiveBpmEstimator.estimateSparsePpgBpm(processor.livePpg)!! - 110.0)).isAtMost(6.0)
         val assessment = processor.estimate(10_000L)
-        assertThat(assessment.estimate).isNull()
-        assertThat(assessment.reason).isEqualTo(BpmAbstainReason.ECG_PPG_DISAGREEMENT)
+        assertThat(assessment.reason).isNull()
+        val estimate = assessment.estimate
+        assertThat(estimate).isNotNull()
+        assertThat(abs(estimate!!.bpm - 72.0)).isAtMost(4.0)
+        assertThat(estimate.source).isEqualTo(BpmSource.APP_ECG_RR)
+        assertThat(estimate.corroboration).isEqualTo(BpmCorroboration.DISAGREES)
+        assertThat(assessment.corroboratingBpm).isNotNull()
+    }
+
+    @Test
+    fun samsungIbiIsPreferredOverSparsePpgForCorroboration() {
+        // 72 bpm is 833 ms; sparse green PPG here says 110 bpm.
+        val ecg = syntheticQrs(seconds = 10.0, bpm = 72.0)
+        val processor = LiveEcgProcessor()
+        feed(processor, ecg, syntheticSparsePpg(ecg.size, bpm = 110), batchSize = 10)
+
+        val assessment = LiveBpmEstimator.estimate(
+            analysisWindow = processor.conditionedSamples,
+            livePpg = processor.livePpg,
+            signFactor = processor.signFactor,
+            nowMs = 10_000L,
+            effectiveSrHz = processor.effectiveSrHz,
+            samsungIbiMs = listOf(833, 830, 836, 833),
+        )
+        val estimate = assessment.estimate
+        assertThat(estimate).isNotNull()
+        assertThat(estimate!!.corroboration).isEqualTo(BpmCorroboration.AGREES)
+        assertThat(estimate.source).isEqualTo(BpmSource.APP_ECG_RR_PPG_CORROBORATED)
+        assertThat(assessment.corroboratingBpm!!).isWithin(1.0).of(72.0)
+    }
+
+    @Test
+    fun samsungIbiIsIgnoredWhenTheTrackerSuppliedNone() {
+        assertThat(LiveBpmEstimator.samsungIbiBpm(emptyList())).isNull()
+        assertThat(LiveBpmEstimator.samsungIbiBpm(listOf(833, 830))).isNull()
+        assertThat(LiveBpmEstimator.samsungIbiBpm(listOf(0, 0, 0, 0))).isNull()
     }
 
     @Test
@@ -106,18 +149,20 @@ class LiveBpmEstimatorTest {
     }
 
     @Test
-    fun ecgOnlyRequiresBsqiAtLeast90() {
-        val mid = beatResult(bpm = 72.0, bSqi = 0.89, matched = 8)
-        val abstained = LiveBpmEstimator.publish(mid, ppgBpm = null, nowMs = 1L)
-        assertThat(abstained.estimate).isNull()
-        assertThat(abstained.reason).isEqualTo(BpmAbstainReason.LOW_BSQI)
+    fun oneBsqiThresholdWhetherOrNotASecondSensorIsReporting() {
+        val mid = beatResult(bpm = 72.0, bSqi = 0.85, matched = 8)
+        val withoutPpg = LiveBpmEstimator.publish(mid, ppgBpm = null, nowMs = 1L)
+        assertThat(withoutPpg.estimate).isNotNull()
+        assertThat(withoutPpg.estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR)
+        assertThat(withoutPpg.estimate!!.bpm).isEqualTo(72.0)
+        assertThat(withoutPpg.estimate!!.rrCount).isEqualTo(7)
+        assertThat(withoutPpg.corroboration).isEqualTo(BpmCorroboration.UNAVAILABLE)
 
-        val high = beatResult(bpm = 72.0, bSqi = 0.90, matched = 8)
-        val assessment = LiveBpmEstimator.publish(high, ppgBpm = null, nowMs = 1L)
-        assertThat(assessment.estimate).isNotNull()
-        assertThat(assessment.estimate!!.source).isEqualTo(BpmSource.APP_ECG_RR)
-        assertThat(assessment.estimate!!.bpm).isEqualTo(72.0)
-        assertThat(assessment.estimate!!.rrCount).isEqualTo(7)
+        val below = beatResult(bpm = 72.0, bSqi = 0.79, matched = 8)
+        assertThat(LiveBpmEstimator.publish(below, ppgBpm = 72.0, nowMs = 1L).reason)
+            .isEqualTo(BpmAbstainReason.LOW_BSQI)
+        assertThat(LiveBpmEstimator.publish(below, ppgBpm = null, nowMs = 1L).reason)
+            .isEqualTo(BpmAbstainReason.LOW_BSQI)
     }
 
     @Test
