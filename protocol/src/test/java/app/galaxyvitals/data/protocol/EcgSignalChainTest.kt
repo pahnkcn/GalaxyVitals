@@ -173,6 +173,38 @@ class EcgSignalChainTest {
     }
 
     @Test
+    fun theArrayOverloadFitsTheSameRateAsTheSampleListOverload() {
+        val srHz = 501.67
+        val samples = batchedSamples(count = 5_000, srHz = srHz) { syntheticEcgAt(it, bpm = 60.0) }
+        val fromSamples = EcgSignalChain.estimateSampleRateHz(samples, nominalSrHz = 500)
+        val fromArray = EcgSignalChain.estimateSampleRateHz(
+            LongArray(samples.size) { samples[it].sensorTimestampMsRaw!! },
+            nominalSrHz = 500,
+        )
+        assertThat(fromArray).isWithin(0.05).of(srHz)
+        assertThat(fromArray).isWithin(1e-9).of(fromSamples)
+    }
+
+    @Test
+    fun theSparseOverloadFitsTheRateFromOneObservationPerBatch() {
+        val srHz = 501.67
+        val batchSize = 10
+        val batches = 400
+        val indices = LongArray(batches) { (it * batchSize).toLong() }
+        val stamps = LongArray(batches) { 1_000L + (it * batchSize * 1_000.0 / srHz).toLong() }
+        val measured = EcgSignalChain.estimateSampleRateHz(indices, stamps, batches, nominalSrHz = 500)
+        assertThat(measured).isWithin(0.2).of(srHz)
+    }
+
+    @Test
+    fun theSparseOverloadFallsBackToNominalWithTooFewObservations() {
+        val indices = LongArray(8) { (it * 10).toLong() }
+        val stamps = LongArray(8) { 1_000L + it * 20L }
+        assertThat(EcgSignalChain.estimateSampleRateHz(indices, stamps, 8, nominalSrHz = 500))
+            .isWithin(1e-9).of(500.0)
+    }
+
+    @Test
     fun beatAnalyzerUsesTheMeasuredRateForRrIntervals() {
         // 500 declared, 501.6659 measured: the analysis grid must follow the
         // measured rate or every RR interval is 0.33% long.

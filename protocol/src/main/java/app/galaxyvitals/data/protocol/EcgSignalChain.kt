@@ -150,8 +150,7 @@ object EcgSignalChain {
      * distinct stamps or the fit lands more than [MAX_SR_DEVIATION] off nominal.
      */
     fun estimateSampleRateHz(samples: List<EcgSample>, nominalSrHz: Int): Double {
-        val nominal = nominalSrHz.toDouble()
-        if (nominalSrHz <= 0) return nominal
+        if (nominalSrHz <= 0) return nominalSrHz.toDouble()
         val indices = ArrayList<Double>()
         val stamps = ArrayList<Double>()
         var previous = Long.MIN_VALUE
@@ -162,6 +161,60 @@ object EcgSignalChain {
             indices += sample.sampleIndex.toDouble()
             stamps += raw.toDouble()
         }
+        return fitSampleRateHz(indices, stamps, nominalSrHz)
+    }
+
+    /**
+     * Same fit over parallel arrays, for callers that hold raw timestamps
+     * without having built [EcgSample] rows - the CSV writer and the on-watch
+     * live path. Entry `i` of [sensorTimestampsMsRaw] is the stamp of sample
+     * index `i`; repeated stamps inside one batch are collapsed here so there is
+     * one clock estimator in the codebase rather than two.
+     */
+    fun estimateSampleRateHz(sensorTimestampsMsRaw: LongArray, nominalSrHz: Int): Double {
+        if (nominalSrHz <= 0) return nominalSrHz.toDouble()
+        val indices = ArrayList<Double>(sensorTimestampsMsRaw.size)
+        val stamps = ArrayList<Double>(sensorTimestampsMsRaw.size)
+        var previous = Long.MIN_VALUE
+        for (index in sensorTimestampsMsRaw.indices) {
+            val raw = sensorTimestampsMsRaw[index]
+            if (raw < 0L || raw == previous) continue
+            previous = raw
+            indices += index.toDouble()
+            stamps += raw.toDouble()
+        }
+        return fitSampleRateHz(indices, stamps, nominalSrHz)
+    }
+
+    /**
+     * Same fit from an explicit `(sample index, timestamp)` list, for the live
+     * path, which sees one stamp per batch and never materialises a dense
+     * per-sample array.
+     */
+    fun estimateSampleRateHz(
+        sampleIndices: LongArray,
+        timestampsMs: LongArray,
+        count: Int,
+        nominalSrHz: Int,
+    ): Double {
+        if (nominalSrHz <= 0) return nominalSrHz.toDouble()
+        val size = minOf(count, sampleIndices.size, timestampsMs.size)
+        if (size <= 0) return nominalSrHz.toDouble()
+        val indices = ArrayList<Double>(size)
+        val stamps = ArrayList<Double>(size)
+        for (index in 0 until size) {
+            indices += sampleIndices[index].toDouble()
+            stamps += timestampsMs[index].toDouble()
+        }
+        return fitSampleRateHz(indices, stamps, nominalSrHz)
+    }
+
+    private fun fitSampleRateHz(
+        indices: List<Double>,
+        stamps: List<Double>,
+        nominalSrHz: Int,
+    ): Double {
+        val nominal = nominalSrHz.toDouble()
         if (indices.size < MIN_CLOCK_OBSERVATIONS) return nominal
         var slope = leastSquaresSlope(indices, stamps) ?: return nominal
         val residuals = DoubleArray(indices.size)

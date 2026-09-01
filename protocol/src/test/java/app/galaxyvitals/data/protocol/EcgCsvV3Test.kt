@@ -312,6 +312,37 @@ class EcgCsvV3Test {
         }
     }
 
+    @Test
+    fun effectiveSampleRateIsMeasuredFromRawStampsNotTheReconstructedGrid() {
+        // 500 batches of 10 samples on a clock running at 501.67 Hz. `rel_ms` is
+        // rebuilt as sample_index x 2 ms, so deriving the rate from it could only
+        // ever restate the declared 500.
+        val srHz = 501.67
+        val batches = 500
+        val count = batches * 10
+        val rawTs = LongArray(count) { index ->
+            val batch = index / 10
+            1_000L + (batch * 10 * 1_000.0 / srHz).toLong()
+        }
+        val encoded = encodeV3(
+            values = FloatArray(count) { 0.1f },
+            rawTs = rawTs,
+            seq = IntArray(count) { (it / 10) and 0xff },
+            offset = IntArray(count) { it % 10 },
+            batchSize = IntArray(count) { 10 },
+        ).toString(Charsets.UTF_8)
+
+        val measured = Regex("\"effective_sr_hz\":([0-9.]+)").find(encoded)!!.groupValues[1].toDouble()
+        assertThat(measured).isWithin(0.2).of(srHz)
+        assertThat(encoded).contains("\"sr_hz\":500")
+    }
+
+    @Test
+    fun effectiveSampleRateFallsBackToNominalWhenTheClockIsUnusable() {
+        val encoded = encodeV3().toString(Charsets.UTF_8)
+        assertThat(encoded).contains("\"effective_sr_hz\":500.0")
+    }
+
     private fun encodeV3(
         values: FloatArray = floatArrayOf(-0.12f, -0.11f),
         rawTs: LongArray = longArrayOf(1_000L, 1_000L),

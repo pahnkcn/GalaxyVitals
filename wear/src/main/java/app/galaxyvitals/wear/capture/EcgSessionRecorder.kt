@@ -29,6 +29,7 @@ class EcgSessionRecorder {
     private var size = 0
     private var sensorStartMs = -1L
     private var previousTimestampMs = -1L
+    private var previousBatchSize = 0
     private var previousSequence = -1
     private var gapCount = 0
     private var missingSampleCount = 0
@@ -60,6 +61,7 @@ class EcgSessionRecorder {
             size = 0
             sensorStartMs = -1L
             previousTimestampMs = -1L
+            previousBatchSize = 0
             previousSequence = -1
             gapCount = 0
             missingSampleCount = 0
@@ -144,10 +146,24 @@ class EcgSessionRecorder {
                     throw EcgCaptureException("ECG reached the sensor saturation threshold")
                 }
                 if (previousRaw >= 0L) {
+                    // A batch carries one timestamp for all of its samples, so
+                    // the only real jump is the one at a batch boundary and it
+                    // should be the whole previous batch long. Counting every
+                    // boundary as a gap - which the old `delta > 2 ms` test did -
+                    // made `gap_count` a batch counter (1499 on a clean 30 s
+                    // capture) and useless as an artifact signal. Flag only a
+                    // jump half a batch beyond what the samples in between
+                    // account for.
                     val delta = timestamp - previousRaw
+                    val expectedMs = if (index == 0) {
+                        previousBatchSize * EXPECTED_PERIOD_MS
+                    } else {
+                        EXPECTED_PERIOD_MS
+                    }
+                    val limitMs = expectedMs + maxOf(EXPECTED_PERIOD_MS, expectedMs / 2L)
                     if (delta == 0L) {
                         pendingRepeats++
-                    } else if (delta > EXPECTED_PERIOD_MS) {
+                    } else if (delta > limitMs) {
                         pendingGaps++
                     }
                 }
@@ -166,6 +182,7 @@ class EcgSessionRecorder {
             }
             if (sensorStartMs < 0L) sensorStartMs = batch.sensorTimestampsMs[0]
             previousTimestampMs = previousRaw
+            previousBatchSize = storeCount
             previousSequence = batch.sequence
             repeatedTimestampCount += pendingRepeats
             gapCount += pendingGaps

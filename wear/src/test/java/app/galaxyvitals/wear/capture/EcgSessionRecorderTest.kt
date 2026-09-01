@@ -375,6 +375,49 @@ class EcgSessionRecorderTest {
         return sequence
     }
 
+    @Test
+    fun samsungBatchBoundariesAreNotCountedAsTimestampGaps() {
+        // Samsung repeats one DataPoint timestamp across a whole batch, so a
+        // clean 30 s capture has ~1500 batch boundaries and 13500 repeats. The
+        // old "delta > one sample period" test turned every boundary into a gap.
+        val parsed = recordSamsungBatches { it }
+
+        assertThat(parsed.gapCount).isEqualTo(0)
+        assertThat(parsed.repeatedTimestampCount)
+            .isEqualTo(EcgSessionRecorder.EXPECTED_SAMPLES / 10 * 9)
+    }
+
+    @Test
+    fun aDroppedBatchWorthOfTimeStillCountsAsAGap() {
+        // Sequence numbers stay contiguous; only the clock jumps, which is the
+        // one thing gap_count is supposed to notice.
+        val parsed = recordSamsungBatches { index -> if (index < 750) index else index + 2 }
+
+        assertThat(parsed.gapCount).isEqualTo(1)
+    }
+
+    private fun recordSamsungBatches(timestampBatchIndex: (Int) -> Int): app.galaxyvitals.data.protocol.ParsedEcgFile {
+        val recorder = EcgSessionRecorder()
+        recorder.begin("1700000010000", Wrist.LEFT, 1, 1_700_000_010_000L)
+        val batches = EcgSessionRecorder.EXPECTED_SAMPLES / 10
+        for (index in 0 until batches) {
+            val stamp = 1_000L + timestampBatchIndex(index) * 10L * EcgSessionRecorder.EXPECTED_PERIOD_MS
+            recorder.addEcg(
+                EcgBatch(
+                    samplesMv = FloatArray(10) { 0.1f },
+                    sensorTimestampsMs = LongArray(10) { stamp },
+                    sequence = index and 0xff,
+                    leadOff = 0,
+                    minThresholdMv = -5f,
+                    maxThresholdMv = 5f,
+                    sampleFlags = IntArray(10),
+                ),
+            )
+        }
+        val recorded = recorder.finish("""{"model":"unit","sensorSdk":"1.4.1"}""")
+        return EcgCsvParser.parseBytes(recorded.gzip, gzip = true, sessionIdHint = recorded.sessionId)
+    }
+
     private fun batch(
         firstIndex: Int,
         count: Int,

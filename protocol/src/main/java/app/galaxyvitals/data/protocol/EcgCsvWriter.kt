@@ -212,11 +212,11 @@ object EcgCsvWriter {
         }
         val periodMs = EcgWearContract.SAMPLE_PERIOD_MS
         val durationMs = (valuesMv.size - 1L) * periodMs
-        val effectiveSrHz = if (durationMs > 0L && valuesMv.size > 1) {
-            (valuesMv.size - 1) * 1000.0 / durationMs
-        } else {
-            nominalSrHz.toDouble()
-        }
+        // `rel_ms` is the reconstructed `sample_index x period` grid, so deriving
+        // the rate from it can only ever restate the nominal 500 Hz. The raw
+        // Samsung stamps are the only record of the real clock - near 501.67 Hz
+        // on this hardware - so fit them instead.
+        val effectiveSrHz = EcgSignalChain.estimateSampleRateHz(sensorTimestampsMsRaw, nominalSrHz)
         val rawSensorDurationMs = sensorTimestampsMsRaw.last() - sensorTimestampsMsRaw.first()
         val sessionDurationMs = valuesMv.size * periodMs
         val summary = LiveBpmSummarizer.summarize(bpmObservations, sessionDurationMs)
