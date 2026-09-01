@@ -56,10 +56,10 @@ fun SettingsScreen(
         )
         Section(
             "Rhythm model",
-            "After each recording the phone runs an on-device N/A/O rhythm model locally. " +
-                "After the signal-quality check it screens the 30-second single-lead strip " +
-                "as normal, atrial fibrillation, or other rhythm. The displayed score is a " +
-                "model score, not a diagnosis.",
+            "After each recording the phone runs an on-device rhythm model locally. " +
+                "After the signal-quality check it sorts the 30-second single-lead strip " +
+                "into regular, irregular, or inconclusive. The displayed score is a " +
+                "model score, not a diagnosis, and no rhythm is named.",
         )
         Section(
             "Waveform display",

@@ -53,7 +53,7 @@ class FormattersTest {
             findings = "",
         )
 
-        assertThat(session.naoTitle()).isEqualTo("Normal")
+        assertThat(session.naoTitle()).isEqualTo("Regular")
         assertThat(session.naoConfidenceLabel()).isEqualTo("91%")
     }
 

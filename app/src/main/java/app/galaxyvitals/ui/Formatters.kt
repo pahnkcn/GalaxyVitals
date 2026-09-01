@@ -50,9 +50,9 @@ fun EcgSession.naoTitle(): String {
     if (analysisStatus != AnalysisStatus.OK) return "—"
     val parsed = naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
     return when (parsed) {
-            NaoLabel.N -> "Normal"
-            NaoLabel.A -> "Possible AF"
-            NaoLabel.O -> "Other rhythm"
+            NaoLabel.N -> "Regular"
+            NaoLabel.A -> "Irregular"
+            NaoLabel.O -> "Inconclusive"
             null -> "—"
     }
 }

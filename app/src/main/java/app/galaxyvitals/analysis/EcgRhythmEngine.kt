@@ -168,14 +168,20 @@ class EcgRhythmEngine(context: Context) : Closeable {
     }
 }
 
+// Display vocabulary only. The model's own label set stays "N" / "A" / "O"
+// (see EcgAnalysisBundle) because it is bound into the policy-bundle hash;
+// naming a rhythm to the user is a diagnostic claim regardless of the
+// disclaimer printed beside it, so the mapping happens here at presentation.
 fun NaoLabel.displayName(): String = when (this) {
-    NaoLabel.N -> "Normal"
-    NaoLabel.A -> "Atrial fibrillation"
-    NaoLabel.O -> "Other rhythm"
+    NaoLabel.N -> "Regular rhythm"
+    NaoLabel.A -> "Irregular rhythm detected"
+    NaoLabel.O -> "Inconclusive"
 }
 
 fun NaoLabel.shortHelp(): String = when (this) {
-    NaoLabel.N -> "Looks like sinus / normal rhythm on this single-lead recording."
-    NaoLabel.A -> "Irregular rhythm consistent with AF or flutter. This is a screen, not a diagnosis."
-    NaoLabel.O -> "Not clearly normal sinus and not clearly AF. A clinician should review the strip."
+    NaoLabel.N -> "The beat-to-beat timing in this single-lead recording looks regular."
+    NaoLabel.A -> "The beat-to-beat timing is irregular. This is not a diagnosis; " +
+        "share the strip with a clinician if you have symptoms or concerns."
+    NaoLabel.O -> "The recording did not fall clearly into either group. " +
+        "This is not a diagnosis."
 }
