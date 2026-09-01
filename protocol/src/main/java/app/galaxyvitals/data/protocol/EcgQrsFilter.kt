@@ -20,6 +20,59 @@ internal object EcgQrsFilter {
         doubleArrayOf(1.0, -2.0, 1.0, 1.0, -1.9710289923605038, 0.9751617932342163),
     )
 
+    /**
+     * Frequency the detector's group delay is quoted at: the middle of the
+     * 5-15 Hz QRS band, where the envelope draws almost all of its energy.
+     */
+    private const val QRS_BAND_CENTRE_HZ = 10.0
+
+    /**
+     * Delay this filter adds, in samples at [TARGET_HZ].
+     *
+     * Forward-only filtering is not phase-linear, so every peak the envelope
+     * reports sits about 36 samples (72 ms) after the R wave that produced it -
+     * further than the refine window is wide. Undoing the moving-average delay
+     * alone leaves that offset in place, so it is measured here from the actual
+     * coefficients instead of being folded into a hand-tuned refine radius.
+     */
+    val GROUP_DELAY_SAMPLES: Double by lazy { groupDelaySamples(QRS_BAND_CENTRE_HZ) }
+
+    private fun groupDelaySamples(frequencyHz: Double): Double {
+        val step = 1e-4
+        val omega = 2.0 * kotlin.math.PI * frequencyHz / TARGET_HZ
+        var difference = phaseAt(omega + step) - phaseAt(omega - step)
+        while (difference > kotlin.math.PI) difference -= 2.0 * kotlin.math.PI
+        while (difference < -kotlin.math.PI) difference += 2.0 * kotlin.math.PI
+        return -difference / (2.0 * step)
+    }
+
+    /** Phase of the whole cascade at digital frequency [omega], in radians. */
+    private fun phaseAt(omega: Double): Double {
+        var real = 1.0
+        var imaginary = 0.0
+        for (section in SOS) {
+            val a0 = if (kotlin.math.abs(section[3]) < 1e-12) 1.0 else section[3]
+            val cos1 = kotlin.math.cos(omega)
+            val sin1 = kotlin.math.sin(omega)
+            val cos2 = kotlin.math.cos(2.0 * omega)
+            val sin2 = kotlin.math.sin(2.0 * omega)
+            val numeratorReal = section[0] / a0 + section[1] / a0 * cos1 + section[2] / a0 * cos2
+            val numeratorImaginary = -(section[1] / a0 * sin1 + section[2] / a0 * sin2)
+            val denominatorReal = 1.0 + section[4] / a0 * cos1 + section[5] / a0 * cos2
+            val denominatorImaginary = -(section[4] / a0 * sin1 + section[5] / a0 * sin2)
+            val scale = denominatorReal * denominatorReal + denominatorImaginary * denominatorImaginary
+            if (scale < 1e-18) continue
+            val sectionReal = (numeratorReal * denominatorReal + numeratorImaginary * denominatorImaginary) / scale
+            val sectionImaginary =
+                (numeratorImaginary * denominatorReal - numeratorReal * denominatorImaginary) / scale
+            val nextReal = real * sectionReal - imaginary * sectionImaginary
+            val nextImaginary = real * sectionImaginary + imaginary * sectionReal
+            real = nextReal
+            imaginary = nextImaginary
+        }
+        return kotlin.math.atan2(imaginary, real)
+    }
+
     fun filter(input: FloatArray): FloatArray {
         if (input.isEmpty()) return FloatArray(0)
         var x = DoubleArray(input.size) { input[it].toDouble() }

@@ -18,10 +18,14 @@ class EcgBeatAnalyzerTest {
     fun detectorConfigIsVersionedFromDevSplit() {
         val config = EcgBeatDetectorConfig.DEFAULT
         assertThat(config.version).isEqualTo(EcgBeatDetectorConfig.VERSION)
-        assertThat(config.version).isEqualTo(3)
+        assertThat(config.version).isEqualTo(4)
         assertThat(config.provenance).contains("physionet-dev-split-v1")
         assertThat(config.provenance).contains("minPeakToMedian")
         assertThat(config.provenance).contains("no-tile")
+        assertThat(config.provenance).contains("conditioned-detector-input")
+        assertThat(config.provenance).contains("subsample-rr")
+        assertThat(config.matchToleranceMs).isEqualTo(50)
+        assertThat(config.refineRadiusMs).isEqualTo(50)
         assertThat(config.thresholdNoiseWeight).isEqualTo(0.375)
         assertThat(config.primaryRefractoryMs).isEqualTo(300)
         assertThat(config.secondaryRefractoryMs).isEqualTo(300)
@@ -424,6 +428,181 @@ class EcgBeatAnalyzerTest {
 
         assertThat(EcgCsvWriter.encodeParsed(parsed)).isEqualTo(encoded)
         assertThat(parsed.samples).isEqualTo(snapshot)
+    }
+
+    @Test
+    fun delayCompensationUndoesHalfTheMovingAverageWindow() {
+        // A trailing average of width W delays by (W-1)/2, not by W.
+        assertThat(EcgBeatAnalyzer.delayCompensate(intArrayOf(1_000), windowWidth = 75))
+            .isEqualTo(intArrayOf(1_000 - 37))
+        assertThat(EcgBeatAnalyzer.delayCompensate(intArrayOf(1_000), windowWidth = 40))
+            .isEqualTo(intArrayOf(1_000 - 20))
+        assertThat(EcgBeatAnalyzer.delayCompensate(intArrayOf(1_000), windowWidth = 1))
+            .isEqualTo(intArrayOf(1_000))
+    }
+
+    @Test
+    fun delayCompensationAlsoUndoesTheQrsFilterGroupDelay() {
+        // Forward-only band-pass filtering is not phase-linear; without this the
+        // 150 ms and 80 ms envelopes both land ~72 ms past the R wave.
+        assertThat(EcgQrsFilter.GROUP_DELAY_SAMPLES).isWithin(6.0).of(37.0)
+        val primary = EcgBeatAnalyzer.delayCompensate(
+            intArrayOf(1_000),
+            windowWidth = 75,
+            filterDelaySamples = EcgQrsFilter.GROUP_DELAY_SAMPLES,
+        )
+        val secondary = EcgBeatAnalyzer.delayCompensate(
+            intArrayOf(1_000),
+            windowWidth = 40,
+            filterDelaySamples = EcgQrsFilter.GROUP_DELAY_SAMPLES,
+        )
+        // The two detectors must start from the same place, or the match
+        // tolerance is spent before any noise arrives.
+        assertThat(kotlin.math.abs(primary[0] - secondary[0])).isAtMost(20)
+    }
+
+    @Test
+    fun delayCompensationDoesNotCollapseTwoBeatsIntoOne() {
+        val compensated = EcgBeatAnalyzer.delayCompensate(intArrayOf(600, 1_000), windowWidth = 75)
+        assertThat(compensated.size).isEqualTo(2)
+        assertThat(compensated.toSet()).hasSize(2)
+    }
+
+    @Test
+    fun parabolicInterpolationFindsTheSubSampleVertex() {
+        // Vertex of a parabola sampled at 9, 10, 11 with its true peak at 10.25.
+        val signal = FloatArray(21)
+        for (index in signal.indices) {
+            val offset = index - 10.25
+            signal[index] = (4.0 - offset * offset).toFloat()
+        }
+        assertThat(EcgBeatAnalyzer.subSamplePeak(signal, 10)).isWithin(0.02).of(10.25)
+
+        val inverted = FloatArray(signal.size) { -signal[it] }
+        assertThat(EcgBeatAnalyzer.subSamplePeak(inverted, 10)).isWithin(0.02).of(10.25)
+
+        // Never leaves its own sample: an interpolated peak more than half a
+        // sample away means the wrong sample was picked, not a better estimate.
+        assertThat(EcgBeatAnalyzer.subSamplePeak(floatArrayOf(0f, 1f, 0f), 1)).isWithin(1e-9).of(1.0)
+    }
+
+    @Test
+    fun refinedPeaksStayWithinFiveMsOfTruthThroughBaselineWander() {
+        val srHz = 500
+        val bpm = 60.0
+        val samples = syntheticQrs(seconds = 14.0, bpm = bpm)
+        // Wander larger than the QRS itself, which is what a wrist capture
+        // actually looks like: 0.9 mV peak-to-peak under a 1.2 mV R wave.
+        val wandered = FloatArray(samples.size) { index ->
+            val t = index.toDouble() / srHz
+            samples[index] + (0.45 * sin(2 * PI * 0.28 * t) + 0.25 * sin(2 * PI * 0.11 * t)).toFloat()
+        }
+        val result = EcgBeatAnalyzer.analyzeWindow(wandered, srHz = srHz, signFactor = 1)
+        assertThat(result.status).isEqualTo(EcgBpmStatus.RELIABLE)
+
+        val period = srHz * 60.0 / bpm
+        val truth = generateSequence(period * 0.5) { it + period }
+            .takeWhile { it < samples.size }
+            .map { it.roundToInt() }
+            .toList()
+        val warmup = EcgQrsFilter.WARMUP_SAMPLES
+        val displacements = result.primaryPeaks
+            .filter { it > warmup }
+            .map { peak -> truth.minOf { kotlin.math.abs(it - peak) } * 1_000.0 / srHz }
+        assertThat(displacements).isNotEmpty()
+        assertThat(displacements.max()).isAtMost(5.0)
+    }
+
+    @Test
+    fun rrSeriesClassifiesMissedBeatsInsteadOfDroppingThem() {
+        val config = EcgBeatDetectorConfig.DEFAULT
+        // 60 bpm at 500 Hz: 500-sample intervals, with one beat not detected.
+        val positions = doubleArrayOf(0.0, 500.0, 1_000.0, 2_000.0, 2_500.0, 3_000.0, 3_500.0)
+        val series = EcgBeatAnalyzer.rrSeries(positions, config, analysisSrHz = 500.0)
+
+        assertThat(series.nnMs).hasSize(5)
+        assertThat(series.missedBeatCount).isEqualTo(1)
+        assertThat(series.extraDetectionCount).isEqualTo(0)
+        assertThat(series.candidateCount).isEqualTo(6)
+        assertThat(series.correctedFraction).isWithin(1e-9).of(1.0 / 6.0)
+        // The 2000 ms gap must not sit next to its neighbour in a difference.
+        assertThat(series.nnSuccessive).containsExactly(false, true, false, true, true).inOrder()
+    }
+
+    @Test
+    fun rrSeriesClassifiesAnExtraDetection() {
+        val positions = doubleArrayOf(0.0, 500.0, 1_000.0, 1_250.0, 1_500.0, 2_000.0, 2_500.0)
+        val series = EcgBeatAnalyzer.rrSeries(
+            positions,
+            EcgBeatDetectorConfig.DEFAULT,
+            analysisSrHz = 500.0,
+        )
+        assertThat(series.extraDetectionCount).isEqualTo(2)
+        assertThat(series.missedBeatCount).isEqualTo(0)
+        assertThat(series.nnMs).hasSize(4)
+    }
+
+    @Test
+    fun adaptivePlausibilityAcceptsBradycardiaAFixedWindowWouldReject() {
+        // 42 bpm is 1429 ms - inside the old fixed 333-1500 ms window only just,
+        // and the point of the adaptive check is that it tracks the subject.
+        val period = 1_429.0 * 500.0 / 1_000.0
+        val positions = DoubleArray(12) { it * period }
+        val series = EcgBeatAnalyzer.rrSeries(
+            positions,
+            EcgBeatDetectorConfig.DEFAULT,
+            analysisSrHz = 500.0,
+        )
+        assertThat(series.nnMs).hasSize(11)
+        assertThat(series.correctedCount).isEqualTo(0)
+    }
+
+    @Test
+    fun subSampleRrBeatsWholeSampleResolution() {
+        // Peaks spaced 500.5 samples apart: unreachable without interpolation.
+        val positions = DoubleArray(10) { it * 500.5 }
+        val series = EcgBeatAnalyzer.rrSeries(
+            positions,
+            EcgBeatDetectorConfig.DEFAULT,
+            analysisSrHz = 500.0,
+        )
+        assertThat(series.nnMs).isNotEmpty()
+        series.nnMs.forEach { assertThat(it).isWithin(1e-9).of(1_001.0) }
+    }
+
+    @Test
+    fun liveModeSkipsConditioningTheCallerAlreadyDid() {
+        val samples = syntheticQrs(seconds = 12.0, bpm = 72.0)
+        val conditioned = run {
+            val values = DoubleArray(samples.size) { samples[it].toDouble() }
+            val filtered = EcgSignalChain.filter(values, 500.0, EcgBandwidth.MONITOR, null)
+            FloatArray(filtered.size) { filtered[it].toFloat() }
+        }
+        val preconditioned = EcgBeatAnalyzer.analyzeWindow(
+            samplesMv = conditioned,
+            srHz = 500,
+            signFactor = 1,
+            config = EcgBeatDetectorConfig.DEFAULT,
+            input = EcgDetectorInput.CONDITIONED,
+        )
+        assertThat(preconditioned.status).isEqualTo(EcgBpmStatus.RELIABLE)
+        assertThat(preconditioned.bpmMedian!!).isWithin(2.0).of(72.0)
+    }
+
+    @Test
+    fun liveRateCorrectionShiftsBpmByTheClockError() {
+        val samples = syntheticQrs(seconds = 12.0, bpm = 72.0)
+        val declared = EcgBeatAnalyzer.analyzeWindow(samples, srHz = 500, signFactor = 1)
+        val corrected = EcgBeatAnalyzer.analyzeWindow(
+            samplesMv = samples,
+            srHz = 500,
+            signFactor = 1,
+            config = EcgBeatDetectorConfig.DEFAULT,
+            effectiveSrHz = 501.67,
+        )
+        assertThat(declared.bpmMedian).isNotNull()
+        assertThat(corrected.bpmMedian).isNotNull()
+        assertThat(corrected.bpmMedian!! / declared.bpmMedian!!).isWithin(1e-4).of(501.67 / 500.0)
     }
 
     private fun assertWindowBpm(bpm: Double, seconds: Double = 12.0, tolerance: Double = 3.0, srHz: Int = 500) {
