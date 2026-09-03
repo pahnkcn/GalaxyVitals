@@ -25,14 +25,22 @@ object EcgDisplayProcessor {
         srHz: Int,
         signFactor: Int,
         polarityNormalized: Boolean,
-    ): List<EcgSample> = process(samples, srHz, signFactor, polarityNormalized).samples
+        bandwidth: EcgBandwidth = BANDWIDTH,
+    ): List<EcgSample> = process(samples, srHz, signFactor, polarityNormalized, bandwidth).samples
 
-    /** Filtered samples plus the chain metrics behind them. */
+    /**
+     * Filtered samples plus the chain metrics behind them.
+     *
+     * [bandwidth] defaults to the smoothed monitor trace. A caller that reports
+     * numbers, or that draws a strip meant to be measured, must ask for
+     * [EcgBandwidth.DIAGNOSTIC] instead.
+     */
     fun process(
         samples: List<EcgSample>,
         srHz: Int,
         signFactor: Int,
         polarityNormalized: Boolean,
+        bandwidth: EcgBandwidth = BANDWIDTH,
     ): DisplayResult {
         require(srHz > 0) { "ECG sample rate must be positive" }
         if (samples.isEmpty()) {
@@ -47,12 +55,12 @@ object EcgDisplayProcessor {
                     lineRmsAfterMv = 0.0,
                     baselineExcursionMv = 0.0,
                     settleSampleIndex = 0,
-                    bandwidth = BANDWIDTH,
+                    bandwidth = bandwidth,
                 ),
             )
         }
         val polarity = effectivePolarity(signFactor, polarityNormalized)
-        val filtered = EcgSignalChain.process(samples, srHz, polarity, BANDWIDTH)
+        val filtered = EcgSignalChain.process(samples, srHz, polarity, bandwidth)
         val out = List(samples.size) { index ->
             samples[index].copy(valueMv = filtered.valuesMv[index].toFloat())
         }
