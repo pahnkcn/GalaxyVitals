@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exports only. Nothing else in app storage is reachable through the provider. -->
+    <cache-path
+        name="ecg_exports"
+        path="exports/" />
+</paths>

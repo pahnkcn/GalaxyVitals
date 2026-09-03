@@ -1,23 +1,42 @@
 package app.galaxyvitals.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.galaxyvitals.R
 import app.galaxyvitals.data.wear.WearLinkStatus
+import app.galaxyvitals.ui.EcgScaleCalibration
+import app.galaxyvitals.ui.theme.EcgType
+import app.galaxyvitals.ui.theme.Mint
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(
     wear: WearLinkStatus,
+    calibration: EcgScaleCalibration,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -26,57 +45,109 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(R.string.settings_title),
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
         Spacer(Modifier.height(20.dp))
-        Section("Watch link", wear.note)
+
+        Section(stringResource(R.string.settings_watch_link), wear.note)
         if (wear.nodes.isNotEmpty()) {
-            Section("Nodes", wear.nodes.joinToString("\n"))
+            Section(stringResource(R.string.settings_nodes), wear.nodes.joinToString("\n"))
         }
+
+        RulerCalibration(calibration)
+
         Section(
-            "How ECG arrives",
-            "The GalaxyVitals watch app writes gzip CSV and pushes DataItem /ecg/session/{id}. " +
-                "This phone listens on that path. Google only delivers those items when both " +
-                "apps share application id app.galaxyvitals and the same signing key.",
+            stringResource(R.string.settings_display_title),
+            stringResource(R.string.settings_display_body),
         )
         Section(
-            "Galaxy Watch",
-            "Sideload the GalaxyVitals watch APK on a paired Galaxy Watch. Hardware " +
-                "ECG_ON_DEMAND needs Samsung’s official sensor AAR and a partner " +
-                "whitelist for app.galaxyvitals. A different vendor companion cannot talk to this " +
-                "phone app.",
+            stringResource(R.string.settings_model_title),
+            stringResource(R.string.settings_model_body),
         )
         Section(
-            "Install the watch app",
-            "Sideload the :wear debug APK onto a paired Wear OS watch. Home → Sync asks the " +
-                "watch to re-push any leftover inbox files.",
+            stringResource(R.string.settings_arrival_title),
+            stringResource(R.string.settings_arrival_body),
         )
         Section(
-            "Import",
-            "You can still import ecg_*.csv.gz from another source on Home.",
+            stringResource(R.string.settings_watch_title),
+            stringResource(R.string.settings_watch_body),
         )
         Section(
-            "Rhythm model",
-            "After each recording the phone runs an on-device rhythm model locally. " +
-                "After the signal-quality check it sorts the 30-second single-lead strip " +
-                "into regular, irregular, or inconclusive. The displayed score is a " +
-                "model score, not a diagnosis, and no rhythm is named.",
+            stringResource(R.string.settings_import_title),
+            stringResource(R.string.settings_import_body),
         )
         Section(
-            "Waveform display",
-            "The detail chart applies wrist orientation and a display-only 0.5–40 Hz filter " +
-                "for readability. The stored and exported ECG remains raw and unchanged.",
+            stringResource(R.string.settings_disclaimer_title),
+            stringResource(R.string.settings_disclaimer_body),
         )
         Section(
-            "Disclaimer",
-            "GalaxyVitals is not a medical device and does not diagnose conditions. " +
-                "If you feel unwell, seek professional care.",
+            stringResource(R.string.settings_license_title),
+            stringResource(R.string.settings_license_body),
         )
-        Section("License", "Apache License 2.0 · application id app.galaxyvitals")
+    }
+}
+
+/**
+ * Calibrates the true-scale strip against a real ruler.
+ *
+ * The bar is drawn 50 mm wide at the current setting, so the correction is made
+ * by looking at the thing being corrected rather than at a number.
+ */
+@Composable
+private fun RulerCalibration(calibration: EcgScaleCalibration) {
+    val factor by calibration.factor.collectAsState()
+    val reported = EcgScaleCalibration.reportedPxPerMm(LocalContext.current)
+    val barWidth = with(LocalDensity.current) { (reported * factor * REFERENCE_MM).toDp() }
+
+    Section(
+        stringResource(R.string.calibrate_title),
+        stringResource(R.string.calibrate_body),
+    )
+    Box(
+        Modifier
+            .padding(top = 12.dp)
+            .width(barWidth)
+            .height(10.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(Mint),
+    )
+    Text(
+        text = stringResource(R.string.calibrate_bar_label),
+        style = EcgType.dataSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+    Slider(
+        value = factor,
+        onValueChange = calibration::setFactor,
+        valueRange = EcgScaleCalibration.MIN_FACTOR..EcgScaleCalibration.MAX_FACTOR,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        text = stringResource(R.string.calibrate_summary, (factor * 100).roundToInt().toString()),
+        style = EcgType.dataSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    TextButton(onClick = calibration::reset) {
+        Text(stringResource(R.string.calibrate_reset))
     }
 }
 
 @Composable
 private fun Section(title: String, body: String) {
-    Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
-    Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+    Text(
+        title,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 16.dp, bottom = 6.dp),
+    )
+    Text(
+        body,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodyMedium,
+    )
 }
+
+private const val REFERENCE_MM = 50f

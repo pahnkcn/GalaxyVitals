@@ -1,5 +1,6 @@
 package app.galaxyvitals.ui
 
+import app.galaxyvitals.R
 import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
@@ -10,6 +11,14 @@ import org.junit.Test
 
 class FormattersTest {
     @Test
+    fun minutesAndSecondsSplitAtSixty() {
+        val session = session(durationSec = 95.0)
+
+        assertThat(session.durationMinutes()).isEqualTo(1)
+        assertThat(session.durationSeconds()).isEqualTo(35)
+    }
+
+    @Test
     fun roundsNominalThirtySecondCaptureDuration() {
         val session = session(
             status = AnalysisStatus.NONE,
@@ -19,7 +28,8 @@ class FormattersTest {
             durationSec = 29.998,
         )
 
-        assertThat(session.durationLabel()).isEqualTo("30s")
+        assertThat(session.durationMinutes()).isEqualTo(0)
+        assertThat(session.durationSeconds()).isEqualTo(30)
     }
 
     @Test
@@ -31,9 +41,8 @@ class FormattersTest {
             findings = "AFIB:0.99",
         )
 
-        assertThat(session.naoTitle()).isEqualTo("Low quality")
+        assertThat(session.naoTitleRes()).isEqualTo(R.string.verdict_low_quality)
         assertThat(session.naoConfidenceLabel()).isEmpty()
-        assertThat(session.findingRows()).isEmpty()
     }
 
     @Test
@@ -53,7 +62,7 @@ class FormattersTest {
             findings = "",
         )
 
-        assertThat(session.naoTitle()).isEqualTo("Regular")
+        assertThat(session.naoTitleRes()).isEqualTo(R.string.verdict_regular)
         assertThat(session.naoConfidenceLabel()).isEqualTo("91%")
     }
 
@@ -67,9 +76,8 @@ class FormattersTest {
             ecgHrMedian = 72.4,
         )
 
-        assertThat(session.naoTitle()).isEqualTo("Indeterminate")
+        assertThat(session.naoTitleRes()).isEqualTo(R.string.verdict_indeterminate)
         assertThat(session.naoConfidenceLabel()).isEmpty()
-        assertThat(session.findingRows()).isEmpty()
         assertThat(session.hrLabel()).isEqualTo("72")
     }
 
@@ -84,7 +92,7 @@ class FormattersTest {
         )
 
         assertThat(session.hrLabel()).isEqualTo("81")
-        assertThat(session.naoTitle()).isEqualTo("Not analysed")
+        assertThat(session.naoTitleRes()).isEqualTo(R.string.verdict_not_analysed)
     }
 
     @Test
@@ -96,7 +104,6 @@ class FormattersTest {
         )
 
         assertThat(session.hrLabel()).isEqualTo("72")
-        assertThat(session.hrSourceLabel()).isEqualTo("ECG-derived median bpm")
     }
 
     @Test
@@ -109,7 +116,6 @@ class FormattersTest {
         )
 
         assertThat(session.hrLabel()).isEqualTo("120")
-        assertThat(session.hrSourceLabel()).isEqualTo("Samsung processed heart-rate median bpm")
     }
 
     private fun session(

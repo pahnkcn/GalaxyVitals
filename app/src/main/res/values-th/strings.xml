@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ecg_received_title">ได้รับผลคลื่นไฟฟ้าหัวใจแล้ว</string>
+    <string name="ecg_received_body">มีผลการวัดรออยู่</string>
+
+    <!-- Shell -->
+    <string name="action_back">ย้อนกลับ</string>
+    <string name="action_delete">ลบ</string>
+    <string name="action_cancel">ยกเลิก</string>
+    <string name="action_close">ปิด</string>
+    <string name="action_export">ส่งออก</string>
+    <string name="action_import">นำเข้าไฟล์ผลวัด</string>
+    <string name="action_sync">ซิงก์กับนาฬิกา</string>
+    <string name="action_history">ประวัติ</string>
+    <string name="action_open">เปิด</string>
+    <string name="tab_home">หน้าหลัก</string>
+    <string name="tab_history">ประวัติ</string>
+    <string name="tab_settings">ตั้งค่า</string>
+
+    <!-- ECG detail -->
+    <string name="ecg_title">คลื่นไฟฟ้าหัวใจ</string>
+    <string name="ecg_missing">ไม่พบผลการวัดนี้ในเครื่องแล้ว</string>
+    <string name="ecg_loading">กำลังอ่านผลการวัด…</string>
+    <string name="ecg_delete_title">ลบผลการวัดนี้ไหม</string>
+    <string name="ecg_delete_body">ผลการวัดจะถูกลบทั้งจากโทรศัพท์และนาฬิกาที่เชื่อมอยู่ และกู้คืนไม่ได้</string>
+    <string name="ecg_stale_analysis">ผลนี้มาจากโมเดลวิเคราะห์จังหวะรุ่นเก่า เปิดผลการวัดนี้อีกครั้งเพื่อวิเคราะห์ใหม่</string>
+    <string name="ecg_disclaimer">ใช้เพื่อคัดกรองเบื้องต้นเท่านั้น อุปกรณ์นี้ไม่ใช่เครื่องมือแพทย์ และคลื่นลีดเดียวจากนาฬิกาใช้แทน ECG 12 ลีดหรือการวินิจฉัยของแพทย์ไม่ได้</string>
+
+    <!-- Verdict -->
+    <string name="verdict_regular">จังหวะสม่ำเสมอ</string>
+    <string name="verdict_irregular">จังหวะไม่สม่ำเสมอ</string>
+    <string name="verdict_inconclusive">สรุปผลไม่ได้</string>
+    <string name="verdict_low_quality">สัญญาณรบกวนมากเกินไป</string>
+    <string name="verdict_pending">กำลังอ่านผล</string>
+    <string name="verdict_not_analysed">ยังไม่ได้วิเคราะห์</string>
+    <string name="verdict_indeterminate">ไม่มีผลสรุป</string>
+    <string name="verdict_regular_body">หัวใจเต้นเป็นจังหวะสม่ำเสมอตลอดช่วงที่วัด</string>
+    <string name="verdict_irregular_body">ช่วงห่างระหว่างจังหวะเต้นเปลี่ยนไปมาระหว่างการวัด นำกราฟนี้ไปให้แพทย์ดู</string>
+    <string name="verdict_inconclusive_body">จังหวะที่วัดได้ไม่ตรงกับรูปแบบที่แอปนี้ระบุชื่อได้ ซึ่งไม่ได้แปลว่ามีความผิดปกติ</string>
+    <string name="verdict_low_quality_body">สัญญาณถูกรบกวนมากเกินกว่าจะอ่านจังหวะได้ ลองนั่งนิ่ง วางแขนบนโต๊ะ แล้วแตะนิ้วบนนาฬิกาให้นิ่ง</string>
+    <string name="verdict_pending_body">โมเดลวิเคราะห์จังหวะกำลังทำงานกับผลการวัดนี้</string>
+    <string name="verdict_not_analysed_body">โมเดลวิเคราะห์จังหวะทำงานกับผลการวัดนี้ไม่สำเร็จ แต่กราฟและค่าที่วัดได้ด้านล่างยังใช้ได้</string>
+    <string name="verdict_none_body">เปิดผลการวัดนี้เพื่อให้โมเดลวิเคราะห์จังหวะทำงาน</string>
+    <string name="verdict_model_score">คะแนนโมเดล %1$s</string>
+
+    <!-- Strip -->
+    <string name="strip_mode_sheet">เต็มแผ่น</string>
+    <string name="strip_mode_true_scale">มาตราส่วนจริง</string>
+    <string name="strip_caption_sheet">ย่อให้พอดีความกว้างจอ จึงไม่ใช่มาตราส่วนจริง สลับไปมาตราส่วนจริงเพื่อวัดค่า</string>
+    <string name="strip_caption_true_scale">มิลลิเมตรจริง ห้าช่องใหญ่ตามแนวนอน = 25 มม. = หนึ่งวินาที</string>
+    <string name="strip_lead">ลีด I</string>
+    <string name="strip_row_range">%1$s–%2$s วิ</string>
+    <string name="strip_scale">%1$s มม./วิ · %2$s มม./มV</string>
+    <string name="strip_bandwidth_diagnostic">150 Hz</string>
+    <string name="strip_bandwidth_monitor">40 Hz</string>
+    <string name="strip_bandwidth_label">รายละเอียด</string>
+    <string name="strip_bandwidth_hint_diagnostic">รายละเอียดเต็มระดับวินิจฉัย เป็นย่านความถี่ที่ใช้วัดค่า ECG ทางคลินิก</string>
+    <string name="strip_bandwidth_hint_monitor">ปรับให้เรียบเพื่อดูง่าย ยอดคลื่นจะเตี้ยกว่าของจริงราวหนึ่งในห้า</string>
+    <string name="strip_speed">ความเร็ว</string>
+    <string name="strip_gain">ขนาด</string>
+    <string name="strip_beats_marked">ทำเครื่องหมายคลื่น R</string>
+    <string name="strip_empty">ไม่มีกราฟให้แสดง</string>
+
+    <!-- Measurements -->
+    <string name="section_measurements">ค่าที่วัดได้</string>
+    <string name="measure_heart_rate">อัตราการเต้นของหัวใจ</string>
+    <string name="measure_heart_rate_range">ช้าสุดถึงเร็วสุด</string>
+    <string name="measure_rr_mean">ช่วงห่างระหว่างจังหวะเต้น</string>
+    <string name="measure_sdnn">ความแปรปรวนรวม (SDNN)</string>
+    <string name="measure_rmssd">ความแปรปรวนจังหวะต่อจังหวะ (RMSSD)</string>
+    <string name="measure_pnn50">จังหวะที่ต่างกันเกิน 50 ms (pNN50)</string>
+    <string name="measure_beat_count">จำนวนจังหวะที่ตรวจพบ</string>
+    <string name="measure_corrected_intervals">ช่วงที่ตัดออก</string>
+    <string name="measure_detector_agreement">ความสอดคล้องของตัวตรวจจับ</string>
+    <string name="measure_analysed_duration">สัญญาณที่ใช้ได้</string>
+    <string name="unit_bpm">ครั้ง/นาที</string>
+    <string name="unit_ms">ms</string>
+    <string name="unit_percent">%</string>
+    <string name="unit_seconds">วิ</string>
+    <string name="unit_beats">จังหวะ</string>
+
+    <!-- Why a number is missing -->
+    <string name="unavailable_insufficient_data">จังหวะที่สะอาดพอมีไม่มากพอ</string>
+    <string name="unavailable_low_quality">สัญญาณรบกวนมากเกินไป</string>
+    <string name="unavailable_too_many_corrections">มีช่วงที่ต้องตัดออกมากเกินไป</string>
+    <string name="unavailable_detector_disagreement">ตัวตรวจจับจังหวะสองตัวให้ผลไม่ตรงกัน</string>
+
+    <!-- Plain-language explanations -->
+    <string name="explain_heart_rate">ค่ากลางของอัตราการเต้นจากทุกช่วงจังหวะในการวัดครั้งนี้ ผู้ใหญ่ขณะพักมักอยู่ระหว่าง 60 ถึง 100 ครั้ง/นาที คนที่ออกกำลังกายสม่ำเสมอมักต่ำกว่านี้</string>
+    <string name="explain_heart_rate_range">จังหวะที่ช้าที่สุดและเร็วที่สุดในการวัดครั้งนี้ การมีช่วงห่างเป็นเรื่องปกติ เพราะหัวใจจะเต้นเร็วขึ้นเล็กน้อยตอนหายใจเข้า</string>
+    <string name="explain_rr_mean">ช่วงห่างเฉลี่ยระหว่างจังหวะเต้น และค่าที่ช่วงห่างนั้นแกว่ง แพทย์เรียกค่านี้ว่าช่วง RR</string>
+    <string name="explain_sdnn">ช่วงห่างระหว่างจังหวะเต้นแกว่งมากแค่ไหนตลอดการวัด สะท้อนสมดุลของประสาทที่เร่งและชะลอการเต้นของหัวใจ ในช่วง 30 วินาทีถือเป็นค่าบอกคร่าว ๆ ไม่ใช่คะแนนสุขภาพ</string>
+    <string name="explain_rmssd">แต่ละจังหวะต่างจากจังหวะก่อนหน้ามากแค่ไหน ค่านี้ตอบสนองต่อประสาทที่ชะลอหัวใจเป็นหลัก และเปลี่ยนตามการพักผ่อน ความเครียด และการหายใจ</string>
+    <string name="explain_pnn50">สัดส่วนของจังหวะที่ติดกันซึ่งต่างกันเกิน 50 มิลลิวินาที เป็นอีกวิธีอธิบายความแปรปรวนจังหวะต่อจังหวะ</string>
+    <string name="explain_beat_count">จำนวนจังหวะการเต้นที่พบในช่วงของการวัดที่สะอาดพอจะอ่านได้</string>
+    <string name="explain_corrected_intervals">ช่วงห่างระหว่างจังหวะที่ถูกตัดออกจากการคำนวณ เพราะห่างจากช่วงอื่นมากเกินกว่าจะเป็นจังหวะเต้นจริง มักเกิดจากการขยับตัว ตัวเลขหลังคือจำนวนช่วงทั้งหมดที่ตรวจสอบ</string>
+    <string name="explain_detector_agreement">ตัวตรวจจับจังหวะสองตัวทำงานแยกกันบนผลการวัดนี้ ค่านี้คือสัดส่วนที่ทั้งสองเลือกจังหวะเดียวกัน ถ้าค่าต่ำ ค่าต่าง ๆ ด้านบนจะเชื่อถือได้น้อยลง</string>
+    <string name="explain_analysed_duration">ระยะเวลาของการวัดที่สะอาดพอจะนำมาคำนวณ เทียบกับความยาวทั้งหมด</string>
+
+    <!-- Signal quality -->
+    <string name="section_signal_quality">คุณภาพสัญญาณ</string>
+    <string name="quality_usable">สัญญาณ %1$s%% สะอาดพอจะอ่านได้</string>
+    <string name="quality_status_good">ดี</string>
+    <string name="quality_status_low">ต่ำ</string>
+    <string name="quality_status_invalid">ใช้ไม่ได้</string>
+    <string name="quality_status_unknown">ไม่ทราบ</string>
+    <string name="quality_noisy_spans">ถูกรบกวนช่วง %1$s วิ</string>
+    <string name="quality_mains">ตัดสัญญาณรบกวนจากไฟฟ้าที่ %1$s Hz ออกแล้ว</string>
+    <string name="flag_legacy_timing">ผลการวัดนี้ไม่มีสัญญาณนาฬิกาที่เชื่อถือได้</string>
+    <string name="flag_unsupported_rate">อัตราสุ่มสัญญาณไม่ใช่ค่าที่แอปนี้วิเคราะห์ได้</string>
+    <string name="flag_timestamp_gap">ข้อมูลบางช่วงของการวัดหายไป</string>
+    <string name="flag_missing_samples">ข้อมูลบางส่วนไม่ได้ส่งมาจากนาฬิกา</string>
+    <string name="flag_contact_loss">นาฬิกาสัมผัสผิวไม่ต่อเนื่อง</string>
+    <string name="flag_clipping">สัญญาณแรงเกินช่วงที่เซ็นเซอร์รับได้</string>
+    <string name="flag_flatline">สัญญาณบางช่วงเป็นเส้นตรง</string>
+    <string name="flag_held_signal">เซ็นเซอร์ส่งค่าเดิมซ้ำ</string>
+    <string name="flag_impulse_noise">มีสัญญาณแหลมกระชาก มักเกิดจากการขยับตัว</string>
+    <string name="flag_baseline_drift">เส้นฐานเลื่อนขึ้นลง มักเกิดจากการขยับแขน</string>
+    <string name="flag_mains_interference">มีสัญญาณรบกวนจากไฟฟ้าบริเวณใกล้เคียง</string>
+    <string name="flag_high_frequency_noise">มีสัญญาณรบกวนจากกล้ามเนื้อ มักเกิดจากการเกร็งแขน</string>
+    <string name="flag_low_amplitude">สัญญาณมีขนาดเล็กมาก</string>
+    <string name="flag_insufficient_clean_coverage">ช่วงที่สะอาดมีน้อยเกินไป</string>
+
+    <!-- Export -->
+    <string name="export_title">ส่งออกผลการวัดนี้</string>
+    <string name="export_pdf">รายงาน PDF</string>
+    <string name="export_pdf_body">หน้าเอกสารสำหรับพิมพ์ให้แพทย์ กราฟวาดที่ 25 มม./วิ และ 10 มม./มV จึงใช้ไม้บรรทัดวัดได้จริง</string>
+    <string name="export_xlsx">ไฟล์ Excel</string>
+    <string name="export_xlsx_body">ข้อมูลทุกจุดและทุกช่วงจังหวะ พร้อมหน้าสรุปแยกอีกแผ่น</string>
+    <string name="export_csv">ไฟล์ต้นฉบับ</string>
+    <string name="export_csv_body">ไฟล์ที่นาฬิกาบันทึกไว้ ตรงตามต้นฉบับทุกไบต์</string>
+    <string name="export_note_label">บันทึกถึงแพทย์ (ไม่บังคับ)</string>
+    <string name="export_note_hint">อาการที่รู้สึก หรือชื่อของคุณ</string>
+    <string name="export_note_privacy">พิมพ์ลงในรายงานเท่านั้น ข้อความที่กรอกที่นี่ไม่ถูกบันทึกไว้ในเครื่อง</string>
+    <string name="export_share">แชร์</string>
+    <string name="export_preparing">กำลังเตรียมไฟล์…</string>
+    <string name="export_failed">เขียนไฟล์ไม่สำเร็จ ลองอีกครั้ง</string>
+    <string name="export_chooser">แชร์ผลคลื่นไฟฟ้าหัวใจ</string>
+
+    <!-- Report wording -->
+    <string name="report_title">รายงานคลื่นไฟฟ้าหัวใจ</string>
+    <string name="report_section_recording">ข้อมูลการวัด</string>
+    <string name="report_section_rhythm">จังหวะการเต้น</string>
+    <string name="report_section_note">บันทึก</string>
+    <string name="report_field_recorded_at">วันเวลาที่วัด</string>
+    <string name="report_field_duration">ระยะเวลา</string>
+    <string name="report_field_sample_rate">อัตราสุ่มสัญญาณ</string>
+    <string name="report_field_sample_count">จำนวนจุดข้อมูล</string>
+    <string name="report_field_lead">ลีด</string>
+    <string name="report_field_wrist">ข้อมือ</string>
+    <string name="report_field_device">อุปกรณ์</string>
+    <string name="report_field_capture_source">ที่มา</string>
+    <string name="report_field_filter">ตัวกรองสัญญาณ</string>
+    <string name="report_field_scale">มาตราส่วน</string>
+    <string name="report_field_session_id">รหัสผลการวัด</string>
+    <string name="report_field_checksum">ค่าตรวจสอบไฟล์</string>
+    <string name="report_field_analysis_bundle">ชุดโมเดล</string>
+    <string name="report_field_app_version">เวอร์ชันแอป</string>
+    <string name="report_field_model_score">คะแนนโมเดล</string>
+    <string name="report_field_quality_status">คุณภาพ</string>
+    <string name="report_field_clean_coverage">สัญญาณที่สะอาด</string>
+    <string name="report_field_noisy_spans">ช่วงที่ถูกรบกวน</string>
+    <string name="report_field_mains">สัญญาณรบกวนจากไฟฟ้า</string>
+    <string name="report_field_baseline_excursion">การเลื่อนของเส้นฐาน</string>
+    <string name="report_field_note_text">บันทึก</string>
+    <string name="report_field_time_ms">เวลา (ms)</string>
+    <string name="report_field_sensor_rel_ms">เวลาจากเซ็นเซอร์ (ms)</string>
+    <string name="report_field_raw_mv">ค่าดิบ (mV)</string>
+    <string name="report_field_filtered_mv">ค่าที่กรองแล้ว (mV)</string>
+    <string name="report_field_sample_flags">สถานะข้อมูล</string>
+    <string name="report_field_r_peak_ms">คลื่น R (ms)</string>
+    <string name="report_field_rr_all_ms">ทุกช่วงจังหวะ (ms)</string>
+    <string name="report_field_rr_nn_ms">ช่วงจังหวะปกติ (ms)</string>
+    <string name="report_field_value">ค่า</string>
+    <string name="report_field_spread">ช่วงแกว่ง</string>
+    <string name="report_field_unit">หน่วย</string>
+    <string name="report_wrist_left">ซ้าย</string>
+    <string name="report_wrist_right">ขวา</string>
+    <string name="report_wrist_unknown">ไม่ได้บันทึก</string>
+    <string name="report_source_hardware">Galaxy Watch</string>
+    <string name="report_source_import">ไฟล์ที่นำเข้า</string>
+    <string name="report_source_legacy">เวอร์ชันก่อนหน้า</string>
+    <string name="report_filter_diagnostic">0.7–150 Hz ระดับวินิจฉัย</string>
+    <string name="report_filter_monitor">0.7–40 Hz ระดับเฝ้าระวัง</string>
+    <string name="report_not_measured">ไม่ได้วัด</string>
+
+    <!-- Scale calibration -->
+    <string name="calibrate_title">ปรับเทียบไม้บรรทัด</string>
+    <string name="calibrate_body">ทาบไม้บรรทัดกับแถบด้านล่าง แล้วลากจนวัดได้ 50 มม. พอดี กราฟมาตราส่วนจริงและรายงานที่พิมพ์ออกมาจะตรงกับ ECG จริง</string>
+    <string name="calibrate_bar_label">50 มม.</string>
+    <string name="calibrate_reset">กลับไปใช้ขนาดที่จอแจ้งมา</string>
+    <string name="calibrate_summary">%1$s%% ของขนาดที่จอแจ้งมา</string>
+
+    <!-- Home -->
+    <string name="home_title">วันนี้</string>
+    <string name="home_subtitle">ผลคลื่นไฟฟ้าหัวใจจากนาฬิกา เก็บไว้ในเครื่องนี้</string>
+    <string name="home_working">กำลังทำงาน…</string>
+    <string name="home_watch_linked">เชื่อมต่อนาฬิกาแล้ว</string>
+    <string name="home_watch_not_linked">ยังไม่ได้เชื่อมต่อนาฬิกา</string>
+    <string name="home_sync">ซิงก์</string>
+    <string name="home_ecg_card">คลื่นไฟฟ้าหัวใจ</string>
+    <string name="home_no_recordings">ยังไม่มีผลการวัด</string>
+    <string name="home_no_recordings_body">วัดจากแอป GalaxyVitals บนนาฬิกา หรือนำเข้าไฟล์ csv.gz</string>
+    <string name="home_history_count">มีในประวัติ %1$d รายการ</string>
+    <string name="home_bp_title">ความดันโลหิต</string>
+    <string name="home_bp_body">เตรียมไว้สำหรับแหล่งข้อมูลในอนาคต</string>
+    <string name="home_bp_soon">เร็ว ๆ นี้</string>
+
+    <!-- History -->
+    <string name="history_title">ประวัติ</string>
+    <string name="history_empty">ผลการวัดที่นำเข้าและที่รับจากนาฬิกาจะแสดงที่นี่</string>
+    <string name="history_clear_watch">ลบผลการวัดที่ค้างในนาฬิกา</string>
+    <string name="history_row_summary">%1$s  ·  %2$s  ·  %3$s</string>
+
+    <!-- Session summary pieces -->
+    <string name="duration_minutes_seconds">%1$d น. %2$d วิ</string>
+    <string name="duration_seconds">%1$d วิ</string>
+
+    <!-- Messages -->
+    <string name="msg_wear_checking">กำลังตรวจสอบการเชื่อมต่อนาฬิกา…</string>
+    <string name="msg_imported">นำเข้า %1$s แล้ว</string>
+    <string name="msg_no_watch_node">ไม่พบนาฬิกาที่ติดตั้ง GalaxyVitals ติดตั้งแอปบนนาฬิกา หรือนำเข้าไฟล์ csv.gz</string>
+    <string name="msg_sync_asked">สั่งให้นาฬิกา %1$d เครื่องซิงก์แล้ว</string>
+    <string name="msg_sync_failed">ติดต่อนาฬิกาไม่ได้</string>
+    <string name="msg_watch_cleanup">สั่งให้นาฬิกาลบผลการวัดที่ค้างแล้ว</string>
+    <string name="msg_watch_unreachable">ติดต่อนาฬิกาไม่ได้</string>
+
+    <!-- Settings -->
+    <string name="settings_title">ตั้งค่า</string>
+    <string name="settings_watch_link">การเชื่อมต่อนาฬิกา</string>
+    <string name="settings_nodes">นาฬิกาที่เชื่อมต่ออยู่</string>
+    <string name="settings_arrival_title">ผลการวัดส่งมาถึงได้อย่างไร</string>
+    <string name="settings_arrival_body">แอปบนนาฬิกาเขียนไฟล์ CSV แบบบีบอัด แล้วส่งมาที่โทรศัพท์ผ่าน Wear Data Layer ระบบจะส่งให้ก็ต่อเมื่อทั้งสองแอปใช้ application id app.galaxyvitals และคีย์เซ็นชื่อเดียวกัน</string>
+    <string name="settings_watch_title">Galaxy Watch</string>
+    <string name="settings_watch_body">ติดตั้งแอป GalaxyVitals ลงบน Galaxy Watch ที่จับคู่ไว้ การวัด ECG จากฮาร์ดแวร์ต้องใช้ไลบรารีเซ็นเซอร์ทางการของ Samsung และการอนุญาตระดับพาร์ตเนอร์สำหรับ app.galaxyvitals แอปคู่หูของผู้ผลิตรายอื่นเชื่อมต่อกับแอปนี้ไม่ได้</string>
+    <string name="settings_import_title">การนำเข้า</string>
+    <string name="settings_import_body">นำเข้าไฟล์ ecg_*.csv.gz จากแหล่งอื่นได้ที่หน้าหลัก</string>
+    <string name="settings_model_title">โมเดลวิเคราะห์จังหวะ</string>
+    <string name="settings_model_body">หลังการวัดแต่ละครั้ง โทรศัพท์จะรันโมเดลวิเคราะห์จังหวะในเครื่อง เมื่อสัญญาณผ่านการตรวจคุณภาพแล้ว โมเดลจะจัดคลื่นลีดเดียวความยาว 30 วินาทีเป็นสม่ำเสมอ ไม่สม่ำเสมอ หรือสรุปไม่ได้ คะแนนที่แสดงคือความมั่นใจของโมเดล ไม่ใช่การวินิจฉัย และไม่มีการระบุชื่อภาวะใด</string>
+    <string name="settings_display_title">กราฟถูกวาดอย่างไร</string>
+    <string name="settings_display_body">กราฟวาดที่ 25 มม./วิ และ 10 มม./มV ซึ่งเป็นมาตราส่วนที่ใช้อ่าน ECG ทางคลินิก หลังปรับทิศตามข้อมือและผ่านตัวกรองเฉพาะการแสดงผล ส่วนค่าตัวเลขวัดที่ย่านความถี่ระดับวินิจฉัย ข้อมูล ECG ที่เก็บและที่ส่งออกยังคงเป็นค่าดิบไม่ถูกแก้ไข</string>
+    <string name="settings_disclaimer_title">ข้อจำกัดความรับผิดชอบ</string>
+    <string name="settings_disclaimer_body">GalaxyVitals ไม่ใช่เครื่องมือแพทย์และไม่ได้วินิจฉัยโรค หากรู้สึกไม่สบาย ให้พบแพทย์</string>
+    <string name="settings_license_title">สัญญาอนุญาต</string>
+    <string name="settings_license_body">Apache License 2.0 · application id app.galaxyvitals</string>
+    <string name="import_dialog_title">นำเข้าผลคลื่นไฟฟ้าหัวใจนี้ไหม</string>
+    <string name="import_dialog_body">นำเข้าเฉพาะไฟล์ที่คุณเชื่อถือ GalaxyVitals จะตรวจสอบไฟล์แล้วคัดลอกไปเก็บในพื้นที่ส่วนตัวของแอป</string>
+    <string name="import_dialog_confirm">นำเข้า</string>
+    <string name="strip_speed_chip">%1$s มม./วิ</string>
+    <string name="strip_gain_chip">%1$s มม./มV</string>
+    <string name="strip_content_description">กราฟลีด I ความยาว %1$d วินาที ทำเครื่องหมายไว้ %2$d จังหวะ</string>
+    <string name="wear_no_node">ไม่พบนาฬิกาที่ติดตั้ง GalaxyVitals ติดตั้งแอปบนนาฬิกาและวางนาฬิกาไว้ใกล้ ๆ</string>
+    <string name="wear_connected">เชื่อมต่อกับนาฬิกา %1$d เครื่องที่ใช้แอปเดียวกัน</string>
+    <string name="wear_api_unavailable">โทรศัพท์เครื่องนี้ไม่มีบริการ Wear OS</string>
+</resources>

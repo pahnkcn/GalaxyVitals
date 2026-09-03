@@ -9,6 +9,7 @@ import app.galaxyvitals.analysis.EcgRhythmEngine
 import app.galaxyvitals.analysis.ModelFailureStage
 import app.galaxyvitals.data.local.AppDatabase
 import app.galaxyvitals.data.local.EcgSessionEntity
+import app.galaxyvitals.data.protocol.EcgBandwidth
 import app.galaxyvitals.data.protocol.EcgCsvParser
 import app.galaxyvitals.data.protocol.EcgCsvWriter
 import app.galaxyvitals.data.protocol.EcgDisplayProcessor
@@ -18,6 +19,8 @@ import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSample
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
+import app.galaxyvitals.export.EcgReportBuilder
+import app.galaxyvitals.export.EcgReportModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -66,6 +69,41 @@ class EcgRepository(
             emptyList()
         }
     }
+
+    /**
+     * Everything the detail screen and the exports report for one recording.
+     *
+     * Parses the stored file once and runs the whole analysis chain over it:
+     * quality, beat detection, HRV and the signal metrics the display filter
+     * measures. Returns null when the file behind the row is gone.
+     */
+    suspend fun loadReport(
+        session: EcgSession,
+        bandwidth: EcgBandwidth = EcgReportBuilder.REPORT_BANDWIDTH,
+        appVersion: String,
+        note: String = "",
+    ): EcgReportModel? = withContext(Dispatchers.Default) {
+        val file = File(session.filePath)
+        if (!file.exists()) return@withContext null
+        try {
+            val parsed = EcgCsvParser.parseFile(file, session.sessionId)
+            EcgReportBuilder.build(
+                parsed = parsed,
+                session = session,
+                appVersion = appVersion,
+                bandwidth = bandwidth,
+                note = note,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** The stored capture itself, for a byte-for-byte export. */
+    fun storedFile(session: EcgSession): File? =
+        File(session.filePath).takeIf { it.isFile }
 
     suspend fun importUri(uri: Uri): EcgSession = withContext(Dispatchers.IO) {
         ingestMutex.withLock {

@@ -1,6 +1,5 @@
 package app.galaxyvitals.ui.detail
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,10 +9,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,212 +25,325 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import app.galaxyvitals.analysis.shortHelp
-import app.galaxyvitals.analysis.EcgAnalysisBundle
-import app.galaxyvitals.data.protocol.NaoLabel
-import app.galaxyvitals.domain.AnalysisStatus
-import app.galaxyvitals.domain.EcgSample
-import app.galaxyvitals.domain.EcgSession
-import app.galaxyvitals.ui.components.EcgWaveform
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import app.galaxyvitals.R
+import app.galaxyvitals.data.protocol.EcgBandwidth
+import app.galaxyvitals.data.protocol.StripSpec
+import app.galaxyvitals.export.AndroidReportText
+import app.galaxyvitals.export.EcgReportModel
+import app.galaxyvitals.export.ExportFormat
+import app.galaxyvitals.ui.EcgScaleCalibration
 import app.galaxyvitals.ui.components.ScreenTopBar
-import app.galaxyvitals.ui.durationLabel
-import app.galaxyvitals.ui.findingRows
-import app.galaxyvitals.ui.hrLabel
-import app.galaxyvitals.ui.hrSourceLabel
-import app.galaxyvitals.ui.naoConfidenceLabel
-import app.galaxyvitals.ui.naoTitle
-import app.galaxyvitals.ui.stampLabel
+import app.galaxyvitals.ui.pxPerMm
 import app.galaxyvitals.ui.theme.Amber
-import app.galaxyvitals.ui.theme.Danger
-import app.galaxyvitals.ui.theme.Mint
+import app.galaxyvitals.ui.theme.EcgType
+import app.galaxyvitals.ui.theme.Spacing
+
+/** Sheet is the whole recording at a glance; true scale is the one you measure. */
+enum class StripMode { SHEET, TRUE_SCALE }
 
 @Composable
 fun EcgDetailScreen(
-    session: EcgSession?,
-    samples: List<EcgSample>,
+    report: EcgReportModel?,
+    loading: Boolean,
+    sessionId: String?,
+    bandwidth: EcgBandwidth,
+    calibration: EcgScaleCalibration,
+    exporting: Boolean,
     onLoad: (String) -> Unit,
+    onBandwidth: (EcgBandwidth) -> Unit,
+    onExport: (ExportFormat, String, AndroidReportText, String) -> Unit,
     onBack: () -> Unit,
     onDelete: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
-    LaunchedEffect(session?.sessionId) {
-        session?.sessionId?.let(onLoad)
+    var showExport by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(StripMode.SHEET) }
+    var spec by remember { mutableStateOf(StripSpec()) }
+
+    val context = LocalContext.current
+    val text = remember(context) { AndroidReportText(context) }
+    val chooserTitle = stringResource(R.string.export_chooser)
+
+    LaunchedEffect(sessionId) {
+        sessionId?.let(onLoad)
     }
-    if (confirmDelete && session != null) {
+
+    if (confirmDelete && sessionId != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete recording?") },
-            text = { Text("This removes the recording from this phone and the linked watch. It cannot be undone.") },
+            title = { Text(stringResource(R.string.ecg_delete_title)) },
+            text = { Text(stringResource(R.string.ecg_delete_body)) },
             confirmButton = {
                 TextButton(onClick = {
-                    onDelete(session.sessionId)
+                    onDelete(sessionId)
                     confirmDelete = false
                     onBack()
-                }) { Text("Delete") }
+                }) { Text(stringResource(R.string.action_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
+
+    if (showExport && sessionId != null) {
+        ExportSheet(
+            running = exporting,
+            onDismiss = { showExport = false },
+            onExport = { format, note ->
+                onExport(format, note, text, chooserTitle)
+                showExport = false
+            },
+        )
+    }
+
     Column(modifier.fillMaxSize()) {
         ScreenTopBar(
-            title = "ECG",
+            title = stringResource(R.string.ecg_title),
             onBack = onBack,
             actions = {
-                if (session != null) {
-                    TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
+                if (report != null) {
+                    TextButton(onClick = { showExport = true }) {
+                        Text(stringResource(R.string.action_export))
+                    }
+                }
+                if (sessionId != null) {
+                    TextButton(onClick = { confirmDelete = true }) {
+                        Text(stringResource(R.string.action_delete))
+                    }
                 }
             },
         )
-        if (session == null) {
-            Text("Recording missing", modifier = Modifier.padding(20.dp))
-        } else {
-        Column(
-            Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp),
-        ) {
-            Text(session.hrLabel(), fontSize = 72.sp, fontWeight = FontWeight.Light, color = Mint)
-            Text(session.hrSourceLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(session.stampLabel(), modifier = Modifier.padding(top = 8.dp))
-            Spacer(Modifier.height(16.dp))
-            AnalysisCard(session)
-            if (session.analysisBundleId != null &&
-                session.analysisBundleId != EcgAnalysisBundle.CURRENT_COMPATIBILITY_ID
-            ) {
-                Text(
-                    "This analysis is stale because the verified analysis bundle changed.",
-                    color = Amber,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-            Spacer(Modifier.height(16.dp))
-            EcgWaveform(
-                samples = samples,
-                interactive = true,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(8.dp),
+
+        when {
+            report != null -> DetailBody(
+                report = report,
+                text = text,
+                bandwidth = bandwidth,
+                mode = mode,
+                spec = spec,
+                calibration = calibration,
+                onMode = { mode = it },
+                onSpec = { spec = it },
+                onBandwidth = onBandwidth,
             )
-            Text(
-                "Drag to pan · use + / – to zoom · ${session.srHz} Hz · ${session.unit}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            Text(
-                "Display filtered 0.5–40 Hz · stored ECG remains raw",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, bottom = 16.dp),
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatChip("Clean", "${session.cleanCoveragePct.toInt()}%", Modifier.weight(1f))
-                StatChip("Timing", session.timingTrust.lowercase(), Modifier.weight(1f))
-                StatChip("Time", session.durationLabel(), Modifier.weight(1f))
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatChip("Wrist", session.wrist.name.lowercase(), Modifier.weight(1f))
-                StatChip("Quality", session.qualityStatus.lowercase(), Modifier.weight(1f))
-                StatChip("Schema", "v${session.inputSchemaVersion}", Modifier.weight(1f))
-            }
-            if (session.qualityFlagsJson != "[]") {
-                Text(
-                    "Quality flags: ${session.qualityFlagsJson}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 10.dp),
-                )
-            }
-            Spacer(Modifier.height(20.dp))
-            Text(
-                "Screening only. The on-device N/A/O rhythm model is not a medical device. " +
-                    "A single-lead watch strip cannot replace a 12-lead ECG or a clinician.",
-                style = MaterialTheme.typography.bodySmall,
+
+            loading -> Text(
+                text = stringResource(R.string.ecg_loading),
+                modifier = Modifier.padding(Spacing.page),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(32.dp))
-        }
+
+            else -> Text(
+                text = stringResource(R.string.ecg_missing),
+                modifier = Modifier.padding(Spacing.page),
+            )
         }
     }
 }
 
 @Composable
-private fun AnalysisCard(session: EcgSession) {
-    val nao = session.naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
-    val tint = when {
-        session.analysisStatus == AnalysisStatus.FAILED -> Danger
-        session.analysisStatus == AnalysisStatus.LOW_QUALITY -> Amber
-        session.analysisStatus == AnalysisStatus.INDETERMINATE -> Amber
-        nao == NaoLabel.A -> Danger
-        nao == NaoLabel.O -> Amber
-        else -> Mint
-    }
+private fun DetailBody(
+    report: EcgReportModel,
+    text: AndroidReportText,
+    bandwidth: EcgBandwidth,
+    mode: StripMode,
+    spec: StripSpec,
+    calibration: EcgScaleCalibration,
+    onMode: (StripMode) -> Unit,
+    onSpec: (StripSpec) -> Unit,
+    onBandwidth: (EcgBandwidth) -> Unit,
+) {
+    // The measured rate, not the declared one: a Galaxy Watch says 500 Hz and
+    // runs at about 501.7, which is a third of a millimetre over 30 seconds.
+    val srHz = report.header.effectiveSrHz.takeIf { it > 0.0 }
+        ?: report.header.nominalSrHz.toDouble()
+    val physicalPxPerMm = pxPerMm(calibration)
+
     Column(
         Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Spacing.page),
+        verticalArrangement = Arrangement.spacedBy(Spacing.item),
     ) {
-        Text("Rhythm screen", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        VerdictBand(
+            report = report,
+            recordedAt = text.timestamp(report.header.tsStartMs),
+        )
+
+        if (report.verdict.staleBundle) {
             Text(
-                session.naoTitle(),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = tint,
+                text = stringResource(R.string.ecg_stale_analysis),
+                style = MaterialTheme.typography.bodySmall,
+                color = Amber,
             )
-            val confidence = session.naoConfidenceLabel()
-            if (confidence.isNotEmpty()) {
-                Column(modifier = Modifier.padding(top = 4.dp)) {
-                    Text("model score", style = MaterialTheme.typography.labelSmall)
-                    Text(confidence, style = MaterialTheme.typography.titleMedium)
+        }
+
+        StripControls(
+            mode = mode,
+            bandwidth = bandwidth,
+            spec = spec,
+            onMode = onMode,
+            onSpec = onSpec,
+            onBandwidth = onBandwidth,
+        )
+
+        if (report.displaySamples.size < 2) {
+            Text(
+                text = stringResource(R.string.strip_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else if (mode == StripMode.SHEET) {
+            EcgSheetStrip(
+                samples = report.displaySamples,
+                durationSec = report.header.durationSec,
+                srHz = srHz,
+                spec = spec,
+                rPeaksMs = report.beats.rPeaksMs,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            EcgTrueScaleStrip(
+                samples = report.displaySamples,
+                durationSec = report.header.durationSec,
+                srHz = srHz,
+                spec = spec,
+                rPeaksMs = report.beats.rPeaksMs,
+                pxPerMm = physicalPxPerMm,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Text(
+            text = stringResource(
+                if (mode == StripMode.SHEET) {
+                    R.string.strip_caption_sheet
+                } else {
+                    R.string.strip_caption_true_scale
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "${text.scale(report.header)} · ${text.filter(report.header)}",
+            style = EcgType.dataSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(Spacing.tight))
+        Text(
+            text = stringResource(R.string.section_measurements),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        MeasurementTable(report)
+
+        SignalQualityCard(report)
+
+        Text(
+            text = stringResource(R.string.ecg_disclaimer),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(Spacing.section))
+    }
+}
+
+@Composable
+private fun StripControls(
+    mode: StripMode,
+    bandwidth: EcgBandwidth,
+    spec: StripSpec,
+    onMode: (StripMode) -> Unit,
+    onSpec: (StripSpec) -> Unit,
+    onBandwidth: (EcgBandwidth) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            StripMode.entries.forEachIndexed { index, entry ->
+                SegmentedButton(
+                    selected = mode == entry,
+                    onClick = { onMode(entry) },
+                    shape = SegmentedButtonDefaults.itemShape(index, StripMode.entries.size),
+                ) {
+                    Text(
+                        stringResource(
+                            if (entry == StripMode.SHEET) {
+                                R.string.strip_mode_sheet
+                            } else {
+                                R.string.strip_mode_true_scale
+                            },
+                        ),
+                    )
                 }
             }
         }
-        val body = when (session.analysisStatus) {
-            AnalysisStatus.PENDING -> "Running the on-device N/A/O rhythm model on this recording…"
-            AnalysisStatus.FAILED -> session.analysisNote.ifBlank { "Analysis failed." }
-            AnalysisStatus.LOW_QUALITY -> session.analysisNote.ifBlank {
-                "The strip quality is too low for a rhythm result."
+
+        // Speed and gain only mean something once the drawing is to scale; on the
+        // fitted sheet they would change the shape without changing the size.
+        if (mode == StripMode.TRUE_SCALE) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+                StripSpec.SPEED_OPTIONS.forEach { speed ->
+                    FilterChip(
+                        selected = spec.speedMmPerSec == speed,
+                        onClick = { onSpec(spec.copy(speedMmPerSec = speed)) },
+                        label = {
+                            Text(
+                                stringResource(R.string.strip_speed_chip, trim(speed)),
+                                style = EcgType.dataSmall,
+                            )
+                        },
+                    )
+                }
             }
-            AnalysisStatus.INDETERMINATE -> session.analysisNote.ifBlank { "No rhythm result is available." }
-            AnalysisStatus.OK -> nao?.shortHelp() ?: "Analysis complete."
-            AnalysisStatus.NONE -> "No analysis yet."
-        }
-        Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        session.findingRows().forEach { (name, score) ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                Text(score, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+                StripSpec.GAIN_OPTIONS.forEach { gain ->
+                    FilterChip(
+                        selected = spec.gainMmPerMv == gain,
+                        onClick = { onSpec(spec.copy(gainMmPerMv = gain)) },
+                        label = {
+                            Text(
+                                stringResource(R.string.strip_gain_chip, trim(gain)),
+                                style = EcgType.dataSmall,
+                            )
+                        },
+                    )
+                }
             }
         }
-        if (session.analysisNote.isNotBlank() && session.analysisStatus == AnalysisStatus.OK) {
-            Text(session.analysisNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.tight)) {
+            FilterChip(
+                selected = bandwidth == EcgBandwidth.DIAGNOSTIC,
+                onClick = { onBandwidth(EcgBandwidth.DIAGNOSTIC) },
+                label = { Text(stringResource(R.string.strip_bandwidth_diagnostic)) },
+            )
+            FilterChip(
+                selected = bandwidth == EcgBandwidth.MONITOR,
+                onClick = { onBandwidth(EcgBandwidth.MONITOR) },
+                label = { Text(stringResource(R.string.strip_bandwidth_monitor)) },
+            )
         }
+        Text(
+            text = stringResource(
+                if (bandwidth == EcgBandwidth.DIAGNOSTIC) {
+                    R.string.strip_bandwidth_hint_diagnostic
+                } else {
+                    R.string.strip_bandwidth_hint_monitor
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
-@Composable
-private fun StatChip(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(12.dp),
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
-    }
-}
+private fun trim(value: Double): String =
+    if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()

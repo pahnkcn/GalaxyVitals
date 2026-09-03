@@ -1,6 +1,7 @@
 package app.galaxyvitals.data.wear
 
 import android.content.Context
+import app.galaxyvitals.R
 import app.galaxyvitals.data.protocol.EcgWearContract
 import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
@@ -25,9 +26,9 @@ class WearSyncClient(context: Context) {
                 available = nodes.isNotEmpty(),
                 nodes = nodes.map(Node::getDisplayName),
                 note = if (nodes.isEmpty()) {
-                    "No Wear OS node for app.galaxyvitals. Install the GalaxyVitals watch app and keep the watch nearby."
+                    appContext.getString(R.string.wear_no_node)
                 } else {
-                    "Connected to ${nodes.size} node(s) with the same application id."
+                    appContext.getString(R.string.wear_connected, nodes.size)
                 },
             )
         } catch (cancelled: CancellationException) {
@@ -36,7 +37,7 @@ class WearSyncClient(context: Context) {
             WearLinkStatus(
                 available = false,
                 nodes = emptyList(),
-                note = "Wearable API unavailable.",
+                note = appContext.getString(R.string.wear_api_unavailable),
             )
         }
     }

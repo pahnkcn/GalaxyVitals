@@ -19,17 +19,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.galaxyvitals.R
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.ui.dayLabel
 import app.galaxyvitals.ui.durationLabel
 import app.galaxyvitals.ui.hrLabel
-import app.galaxyvitals.ui.naoTitle
+import app.galaxyvitals.ui.naoTitleRes
 import app.galaxyvitals.ui.theme.HealthTrackTheme
 import app.galaxyvitals.ui.theme.Mint
 import app.galaxyvitals.ui.timeLabel
@@ -44,19 +46,19 @@ fun HistoryScreen(
 ) {
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Text(
-            "History",
+            stringResource(R.string.history_title),
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
         )
         if (sessions.isEmpty()) {
             Text(
-                "Imported and received recordings will land here.",
+                stringResource(R.string.history_empty),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (watchLinked && onClearWatchHistory != null) {
                 TextButton(onClick = onClearWatchHistory) {
-                    Text("Remove leftover watch recordings")
+                    Text(stringResource(R.string.history_clear_watch))
                 }
             }
         } else {
@@ -86,13 +88,21 @@ private fun HistoryRow(session: EcgSession, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(session.dayLabel(), fontWeight = FontWeight.Medium)
             Text(
-                "${session.timeLabel()}  ·  ${session.durationLabel()}  ·  ${session.naoTitle()}",
+                stringResource(
+                    R.string.history_row_summary,
+                    session.timeLabel(),
+                    session.durationLabel(),
+                    stringResource(session.naoTitleRes()),
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Text(session.hrLabel(), fontSize = 28.sp, color = Mint, fontWeight = FontWeight.Light)
-        Text(" bpm", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            " " + stringResource(R.string.unit_bpm),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

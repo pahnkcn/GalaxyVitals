@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import app.galaxyvitals.ui.HealthTrackRoot
 import app.galaxyvitals.ui.HealthTrackViewModel
 import app.galaxyvitals.ui.theme.HealthTrackTheme
@@ -60,23 +61,19 @@ class MainActivity : ComponentActivity() {
                     pendingExternalImport?.let { uri ->
                         AlertDialog(
                             onDismissRequest = { pendingExternalImport = null },
-                            title = { Text("Import ECG recording?") },
-                            text = {
-                                Text(
-                                    "Only import a file you trust. GalaxyVitals will validate and copy it into private storage.",
-                                )
-                            },
+                            title = { Text(stringResource(R.string.import_dialog_title)) },
+                            text = { Text(stringResource(R.string.import_dialog_body)) },
                             confirmButton = {
                                 TextButton(
                                     onClick = {
                                         pendingExternalImport = null
                                         viewModel.importUri(uri)
                                     },
-                                ) { Text("Import") }
+                                ) { Text(stringResource(R.string.import_dialog_confirm)) }
                             },
                             dismissButton = {
                                 TextButton(onClick = { pendingExternalImport = null }) {
-                                    Text("Cancel")
+                                    Text(stringResource(R.string.action_cancel))
                                 }
                             },
                         )

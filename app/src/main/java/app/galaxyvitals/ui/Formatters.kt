@@ -1,14 +1,23 @@
 package app.galaxyvitals.ui
 
-import app.galaxyvitals.data.protocol.EcgFounderLabels
-import app.galaxyvitals.data.protocol.NaoLabel
+import androidx.annotation.StringRes
+import app.galaxyvitals.R
 import app.galaxyvitals.data.protocol.LiveBpmSummarizer
+import app.galaxyvitals.data.protocol.NaoLabel
 import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.domain.EcgSession
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+/**
+ * Session values in the shape a row or a card needs them.
+ *
+ * Anything with wording returns a string resource rather than a string, so these
+ * stay pure Kotlin — testable off-device, and translated at the call site along
+ * with the rest of the screen.
+ */
 
 private fun formatDate(pattern: String, epochMs: Long): String =
     SimpleDateFormat(pattern, Locale.getDefault()).format(Date(epochMs))
@@ -19,12 +28,12 @@ fun EcgSession.timeLabel(): String = formatDate("HH:mm", tsStartMs)
 
 fun EcgSession.stampLabel(): String = formatDate("d MMM yyyy · HH:mm", tsStartMs)
 
-fun EcgSession.durationLabel(): String {
-    val total = if (durationSec.isFinite()) durationSec.roundToInt().coerceAtLeast(0) else 0
-    val m = total / 60
-    val s = total % 60
-    return if (m > 0) "${m}m ${s}s" else "${s}s"
-}
+private fun EcgSession.durationTotalSeconds(): Int =
+    if (durationSec.isFinite()) durationSec.roundToInt().coerceAtLeast(0) else 0
+
+fun EcgSession.durationMinutes(): Int = durationTotalSeconds() / 60
+
+fun EcgSession.durationSeconds(): Int = durationTotalSeconds() % 60
 
 private fun EcgSession.primaryHrMedian(): Double? =
     if (liveBpmAlgorithmId == LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID) {
@@ -35,25 +44,21 @@ private fun EcgSession.primaryHrMedian(): Double? =
 
 fun EcgSession.hrLabel(): String = primaryHrMedian()?.let { "${it.roundToInt()}" } ?: "—"
 
-fun EcgSession.hrSourceLabel(): String = when {
-    liveBpmAlgorithmId == LiveBpmSummarizer.SAMSUNG_PRIMARY_ALGORITHM_ID &&
-        liveBpmMedian != null -> "Samsung processed heart-rate median bpm"
-    ecgHrMedian != null -> "ECG-derived median bpm"
-    else -> "legacy median bpm"
-}
-
-fun EcgSession.naoTitle(): String {
-    if (analysisStatus == AnalysisStatus.LOW_QUALITY) return "Low quality"
-    if (analysisStatus == AnalysisStatus.PENDING) return "Analysing…"
-    if (analysisStatus == AnalysisStatus.FAILED) return "Not analysed"
-    if (analysisStatus == AnalysisStatus.INDETERMINATE) return "Indeterminate"
-    if (analysisStatus != AnalysisStatus.OK) return "—"
-    val parsed = naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
-    return when (parsed) {
-            NaoLabel.N -> "Regular"
-            NaoLabel.A -> "Irregular"
-            NaoLabel.O -> "Inconclusive"
-            null -> "—"
+/**
+ * The same rhythm vocabulary the detail screen and the exported report use.
+ * A recording is described identically wherever it appears.
+ */
+@StringRes
+fun EcgSession.naoTitleRes(): Int {
+    if (analysisStatus == AnalysisStatus.LOW_QUALITY) return R.string.verdict_low_quality
+    if (analysisStatus == AnalysisStatus.PENDING) return R.string.verdict_pending
+    if (analysisStatus == AnalysisStatus.INDETERMINATE) return R.string.verdict_indeterminate
+    if (analysisStatus != AnalysisStatus.OK) return R.string.verdict_not_analysed
+    return when (naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }) {
+        NaoLabel.N -> R.string.verdict_regular
+        NaoLabel.A -> R.string.verdict_irregular
+        NaoLabel.O -> R.string.verdict_inconclusive
+        null -> R.string.verdict_indeterminate
     }
 }
 
@@ -62,12 +67,4 @@ fun EcgSession.naoConfidenceLabel(): String {
     val value = naoConfidence ?: return ""
     if (!value.isFinite()) return ""
     return "${(value * 100).toInt()}%"
-}
-
-fun EcgSession.findingRows(): List<Pair<String, String>> {
-    if (analysisStatus != AnalysisStatus.OK) return emptyList()
-    return EcgFounderLabels.decodeFindings(findings).map { item ->
-        item.name.lowercase().replaceFirstChar { it.titlecase() } to
-            "${(item.score * 100).toInt()}%"
-    }
 }

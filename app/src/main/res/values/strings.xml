@@ -3,4 +3,255 @@
     <string name="app_name">GalaxyVitals</string>
     <string name="ecg_received_title">ECG received</string>
     <string name="ecg_received_body">A recording is ready</string>
+
+    <!-- Shell -->
+    <string name="action_back">Back</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_export">Export</string>
+    <string name="action_import">Import recording</string>
+    <string name="action_sync">Sync watch</string>
+    <string name="action_history">History</string>
+    <string name="action_open">Open</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_history">History</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- ECG detail -->
+    <string name="ecg_title">ECG</string>
+    <string name="ecg_missing">This recording is no longer on the phone.</string>
+    <string name="ecg_loading">Reading the recording…</string>
+    <string name="ecg_delete_title">Delete this recording?</string>
+    <string name="ecg_delete_body">This removes the recording from the phone and the linked watch. It cannot be undone.</string>
+    <string name="ecg_stale_analysis">This result came from an older version of the rhythm model. Reopen the recording to run it again.</string>
+    <string name="ecg_disclaimer">Screening only. This is not a medical device, and a single-lead watch strip cannot replace a 12-lead ECG or a clinician.</string>
+
+    <!-- Verdict -->
+    <string name="verdict_regular">Regular rhythm</string>
+    <string name="verdict_irregular">Irregular rhythm</string>
+    <string name="verdict_inconclusive">No clear result</string>
+    <string name="verdict_low_quality">Too noisy to read</string>
+    <string name="verdict_pending">Reading the recording</string>
+    <string name="verdict_not_analysed">Not analysed</string>
+    <string name="verdict_indeterminate">No result</string>
+    <string name="verdict_regular_body">The beats came at an even pace for the whole recording.</string>
+    <string name="verdict_irregular_body">The spacing between beats changed during the recording. Show this strip to a doctor.</string>
+    <string name="verdict_inconclusive_body">The rhythm did not match a pattern this app can name. That is not the same as a problem.</string>
+    <string name="verdict_low_quality_body">Too much of the signal was disturbed to read a rhythm. Sit still, rest your arm on a table, and hold your finger steady on the watch.</string>
+    <string name="verdict_pending_body">The rhythm model is still running on this recording.</string>
+    <string name="verdict_not_analysed_body">The rhythm model could not run on this recording. The trace and the measurements below are still valid.</string>
+    <string name="verdict_none_body">Open this recording to run the rhythm model.</string>
+    <string name="verdict_model_score">Model score %1$s</string>
+
+    <!-- Strip -->
+    <string name="strip_mode_sheet">Sheet</string>
+    <string name="strip_mode_true_scale">True scale</string>
+    <string name="strip_caption_sheet">Fitted to the screen width, so it is not to scale. Switch to true scale to measure.</string>
+    <string name="strip_caption_true_scale">Real millimetres. Five large boxes across = 25 mm = one second.</string>
+    <string name="strip_lead">Lead I</string>
+    <string name="strip_row_range">%1$s–%2$s s</string>
+    <string name="strip_scale">%1$s mm/s · %2$s mm/mV</string>
+    <string name="strip_bandwidth_diagnostic">150 Hz</string>
+    <string name="strip_bandwidth_monitor">40 Hz</string>
+    <string name="strip_bandwidth_label">Detail</string>
+    <string name="strip_bandwidth_hint_diagnostic">Full diagnostic detail, the bandwidth a clinical ECG is measured at.</string>
+    <string name="strip_bandwidth_hint_monitor">Smoothed for reading. Peaks look about a fifth shorter than they are.</string>
+    <string name="strip_speed">Speed</string>
+    <string name="strip_gain">Size</string>
+    <string name="strip_beats_marked">R waves marked</string>
+    <string name="strip_empty">No trace to draw.</string>
+
+    <!-- Measurements -->
+    <string name="section_measurements">Measurements</string>
+    <string name="measure_heart_rate">Heart rate</string>
+    <string name="measure_heart_rate_range">Slowest to fastest</string>
+    <string name="measure_rr_mean">Time between beats</string>
+    <string name="measure_sdnn">Overall variation (SDNN)</string>
+    <string name="measure_rmssd">Beat-to-beat variation (RMSSD)</string>
+    <string name="measure_pnn50">Beats differing by 50 ms (pNN50)</string>
+    <string name="measure_beat_count">Beats detected</string>
+    <string name="measure_corrected_intervals">Intervals set aside</string>
+    <string name="measure_detector_agreement">Detector agreement</string>
+    <string name="measure_analysed_duration">Signal used</string>
+    <string name="unit_bpm">bpm</string>
+    <string name="unit_ms">ms</string>
+    <string name="unit_percent">%</string>
+    <string name="unit_seconds">s</string>
+    <string name="unit_beats">beats</string>
+    <string name="unit_none"></string>
+
+    <!-- Why a number is missing -->
+    <string name="unavailable_insufficient_data">Not enough clean beats</string>
+    <string name="unavailable_low_quality">Signal too noisy</string>
+    <string name="unavailable_too_many_corrections">Too many intervals set aside</string>
+    <string name="unavailable_detector_disagreement">The two beat detectors disagreed</string>
+
+    <!-- Plain-language explanations, one per measurement -->
+    <string name="explain_heart_rate">The middle value of every beat-to-beat rate in this recording. A resting adult usually sits between 60 and 100 bpm, and fit people are often lower.</string>
+    <string name="explain_heart_rate_range">The slowest and the fastest single beat in the recording. A gap between them is normal — the heart speeds up slightly when you breathe in.</string>
+    <string name="explain_rr_mean">The average gap between beats, and how much that gap moved. Doctors call this the RR interval.</string>
+    <string name="explain_sdnn">How much the gap between beats varied across the whole recording. It reflects the balance between the nerves that speed the heart up and slow it down. Over 30 seconds it is a rough indication, not a health score.</string>
+    <string name="explain_rmssd">How much each beat differed from the one just before it. It responds mainly to the nerve that slows the heart, and it moves with rest, stress and breathing.</string>
+    <string name="explain_pnn50">The share of consecutive beats that differed by more than 50 milliseconds. Another way of describing beat-to-beat variation.</string>
+    <string name="explain_beat_count">How many heartbeats were found in the parts of the recording clean enough to read.</string>
+    <string name="explain_corrected_intervals">Gaps between beats that were left out of the calculations because they were too far from the others to be a real heartbeat — usually a movement artefact. The second number is how many gaps were examined.</string>
+    <string name="explain_detector_agreement">Two independent beat detectors ran over this recording. This is how often they picked the same beat. Low agreement means the numbers above are less certain.</string>
+    <string name="explain_analysed_duration">How much of the recording was clean enough to measure, out of its full length.</string>
+
+    <!-- Signal quality -->
+    <string name="section_signal_quality">Signal quality</string>
+    <string name="quality_usable">%1$s%% of the recording was clean enough to read</string>
+    <string name="quality_status_good">Good</string>
+    <string name="quality_status_low">Low</string>
+    <string name="quality_status_invalid">Unusable</string>
+    <string name="quality_status_unknown">Unknown</string>
+    <string name="quality_noisy_spans">Disturbed at %1$s s</string>
+    <string name="quality_mains">Electrical interference at %1$s Hz was removed</string>
+    <string name="flag_legacy_timing">The recording carries no trusted sample clock</string>
+    <string name="flag_unsupported_rate">The sample rate is not one this app can analyse</string>
+    <string name="flag_timestamp_gap">Part of the recording is missing</string>
+    <string name="flag_missing_samples">Some samples never arrived from the watch</string>
+    <string name="flag_contact_loss">The watch lost contact with your skin</string>
+    <string name="flag_clipping">The signal was too large for the sensor</string>
+    <string name="flag_flatline">Part of the recording is flat</string>
+    <string name="flag_held_signal">The sensor repeated the same value</string>
+    <string name="flag_impulse_noise">Sharp spikes, usually from moving</string>
+    <string name="flag_baseline_drift">The trace drifted up and down, usually from moving your arm</string>
+    <string name="flag_mains_interference">Interference from mains power nearby</string>
+    <string name="flag_high_frequency_noise">Muscle noise, usually from tensing your arm</string>
+    <string name="flag_low_amplitude">The signal was very small</string>
+    <string name="flag_insufficient_clean_coverage">Too little of the recording was clean</string>
+
+    <!-- Export -->
+    <string name="export_title">Export this recording</string>
+    <string name="export_pdf">PDF report</string>
+    <string name="export_pdf_body">A printable page for a doctor. The strip is drawn at 25 mm/s and 10 mm/mV, so it can be measured with a ruler.</string>
+    <string name="export_xlsx">Excel workbook</string>
+    <string name="export_xlsx_body">Every sample and every beat interval, with the summary on its own sheet.</string>
+    <string name="export_csv">Original file</string>
+    <string name="export_csv_body">The capture exactly as the watch recorded it, unchanged.</string>
+    <string name="export_note_label">Note for the doctor (optional)</string>
+    <string name="export_note_hint">What you felt, or your name</string>
+    <string name="export_note_privacy">Printed on the report only. Nothing you type here is saved on the phone.</string>
+    <string name="export_share">Share</string>
+    <string name="export_preparing">Preparing the file…</string>
+    <string name="export_failed">The file could not be written. Try again.</string>
+    <string name="export_chooser">Share ECG</string>
+
+    <!-- Report wording, used by the PDF and the spreadsheet -->
+    <string name="report_title">ECG report</string>
+    <string name="report_section_recording">Recording</string>
+    <string name="report_section_rhythm">Rhythm</string>
+    <string name="report_section_note">Note</string>
+    <string name="report_field_recorded_at">Recorded</string>
+    <string name="report_field_duration">Duration</string>
+    <string name="report_field_sample_rate">Sample rate</string>
+    <string name="report_field_sample_count">Samples</string>
+    <string name="report_field_lead">Lead</string>
+    <string name="report_field_wrist">Wrist</string>
+    <string name="report_field_device">Device</string>
+    <string name="report_field_capture_source">Source</string>
+    <string name="report_field_filter">Filter</string>
+    <string name="report_field_scale">Scale</string>
+    <string name="report_field_session_id">Recording ID</string>
+    <string name="report_field_checksum">Checksum</string>
+    <string name="report_field_analysis_bundle">Model bundle</string>
+    <string name="report_field_app_version">App version</string>
+    <string name="report_field_model_score">Model score</string>
+    <string name="report_field_quality_status">Quality</string>
+    <string name="report_field_clean_coverage">Clean signal</string>
+    <string name="report_field_noisy_spans">Disturbed</string>
+    <string name="report_field_mains">Mains interference</string>
+    <string name="report_field_baseline_excursion">Baseline movement</string>
+    <string name="report_field_note_text">Note</string>
+    <string name="report_field_time_ms">Time (ms)</string>
+    <string name="report_field_sensor_rel_ms">Sensor time (ms)</string>
+    <string name="report_field_raw_mv">Raw (mV)</string>
+    <string name="report_field_filtered_mv">Filtered (mV)</string>
+    <string name="report_field_sample_flags">Flags</string>
+    <string name="report_field_r_peak_ms">R wave (ms)</string>
+    <string name="report_field_rr_all_ms">All intervals (ms)</string>
+    <string name="report_field_rr_nn_ms">Normal intervals (ms)</string>
+    <string name="report_field_value">Value</string>
+    <string name="report_field_spread">Spread</string>
+    <string name="report_field_unit">Unit</string>
+    <string name="report_wrist_left">Left</string>
+    <string name="report_wrist_right">Right</string>
+    <string name="report_wrist_unknown">Not recorded</string>
+    <string name="report_source_hardware">Galaxy Watch</string>
+    <string name="report_source_import">Imported file</string>
+    <string name="report_source_legacy">Earlier version</string>
+    <string name="report_filter_diagnostic">0.7–150 Hz diagnostic</string>
+    <string name="report_filter_monitor">0.7–40 Hz monitor</string>
+    <string name="report_not_measured">Not measured</string>
+
+    <!-- Scale calibration -->
+    <string name="calibrate_title">Calibrate the ruler</string>
+    <string name="calibrate_body">Hold a ruler against the bar below and drag until it measures exactly 50 mm. The true-scale trace and the printed report then match a real ECG.</string>
+    <string name="calibrate_bar_label">50 mm</string>
+    <string name="calibrate_reset">Reset to the screen\'s own size</string>
+    <string name="calibrate_summary">%1$s%% of the screen\'s reported size</string>
+
+    <!-- Home -->
+    <string name="home_title">Today</string>
+    <string name="home_subtitle">ECG from your watch, kept on this phone.</string>
+    <string name="home_working">Working…</string>
+    <string name="home_watch_linked">Watch linked</string>
+    <string name="home_watch_not_linked">Watch not linked</string>
+    <string name="home_sync">Sync</string>
+    <string name="home_ecg_card">Electrocardiogram</string>
+    <string name="home_no_recordings">No recordings yet</string>
+    <string name="home_no_recordings_body">Record on the GalaxyVitals watch app, or import a csv.gz file.</string>
+    <string name="home_history_count">%1$d in history</string>
+    <string name="home_bp_title">Blood pressure</string>
+    <string name="home_bp_body">Reserved for a later source</string>
+    <string name="home_bp_soon">Soon</string>
+
+    <!-- History -->
+    <string name="history_title">History</string>
+    <string name="history_empty">Imported and received recordings land here.</string>
+    <string name="history_clear_watch">Remove leftover watch recordings</string>
+    <string name="history_row_summary">%1$s  ·  %2$s  ·  %3$s</string>
+
+    <!-- Session summary pieces -->
+    <string name="duration_minutes_seconds">%1$dm %2$ds</string>
+    <string name="duration_seconds">%1$ds</string>
+
+    <!-- Messages -->
+    <string name="msg_wear_checking">Checking the watch link…</string>
+    <string name="msg_imported">Imported %1$s</string>
+    <string name="msg_no_watch_node">No GalaxyVitals watch found. Install the watch app, or import a csv.gz file.</string>
+    <string name="msg_sync_asked">Asked %1$d watch to sync.</string>
+    <string name="msg_sync_failed">The watch could not be reached.</string>
+    <string name="msg_watch_cleanup">Asked the watch to remove leftover recordings.</string>
+    <string name="msg_watch_unreachable">The watch could not be reached.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_watch_link">Watch link</string>
+    <string name="settings_nodes">Connected watches</string>
+    <string name="settings_arrival_title">How a recording arrives</string>
+    <string name="settings_arrival_body">The GalaxyVitals watch app writes a gzip CSV and pushes it to this phone over the Wear Data Layer. Android only delivers it when both apps share the application id app.galaxyvitals and the same signing key.</string>
+    <string name="settings_watch_title">Galaxy Watch</string>
+    <string name="settings_watch_body">Sideload the GalaxyVitals watch app onto a paired Galaxy Watch. Hardware ECG needs Samsung\'s official sensor library and a partner whitelist for app.galaxyvitals. Another vendor\'s companion app cannot talk to this one.</string>
+    <string name="settings_import_title">Import</string>
+    <string name="settings_import_body">You can import an ecg_*.csv.gz file from another source on the Home screen.</string>
+    <string name="settings_model_title">Rhythm model</string>
+    <string name="settings_model_body">After each recording the phone runs a rhythm model on the device itself. Once the signal passes the quality check, it sorts the 30-second single-lead strip into regular, irregular, or inconclusive. The score shown is the model\'s own confidence, not a diagnosis, and no rhythm is named.</string>
+    <string name="settings_display_title">How the trace is drawn</string>
+    <string name="settings_display_body">The strip is drawn at 25 mm/s and 10 mm/mV, the scale every clinical ECG is read at, after wrist orientation and a display-only filter. Numbers are measured at diagnostic bandwidth. The stored and exported ECG stays raw and unchanged.</string>
+    <string name="settings_disclaimer_title">Disclaimer</string>
+    <string name="settings_disclaimer_body">GalaxyVitals is not a medical device and does not diagnose conditions. If you feel unwell, seek professional care.</string>
+    <string name="settings_license_title">License</string>
+    <string name="settings_license_body">Apache License 2.0 · application id app.galaxyvitals</string>
+    <string name="import_dialog_title">Import this ECG recording?</string>
+    <string name="import_dialog_body">Only import a file you trust. GalaxyVitals checks it and copies it into private storage.</string>
+    <string name="import_dialog_confirm">Import</string>
+    <string name="strip_speed_chip">%1$s mm/s</string>
+    <string name="strip_gain_chip">%1$s mm/mV</string>
+    <string name="strip_content_description">Lead I trace, %1$d seconds, %2$d beats marked</string>
+    <string name="wear_no_node">No GalaxyVitals watch found. Install the watch app and keep the watch nearby.</string>
+    <string name="wear_connected">Connected to %1$d watch with the same app.</string>
+    <string name="wear_api_unavailable">The Wear OS service is not available on this phone.</string>
 </resources>

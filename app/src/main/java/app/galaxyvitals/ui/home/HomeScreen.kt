@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -39,9 +40,10 @@ import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.ui.HomeUiState
+import app.galaxyvitals.R
 import app.galaxyvitals.ui.durationLabel
 import app.galaxyvitals.ui.hrLabel
-import app.galaxyvitals.ui.naoTitle
+import app.galaxyvitals.ui.naoTitleRes
 import app.galaxyvitals.ui.stampLabel
 import app.galaxyvitals.ui.theme.HealthTrackTheme
 import app.galaxyvitals.ui.theme.InkHigh
@@ -64,9 +66,9 @@ fun HomeScreen(
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Today", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.home_title), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
         Text(
-            "ECG from your watch, kept on this phone.",
+            stringResource(R.string.home_subtitle),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -86,7 +88,11 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(16.dp),
         ) {
-            Text(if (state.busy) "Working…" else "Import recording")
+            Text(
+                stringResource(
+                    if (state.busy) R.string.home_working else R.string.action_import,
+                ),
+            )
         }
         BloodPressureStub(onOpen = onOpenBp)
         Spacer(Modifier.height(24.dp))
@@ -115,7 +121,13 @@ private fun WatchChip(status: WearLinkStatus, onSync: () -> Unit) {
         }
         Column(Modifier.weight(1f)) {
             Text(
-                if (status.available) "Watch linked" else "Watch not linked",
+                stringResource(
+                    if (status.available) {
+                        R.string.home_watch_linked
+                    } else {
+                        R.string.home_watch_not_linked
+                    },
+                ),
                 fontWeight = FontWeight.Medium,
             )
             Text(
@@ -125,7 +137,7 @@ private fun WatchChip(status: WearLinkStatus, onSync: () -> Unit) {
             )
         }
         OutlinedButton(onClick = onSync, shape = RoundedCornerShape(12.dp)) {
-            Text("Sync")
+            Text(stringResource(R.string.home_sync))
         }
     }
 }
@@ -147,13 +159,16 @@ private fun EcgHeroCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Outlined.MonitorHeart, contentDescription = null, tint = Mint)
-            Text("Electrocardiogram", fontWeight = FontWeight.Medium)
+            Text(stringResource(R.string.home_ecg_card), fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(18.dp))
         if (session == null) {
-            Text("No recordings yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Record on the GalaxyVitals watch app, or import a csv.gz.",
+                stringResource(R.string.home_no_recordings),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.home_no_recordings_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -161,20 +176,31 @@ private fun EcgHeroCard(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(session.hrLabel(), fontSize = 64.sp, fontWeight = FontWeight.Light, color = Mint, lineHeight = 64.sp)
                 Text(
-                    "  bpm",
+                    "  " + stringResource(R.string.unit_bpm),
                     modifier = Modifier.padding(bottom = 10.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Text(
-                "${session.naoTitle()}  ·  ${session.stampLabel()}  ·  ${session.durationLabel()}",
+                stringResource(
+                    R.string.history_row_summary,
+                    stringResource(session.naoTitleRes()),
+                    session.stampLabel(),
+                    session.durationLabel(),
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onHistory, shape = RoundedCornerShape(12.dp)) {
-            Text(if (count == 0) "History" else "$count in history")
+            Text(
+                if (count == 0) {
+                    stringResource(R.string.action_history)
+                } else {
+                    stringResource(R.string.home_history_count, count)
+                },
+            )
         }
     }
 }
@@ -193,10 +219,14 @@ private fun BloodPressureStub(onOpen: () -> Unit) {
     ) {
         Icon(Icons.Outlined.FavoriteBorder, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
         Column(Modifier.weight(1f)) {
-            Text("Blood pressure", fontWeight = FontWeight.Medium)
-            Text("Reserved for a later source", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.home_bp_title), fontWeight = FontWeight.Medium)
+            Text(
+                stringResource(R.string.home_bp_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text("Soon", color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Medium)
+        Text(stringResource(R.string.home_bp_soon), color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Medium)
     }
 }
 
