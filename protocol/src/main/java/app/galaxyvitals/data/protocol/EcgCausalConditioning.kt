@@ -1,5 +1,9 @@
 package app.galaxyvitals.data.protocol
 
+import app.galaxyvitals.data.protocol.dsp.insertSorted
+import app.galaxyvitals.data.protocol.dsp.oddKernel
+import app.galaxyvitals.data.protocol.dsp.removeSorted
+
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -183,13 +187,13 @@ internal class StreamingMedian(private val kernel: Int) {
 
     private fun admit(value: Double) {
         if (filled < kernel) {
-            EcgSignalChain.insertSorted(window, filled + 1, value)
+            insertSorted(window, filled + 1, value)
             ring[filled] = value
             filled++
             return
         }
-        EcgSignalChain.removeSorted(window, kernel, ring[head])
-        EcgSignalChain.insertSorted(window, kernel, value)
+        removeSorted(window, kernel, ring[head])
+        insertSorted(window, kernel, value)
         ring[head] = value
         head = (head + 1) % kernel
     }
@@ -208,10 +212,10 @@ internal class StreamingMedian(private val kernel: Int) {
  */
 class DelayedMedianBaseline(srHz: Double) {
     private val stageOne = StreamingMedian(
-        EcgSignalChain.oddKernel(EcgSignalChain.BASELINE_STAGE_ONE_MS, srHz),
+        oddKernel(EcgSignalChain.BASELINE_STAGE_ONE_MS, srHz),
     )
     private val stageTwo = StreamingMedian(
-        EcgSignalChain.oddKernel(EcgSignalChain.BASELINE_STAGE_TWO_MS, srHz),
+        oddKernel(EcgSignalChain.BASELINE_STAGE_TWO_MS, srHz),
     )
 
     /** How far behind the newest pushed sample the returned value sits. */

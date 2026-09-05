@@ -1,14 +1,18 @@
 package app.galaxyvitals.data.protocol
 
+import app.galaxyvitals.data.protocol.dsp.BUTTERWORTH_ORDER_DEFAULT
+import app.galaxyvitals.data.protocol.dsp.filtfilt
+import app.galaxyvitals.data.protocol.dsp.lineRms
+import app.galaxyvitals.data.protocol.dsp.lowPassSections
+import app.galaxyvitals.data.protocol.dsp.oddKernel
+import app.galaxyvitals.data.protocol.dsp.estimateLineNoise as dspEstimateLineNoise
+import app.galaxyvitals.data.protocol.dsp.removeLineNoise as dspRemoveLineNoise
+import app.galaxyvitals.data.protocol.dsp.runningMedian as dspRunningMedian
 import app.galaxyvitals.domain.EcgSample
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -99,37 +103,28 @@ data class EcgFilteredSignal(
  *
  * Nothing here rescales `ECG_MV` or infers undocumented Samsung constants; the
  * stored raw rows are never modified.
+ *
+ * The arithmetic each stage is built from lives in `dsp/`: the spectral search
+ * and notch ladder in `LineNoise`, the sorted-window median in `RunningMedian`,
+ * and the sections and zero-phase filtering in `Biquad`. None of those knows
+ * about ECG; what is decided here is which of them runs, in what order, and on
+ * what clock.
  */
 object EcgSignalChain {
     /** Lowest and highest plausible mains fundamental, in hertz. */
-    const val LINE_SCAN_LOW_HZ = 45.0
-    const val LINE_SCAN_HIGH_HZ = 65.0
-
-    /** Scan margin so the accepted band never sits on the edge of the sweep. */
-    private const val LINE_SCAN_MARGIN_HZ = 6.0
-
-    /** Half-width excluded from the local floor, and the floor's outer edge. */
-    private const val LINE_FLOOR_INNER_HZ = 1.5
-    private const val LINE_FLOOR_OUTER_HZ = 6.0
-
-    /** Grid nominals, and how far a peak may sit from one and still be mains. */
-    private val GRID_NOMINALS_HZ = doubleArrayOf(50.0, 60.0)
-    private const val GRID_TOLERANCE_HZ = 1.5
-
-    /** Coarse scan step; finer than the 30 s Hann main lobe so a peak cannot hide. */
-    private const val LINE_SCAN_STEP_HZ = 0.05
-    private const val LINE_REFINE_TOLERANCE_HZ = 1e-4
+    const val LINE_SCAN_LOW_HZ = app.galaxyvitals.data.protocol.dsp.LINE_SCAN_LOW_HZ
+    const val LINE_SCAN_HIGH_HZ = app.galaxyvitals.data.protocol.dsp.LINE_SCAN_HIGH_HZ
 
     /** Peak-to-local-floor ratio a spectral peak must beat to count as mains. */
-    const val MIN_LINE_PROMINENCE = 6.0
+    const val MIN_LINE_PROMINENCE = app.galaxyvitals.data.protocol.dsp.MIN_LINE_PROMINENCE
 
     /** -3 dB notch width is `f0 / Q`; 2.5 Hz at 50 Hz. */
-    const val LINE_NOTCH_Q = 20.0
+    const val LINE_NOTCH_Q = app.galaxyvitals.data.protocol.dsp.LINE_NOTCH_Q
 
     const val BASELINE_STAGE_ONE_MS = 200
     const val BASELINE_STAGE_TWO_MS = 600
 
-    const val BUTTERWORTH_ORDER = 4
+    const val BUTTERWORTH_ORDER = BUTTERWORTH_ORDER_DEFAULT
 
     /** Reject a measured rate this far from nominal as a broken timestamp column. */
     const val MAX_SR_DEVIATION = 0.05
@@ -260,7 +255,6 @@ object EcgSignalChain {
         if (den <= 0.0) return null
         return num / den
     }
-
     // ------------------------------------------------------------ powerline
 
     /**
@@ -271,106 +265,11 @@ object EcgSignalChain {
      * frequency close to the grid nominal. A result far from 50 or 60 Hz is
      * itself a sign the sample clock is wrong.
      */
-    fun estimateLineNoise(values: DoubleArray, srHz: Double): EcgLineNoise? {
-        val n = values.size
-        if (n < 16 || srHz <= 2 * LINE_SCAN_HIGH_HZ) return null
-        val window = DoubleArray(n) { 0.5 - 0.5 * cos(2.0 * PI * it / (n - 1).toDouble()) }
-        var windowSum = 0.0
-        for (w in window) windowSum += w
-        if (windowSum <= 0.0) return null
-        val mean = values.average()
-        val windowed = DoubleArray(n) { (values[it] - mean) * window[it] }
-
-        // Sweep wider than the accepted band so a peak can be compared against a
-        // two-sided local floor. A plain band-wide median mistakes the natural
-        // downward slope of the ECG spectrum for a peak at the low edge.
-        val scanLow = LINE_SCAN_LOW_HZ - LINE_SCAN_MARGIN_HZ
-        val scanHigh = LINE_SCAN_HIGH_HZ + LINE_SCAN_MARGIN_HZ
-        if (srHz <= 2 * scanHigh) return null
-        val steps = ((scanHigh - scanLow) / LINE_SCAN_STEP_HZ).roundToInt()
-        val magnitudes = DoubleArray(steps + 1)
-        var bestStep = -1
-        for (step in 0..steps) {
-            val frequency = scanLow + step * LINE_SCAN_STEP_HZ
-            magnitudes[step] = goertzelMagnitude(windowed, srHz, frequency)
-            if (frequency < LINE_SCAN_LOW_HZ || frequency > LINE_SCAN_HIGH_HZ) continue
-            if (bestStep < 0 || magnitudes[step] > magnitudes[bestStep]) bestStep = step
-        }
-        if (bestStep < 0) return null
-        val innerSteps = (LINE_FLOOR_INNER_HZ / LINE_SCAN_STEP_HZ).roundToInt()
-        val outerSteps = (LINE_FLOOR_OUTER_HZ / LINE_SCAN_STEP_HZ).roundToInt()
-        val neighbourhood = ArrayList<Double>(2 * (outerSteps - innerSteps + 1))
-        for (step in 0..steps) {
-            val distance = abs(step - bestStep)
-            if (distance in innerSteps..outerSteps) neighbourhood += magnitudes[step]
-        }
-        if (neighbourhood.isEmpty()) return null
-        val floor = EcgStats.median(neighbourhood.toDoubleArray(), whenEmpty = 0.0)
-        if (floor <= 0.0) return null
-        val prominence = magnitudes[bestStep] / floor
-        if (prominence < MIN_LINE_PROMINENCE) return null
-
-        val coarse = scanLow + bestStep * LINE_SCAN_STEP_HZ
-        // Every grid runs at 50 or 60 Hz within a fraction of a hertz. A peak
-        // further out than that is a harmonic of a very regular heart rate, not
-        // interference, and notching it would remove real signal.
-        if (GRID_NOMINALS_HZ.none { abs(coarse - it) <= GRID_TOLERANCE_HZ }) return null
-        val refined = refinePeak(
-            windowed,
-            srHz,
-            max(LINE_SCAN_LOW_HZ, coarse - LINE_SCAN_STEP_HZ),
-            min(LINE_SCAN_HIGH_HZ, coarse + LINE_SCAN_STEP_HZ),
-        )
-        val amplitude = 2.0 * goertzelMagnitude(windowed, srHz, refined) / windowSum
-        return EcgLineNoise(frequencyHz = refined, amplitudeMv = amplitude, prominence = prominence)
-    }
-
-    /** Golden-section search for the magnitude maximum inside `[low, high]`. */
-    private fun refinePeak(windowed: DoubleArray, srHz: Double, low: Double, high: Double): Double {
-        val phi = 0.6180339887498949
-        var a = low
-        var b = high
-        var c = b - phi * (b - a)
-        var d = a + phi * (b - a)
-        var fc = goertzelMagnitude(windowed, srHz, c)
-        var fd = goertzelMagnitude(windowed, srHz, d)
-        var guard = 0
-        while (b - a > LINE_REFINE_TOLERANCE_HZ && guard < 200) {
-            if (fc > fd) {
-                b = d
-                d = c
-                fd = fc
-                c = b - phi * (b - a)
-                fc = goertzelMagnitude(windowed, srHz, c)
-            } else {
-                a = c
-                c = d
-                fc = fd
-                d = a + phi * (b - a)
-                fd = goertzelMagnitude(windowed, srHz, d)
-            }
-            guard++
-        }
-        return (a + b) / 2.0
-    }
-
-    private fun goertzelMagnitude(x: DoubleArray, srHz: Double, frequencyHz: Double): Double {
-        val omega = 2.0 * PI * frequencyHz / srHz
-        val coefficient = 2.0 * cos(omega)
-        var s1 = 0.0
-        var s2 = 0.0
-        for (value in x) {
-            val s0 = value + coefficient * s1 - s2
-            s2 = s1
-            s1 = s0
-        }
-        val real = s1 - s2 * cos(omega)
-        val imaginary = s2 * sin(omega)
-        return hypot(real, imaginary)
-    }
+    fun estimateLineNoise(values: DoubleArray, srHz: Double): EcgLineNoise? =
+        dspEstimateLineNoise(values, srHz)
 
     /**
-     * Zero-phase notch on [line] and every harmonic below [ceilingHz].
+     * Zero-phase notch on [line] and every harmonic below the Nyquist margin.
      *
      * Notch width scales with harmonic order so each one covers the same
      * fractional bandwidth.
@@ -379,22 +278,7 @@ object EcgSignalChain {
         values: DoubleArray,
         srHz: Double,
         line: EcgLineNoise?,
-    ): DoubleArray {
-        if (line == null) return values.copyOf()
-        val limit = 0.9 * (srHz / 2.0)
-        var output = values
-        var harmonic = line.frequencyHz
-        var order = 1
-        while (harmonic < limit && order <= MAX_LINE_HARMONICS) {
-            val section = notchBiquad(harmonic, srHz, LINE_NOTCH_Q * order)
-            output = filtfilt(listOf(section), output, srHz)
-            harmonic += line.frequencyHz
-            order++
-        }
-        return if (output === values) values.copyOf() else output
-    }
-
-    private const val MAX_LINE_HARMONICS = 6
+    ): DoubleArray = dspRemoveLineNoise(values, srHz, line)
 
     // ------------------------------------------------------------- baseline
 
@@ -405,70 +289,13 @@ object EcgSignalChain {
      */
     fun baseline(values: DoubleArray, srHz: Double): DoubleArray {
         if (values.isEmpty() || srHz <= 0.0) return DoubleArray(values.size)
-        val stageOne = runningMedian(values, oddKernel(BASELINE_STAGE_ONE_MS, srHz))
-        return runningMedian(stageOne, oddKernel(BASELINE_STAGE_TWO_MS, srHz))
-    }
-
-    internal fun oddKernel(milliseconds: Int, srHz: Double): Int {
-        var kernel = (milliseconds * srHz / 1_000.0).roundToInt()
-        if (kernel % 2 == 0) kernel += 1
-        return max(3, kernel)
+        val stageOne = dspRunningMedian(values, oddKernel(BASELINE_STAGE_ONE_MS, srHz))
+        return dspRunningMedian(stageOne, oddKernel(BASELINE_STAGE_TWO_MS, srHz))
     }
 
     /** Sliding median over a reflected signal; O(n·k) moves, no per-sample sort. */
-    internal fun runningMedian(values: DoubleArray, kernel: Int): DoubleArray {
-        val n = values.size
-        if (n == 0) return DoubleArray(0)
-        if (kernel <= 1 || kernel > n) return values.copyOf()
-        val radius = kernel / 2
-        val padded = DoubleArray(n + 2 * radius)
-        java.util.Arrays.fill(padded, 0, radius, values[0])
-        System.arraycopy(values, 0, padded, radius, n)
-        java.util.Arrays.fill(padded, radius + n, padded.size, values[n - 1])
-
-        val window = DoubleArray(kernel)
-        System.arraycopy(padded, 0, window, 0, kernel)
-        window.sort()
-        val out = DoubleArray(n)
-        out[0] = window[radius]
-        for (i in 1 until n) {
-            removeSorted(window, kernel, padded[i - 1])
-            insertSorted(window, kernel, padded[i + kernel - 1])
-            out[i] = window[radius]
-        }
-        return out
-    }
-
-    internal fun removeSorted(window: DoubleArray, size: Int, value: Double) {
-        var position = lowerBound(window, size, value)
-        if (position >= size || window[position] != value) {
-            // Guard against a binary-search miss on repeated values.
-            position = window.indexOfFirst(size) { it == value }
-            if (position < 0) return
-        }
-        System.arraycopy(window, position + 1, window, position, size - position - 1)
-    }
-
-    internal fun insertSorted(window: DoubleArray, size: Int, value: Double) {
-        val position = lowerBound(window, size - 1, value)
-        System.arraycopy(window, position, window, position + 1, size - position - 1)
-        window[position] = value
-    }
-
-    private fun lowerBound(window: DoubleArray, size: Int, value: Double): Int {
-        var low = 0
-        var high = size
-        while (low < high) {
-            val mid = (low + high) ushr 1
-            if (window[mid] < value) low = mid + 1 else high = mid
-        }
-        return low
-    }
-
-    private inline fun DoubleArray.indexOfFirst(size: Int, predicate: (Double) -> Boolean): Int {
-        for (i in 0 until size) if (predicate(this[i])) return i
-        return -1
-    }
+    internal fun runningMedian(values: DoubleArray, kernel: Int): DoubleArray =
+        dspRunningMedian(values, kernel)
 
     // ------------------------------------------------------------- settling
 
@@ -497,112 +324,6 @@ object EcgSignalChain {
         var last = -1
         for (b in 0 until limit) if (rms[b] > SETTLE_RMS_RATIO * reference) last = b
         return if (last < 0) 0 else min(filtered.size, (last + 1) * block)
-    }
-
-    // ------------------------------------------------------------ filtering
-
-    /** Butterworth section quality factors for an even [order]. */
-    internal fun butterworthQs(order: Int): DoubleArray {
-        val sections = order / 2
-        return DoubleArray(sections) { k -> 1.0 / (2.0 * cos((2.0 * (k + 1) - 1.0) * PI / (2.0 * order))) }
-    }
-
-    internal fun lowPassSections(cutoffHz: Double, srHz: Double, order: Int): List<Biquad> =
-        butterworthQs(order).map { q -> lowPassBiquad(cutoffHz, srHz, q) }
-
-    /** RBJ cookbook biquads; stable and well conditioned at these cutoffs. */
-    internal fun lowPassBiquad(frequencyHz: Double, srHz: Double, q: Double): Biquad {
-        val w0 = 2.0 * PI * frequencyHz / srHz
-        val cosine = cos(w0)
-        val alpha = sin(w0) / (2.0 * q)
-        val a0 = 1.0 + alpha
-        return Biquad(
-            b0 = (1.0 - cosine) / 2.0 / a0,
-            b1 = (1.0 - cosine) / a0,
-            b2 = (1.0 - cosine) / 2.0 / a0,
-            a1 = -2.0 * cosine / a0,
-            a2 = (1.0 - alpha) / a0,
-        )
-    }
-
-    internal fun notchBiquad(frequencyHz: Double, srHz: Double, q: Double): Biquad {
-        val w0 = 2.0 * PI * frequencyHz / srHz
-        val cosine = cos(w0)
-        val alpha = sin(w0) / (2.0 * q)
-        val a0 = 1.0 + alpha
-        return Biquad(
-            b0 = 1.0 / a0,
-            b1 = -2.0 * cosine / a0,
-            b2 = 1.0 / a0,
-            a1 = -2.0 * cosine / a0,
-            a2 = (1.0 - alpha) / a0,
-        )
-    }
-
-    internal data class Biquad(
-        val b0: Double,
-        val b1: Double,
-        val b2: Double,
-        val a1: Double,
-        val a2: Double,
-    )
-
-    /** Forward-backward filtering with odd extension, matching `scipy.signal.filtfilt`. */
-    internal fun filtfilt(sections: List<Biquad>, x: DoubleArray, srHz: Double): DoubleArray {
-        if (x.isEmpty() || sections.isEmpty()) return x.copyOf()
-        val pad = min(x.size - 1, max(1, (3.0 * srHz).roundToInt()))
-        val extended = oddExtend(x, pad)
-        var forward = extended
-        for (section in sections) forward = biquad(section, forward)
-        val reversed = DoubleArray(forward.size) { forward[forward.lastIndex - it] }
-        var backward = reversed
-        for (section in sections) backward = biquad(section, backward)
-        return DoubleArray(x.size) { backward[backward.lastIndex - (pad + it)] }
-    }
-
-    private fun biquad(section: Biquad, x: DoubleArray): DoubleArray {
-        if (x.isEmpty()) return DoubleArray(0)
-        val y = DoubleArray(x.size)
-        // Seed from the constant-input steady state so a DC offset does not
-        // create a false edge transient.
-        val denominator = 1.0 + section.a1 + section.a2
-        val dcGain = if (abs(denominator) > 1e-12) {
-            (section.b0 + section.b1 + section.b2) / denominator
-        } else {
-            0.0
-        }
-        var x1 = x[0]
-        var x2 = x[0]
-        var y1 = x[0] * dcGain
-        var y2 = y1
-        for (i in x.indices) {
-            val xi = x[i]
-            val yi = section.b0 * xi + section.b1 * x1 + section.b2 * x2 - section.a1 * y1 - section.a2 * y2
-            y[i] = yi
-            x2 = x1
-            x1 = xi
-            y2 = y1
-            y1 = yi
-        }
-        return y
-    }
-
-    private fun oddExtend(x: DoubleArray, pad: Int): DoubleArray {
-        if (pad <= 0) return x.copyOf()
-        val n = x.size
-        val out = DoubleArray(n + 2 * pad)
-        for (i in 0 until pad) out[i] = 2 * x[0] - x[reflect(pad - i, n)]
-        System.arraycopy(x, 0, out, pad, n)
-        for (i in 0 until pad) out[pad + n + i] = 2 * x[n - 1] - x[reflect(n - 2 - i, n)]
-        return out
-    }
-
-    private fun reflect(i: Int, n: Int): Int {
-        if (n <= 1) return 0
-        val period = 2 * (n - 1)
-        var x = i % period
-        if (x < 0) x += period
-        return if (x >= n) period - x else x
     }
 
     // --------------------------------------------------------------- public
@@ -684,27 +405,6 @@ object EcgSignalChain {
         )
     }
 
-    /** RMS inside a +/-1.5 Hz band around the line fundamental. */
-    private fun lineRms(values: DoubleArray, srHz: Double, line: EcgLineNoise?): Double {
-        if (line == null || values.isEmpty()) return 0.0
-        val bandwidthHz = 3.0
-        val q = line.frequencyHz / bandwidthHz
-        val w0 = 2.0 * PI * line.frequencyHz / srHz
-        val alpha = sin(w0) / (2.0 * q)
-        val a0 = 1.0 + alpha
-        val section = Biquad(
-            b0 = alpha / a0,
-            b1 = 0.0,
-            b2 = -alpha / a0,
-            a1 = -2.0 * cos(w0) / a0,
-            a2 = (1.0 - alpha) / a0,
-        )
-        val band = filtfilt(listOf(section), values, srHz)
-        var acc = 0.0
-        for (v in band) acc += v * v
-        return sqrt(acc / band.size)
-    }
-
     // ------------------------------------------------------------- helpers
 
     private fun meanOf(x: List<Double>): Double {
@@ -712,5 +412,4 @@ object EcgSignalChain {
         for (v in x) acc += v
         return acc / x.size
     }
-
 }
