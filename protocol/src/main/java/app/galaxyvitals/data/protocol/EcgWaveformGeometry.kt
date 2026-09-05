@@ -68,7 +68,7 @@ object EcgWaveformGeometry {
     ): WaveformScale {
         if (points.isEmpty()) return previous
         val values = FloatArray(points.size) { points[it].valueMv }
-        val median = median(values)
+        val median = EcgStats.median(values)
         val absDev = FloatArray(values.size) { abs(values[it] - median) }
         absDev.sort()
         val targetHalfRange = (1.2f * percentileSorted(absDev, 0.995))
@@ -193,17 +193,6 @@ object EcgWaveformGeometry {
                 out += segment[index]
                 previous = index
             }
-        }
-    }
-
-    private fun median(values: FloatArray): Float {
-        val sorted = values.copyOf()
-        sorted.sort()
-        val mid = sorted.size / 2
-        return if (sorted.size % 2 == 0) {
-            (sorted[mid - 1] + sorted[mid]) / 2f
-        } else {
-            sorted[mid]
         }
     }
 

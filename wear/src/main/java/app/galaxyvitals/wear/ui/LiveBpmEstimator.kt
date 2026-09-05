@@ -4,6 +4,7 @@ import app.galaxyvitals.data.protocol.EcgBeatAnalyzer
 import app.galaxyvitals.data.protocol.EcgBeatDetectorConfig
 import app.galaxyvitals.data.protocol.EcgBeatResult
 import app.galaxyvitals.data.protocol.EcgDetectorInput
+import app.galaxyvitals.data.protocol.EcgStats
 import app.galaxyvitals.data.protocol.EcgWearContract
 import kotlin.math.abs
 import kotlin.math.exp
@@ -297,13 +298,7 @@ object LiveBpmEstimator {
         return peaks
     }
 
-    private fun median(values: DoubleArray): Double {
-        if (values.isEmpty()) return 0.0
-        val copy = values.copyOf()
-        copy.sort()
-        val mid = copy.size / 2
-        return if (copy.size % 2 == 1) copy[mid] else (copy[mid - 1] + copy[mid]) / 2.0
-    }
+    private fun median(values: DoubleArray): Double = EcgStats.median(values, whenEmpty = 0.0)
 
     private const val MIN_PPG_POINTS = 20
     private const val MIN_RUN_POINTS = 16

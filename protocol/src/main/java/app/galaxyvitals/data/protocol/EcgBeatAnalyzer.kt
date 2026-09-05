@@ -894,16 +894,8 @@ object EcgBeatAnalyzer {
         )
     }
 
-    private fun List<Double>.median(): Double {
-        if (isEmpty()) return Double.NaN
-        val sorted = sorted()
-        val mid = sorted.size / 2
-        return if (sorted.size % 2 == 1) {
-            sorted[mid]
-        } else {
-            (sorted[mid - 1] + sorted[mid]) / 2.0
-        }
-    }
+    /** Median with the detector's convention: no beats means no rate, not zero. */
+    private fun List<Double>.median(): Double = EcgStats.median(this, whenEmpty = Double.NaN)
 
     private fun List<Int>.sortedToIntArray(): IntArray {
         val out = toIntArray()

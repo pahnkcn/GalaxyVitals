@@ -494,7 +494,7 @@ object EcgCsvParser {
         liveBpmAlgorithmId: String? = null,
     ): ParsedEcgFile {
         val hrs = samples.mapNotNull { it.hrBpm }.sorted()
-        val hrMedian = if (hrs.isEmpty()) null else median(hrs)
+        val hrMedian = if (hrs.isEmpty()) null else EcgStats.medianOfSorted(hrs)
         val durationSec = if (samples.size <= 1) {
             0.0
         } else {
@@ -556,12 +556,4 @@ object EcgCsvParser {
         )
     }
 
-    private fun median(sorted: List<Int>): Double {
-        val n = sorted.size
-        return if (n % 2 == 1) {
-            sorted[n / 2].toDouble()
-        } else {
-            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-        }
-    }
 }

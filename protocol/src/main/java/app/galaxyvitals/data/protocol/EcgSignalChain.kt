@@ -220,8 +220,11 @@ object EcgSignalChain {
         val residuals = DoubleArray(indices.size)
         val intercept = meanOf(stamps) - slope * meanOf(indices)
         for (i in residuals.indices) residuals[i] = stamps[i] - (slope * indices[i] + intercept)
-        val centre = medianOf(residuals.copyOf())
-        val spread = 1.4826 * medianOf(DoubleArray(residuals.size) { abs(residuals[it] - centre) })
+        val centre = EcgStats.median(residuals, whenEmpty = 0.0)
+        val spread = 1.4826 * EcgStats.median(
+            DoubleArray(residuals.size) { abs(residuals[it] - centre) },
+            whenEmpty = 0.0,
+        )
         val tolerance = 4.0 * max(spread, 0.5)
         val keptIndices = ArrayList<Double>(indices.size)
         val keptStamps = ArrayList<Double>(indices.size)
@@ -302,7 +305,7 @@ object EcgSignalChain {
             if (distance in innerSteps..outerSteps) neighbourhood += magnitudes[step]
         }
         if (neighbourhood.isEmpty()) return null
-        val floor = medianOf(neighbourhood.toDoubleArray())
+        val floor = EcgStats.median(neighbourhood.toDoubleArray(), whenEmpty = 0.0)
         if (floor <= 0.0) return null
         val prominence = magnitudes[bestStep] / floor
         if (prominence < MIN_LINE_PROMINENCE) return null
@@ -488,7 +491,7 @@ object EcgSignalChain {
             for (i in b * block until (b + 1) * block) acc += filtered[i] * filtered[i]
             rms[b] = sqrt(acc / block)
         }
-        val reference = medianOf(rms.copyOf())
+        val reference = EcgStats.median(rms, whenEmpty = 0.0)
         if (reference <= 0.0) return 0
         val limit = min(blockCount, (SETTLE_SEARCH_SEC * srHz / block).roundToInt())
         var last = -1
@@ -710,10 +713,4 @@ object EcgSignalChain {
         return acc / x.size
     }
 
-    private fun medianOf(sortable: DoubleArray): Double {
-        if (sortable.isEmpty()) return 0.0
-        sortable.sort()
-        val mid = sortable.size / 2
-        return if (sortable.size % 2 == 1) sortable[mid] else (sortable[mid - 1] + sortable[mid]) / 2.0
-    }
 }
