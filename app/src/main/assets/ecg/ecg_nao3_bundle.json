@@ -1,10 +1,14 @@
 {
   "schema": "app.galaxyvitals.ecg.nao3.bundle",
   "version": 2,
-  "compatibility_id": "ecg-nao3-student-256hz-v2",
+  "compatibility_id": "ecg-nao3-student-256hz-v4",
   "default_variant": "fp32",
   "input": {
-    "shape": [1, 7680, 1],
+    "shape": [
+      1,
+      7680,
+      1
+    ],
     "dtype": "FLOAT32",
     "sample_rate_hz": 256,
     "duration_seconds": 30,
@@ -12,16 +16,23 @@
     "polarity": "effective_once"
   },
   "output": {
-    "shape": [1, 3],
+    "shape": [
+      1,
+      3
+    ],
     "dtype": "FLOAT32",
     "semantics": "logits",
     "postprocess": "stable_softmax_fail_closed",
-    "labels": ["N", "A", "O"]
+    "labels": [
+      "N",
+      "A",
+      "O"
+    ]
   },
   "artifacts": {
     "model": {
       "path": "ecg/ecg_nao3_student_fp32.tflite",
-      "sha256": "7400a2352c79275d5a4860a76a684cc0b6140e8385572de5a68027f7343a20ac"
+      "sha256": "c98a8356837673980d3622d45156e78bb898bca587bc456091544e1d6461fdba"
     },
     "filters": {
       "path": "ecg/ecg_nao3_filters_256hz.json",
@@ -29,11 +40,11 @@
     },
     "policy": {
       "path": "ecg/ecg_nao3_decision_policy.json",
-      "sha256": "154f13804a6188ef7db1023f1858812384efd201b64789d833fc8d44e58e94b8"
+      "sha256": "cfd0be06f767396591407ed371521f487d94ac821eec448f0876312b96bad066"
     },
     "split": {
       "path": "ecg/ecg_nao3_cinc2017_split.json",
-      "sha256": "0e44cb7d4be9760efc06e89b4f5e2fb964b25585c2dc6f6dcca8bdb0ab69b1b2"
+      "sha256": "8b17173567d3c4cd7d8fdf1288d4a0e78ecaf84609af9c668b44ec2542a8d7af"
     }
   }
 }

@@ -1,10 +1,19 @@
 # NAO3 student ECG models
 
-These are the user-supplied direct three-class ECG models, renamed to bind the architecture and variant explicitly:
+These are the **original user-supplied** direct three-class ECG models, renamed to bind the architecture and variant explicitly.
+
+> **They are no longer what the app packages.** The phone now ships a model
+> retrained in the `ECGTraining` repository (`ecg-nao3-student-256hz-v4`,
+> sha256 `c98a8356837673980d3622d45156e78bb898bca587bc456091544e1d6461fdba`),
+> which is the first build where both N and AF cleared 0.90 precision on a
+> sealed CinC 2017 split. The files below keep the same architecture, byte
+> sizes and input/output contract, so the FP16/INT8 findings recorded here
+> still describe how this graph quantizes -- but the weights differ, and the
+> hashes in this table are not the packaged asset's.
 
 | Variant | Role | Bytes | SHA-256 |
 |---|---|---:|---|
-| `converted/ecg_nao3_student_fp32.tflite` | shipped float reference / quality row | 8,026,200 | `7400a2352c79275d5a4860a76a684cc0b6140e8385572de5a68027f7343a20ac` |
+| `converted/ecg_nao3_student_fp32.tflite` | original supplied reference, superseded as the packaged asset | 8,026,200 | `7400a2352c79275d5a4860a76a684cc0b6140e8385572de5a68027f7343a20ac` |
 | `converted/ecg_nao3_student_fp16.tflite` | host-parity candidate | 4,100,128 | `b5b6cb3d4fd4df93b63c80abead883b289c90fa5cf5cdaac1c83ce1aaa7a1f1a` |
 | `converted/ecg_nao3_student_int8.tflite` | rejected speed candidate | 2,291,216 | `7237a151dd8471d1659f59ad21215d3be149de7425a9803f9e399f972aaa1584` |
 
@@ -13,7 +22,7 @@ These are the user-supplied direct three-class ECG models, renamed to bind the a
 - Input: FLOAT32 `[1,7680,1]`, 30 seconds at 256 Hz.
 - Preprocess: effective polarity once, linear resample, five-section SOS forward/reverse filtering, whole-record z-score, center crop/pad.
 - Output: three logits in `[N, A, O]` order; apply stable softmax.
-- Android asset: only the FP32 reference is packaged. FP16 awaits target-device verification and INT8 is not a fallback.
+- Android asset: FP32 only, and now the retrained student rather than the file below. FP16 awaits target-device verification and INT8 is not a fallback; neither is packaged.
 
 ## FP16 reproduction and parity
 

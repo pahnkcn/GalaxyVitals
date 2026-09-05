@@ -81,18 +81,37 @@ gitignored.
 
 Labels are **N**ormal, **A**F, and **O**ther.
 
-The phone runs the direct three-class NAO3 model locally through LiteRT. The
-hash-bound FP32 reference is the packaged default. The host-parity FP16 and
-rejected INT8 candidates remain under `models/nao3/` and are not packaged as
-runtime fallbacks until the quantized row passes target-device verification.
-See [models/nao3/README.md](models/nao3/README.md) for hashes, host parity, and
-why FP32 is the packaged default.
+The phone runs a three-class rhythm model locally through LiteRT. It is a
+single-lead 1D CNN (~2.0 M parameters) trained for this app: pretrained on lead I
+of Chapman-Shaoxing/Ningbo and PTB-XL, then fine-tuned on PhysioNet/CinC
+Challenge 2017, whose handheld single-lead recordings are the closest public
+analogue to a wrist capture. Preprocessing during training is a line-by-line port
+of what the app does at inference, so the model is never shown a window the
+device cannot produce.
+
+Packaged asset: `ecg_nao3_student_fp32.tflite`, 8,026,200 bytes, sha256
+`c98a8356837673980d3622d45156e78bb898bca587bc456091544e1d6461fdba`, bound by
+`ecg_nao3_bundle.json` and verified at build time. FP32 is packaged rather than
+the FP16 export -- which matches it on host to 7.7e-03 with full argmax agreement
+-- because no quantized row has passed target-device verification.
 
 Stored watch traces remain raw at 500 Hz. For rhythm analysis, the phone applies
 the recording polarity once, resamples to 256 Hz, applies the configured filter
 chain, z-scores the whole record, and center-fits it to 7,680 samples. The model
 returns logits in N / A / O order; the app applies stable softmax and reports the
 argmax model score only after the signal-quality gate.
+
+A class is only decidable once it has demonstrated at least 0.90 precision on a
+sealed, record-disjoint CinC 2017 evaluation split, opened once. In the packaged
+model (`ecg-nao3-student-256hz-v4`) **N and AF both clear that bar** -- 0.9269
+and 0.9118 over 1,781 records -- and O abstains by design. Earlier builds shipped
+with AF abstaining, at 0.8438 and 0.8767.
+
+Precision is not sensitivity. AF is flagged on roughly 4 % of recordings and
+catches about 41 % of true AF, so a quiet result is not evidence of a normal
+rhythm. The 95 % lower bound on that AF precision is 0.82 on 68 predictions: the
+point estimate clears the bar, the interval does not. Target-device behaviour and
+delegate selection remain unclaimed; only host parity is verified.
 
 ## Signal chain
 

@@ -44,7 +44,7 @@ data class EcgAnalysisBundle(
 ) {
     companion object {
         const val ASSET = "ecg/ecg_nao3_bundle.json"
-        const val CURRENT_COMPATIBILITY_ID = "ecg-nao3-student-256hz-v2"
+        const val CURRENT_COMPATIBILITY_ID = "ecg-nao3-student-256hz-v4"
 
         private const val SCHEMA = "app.galaxyvitals.ecg.nao3.bundle"
         private const val VERSION = 2

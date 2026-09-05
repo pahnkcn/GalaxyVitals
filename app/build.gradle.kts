@@ -69,7 +69,7 @@ val verifyEcgNao3Bundle by tasks.registering {
             ?: throw GradleException("Invalid ECG NAO3 bundle")
         if (manifest["schema"] != "app.galaxyvitals.ecg.nao3.bundle" ||
             manifest["version"] != 2 ||
-            manifest["compatibility_id"] != "ecg-nao3-student-256hz-v2"
+            manifest["compatibility_id"] != "ecg-nao3-student-256hz-v4"
         ) {
             throw GradleException("Unexpected ECG NAO3 bundle contract")
         }
@@ -162,7 +162,7 @@ val verifyEcgNao3Bundle by tasks.registering {
         if (policy["schema"] != "app.galaxyvitals.ecg.nao3.decision_policy") {
             throw GradleException("Unexpected ECG NAO3 decision policy schema")
         }
-        if (policy["compatibility_id"] != "ecg-nao3-student-256hz-v2") {
+        if (policy["compatibility_id"] != "ecg-nao3-student-256hz-v4") {
             throw GradleException("ECG NAO3 decision policy compatibility id mismatch")
         }
         val precisionTarget = (policy["precision_target"] as? Number)?.toDouble()
