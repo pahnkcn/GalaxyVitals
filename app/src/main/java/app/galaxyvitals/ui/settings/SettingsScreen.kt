@@ -30,7 +30,8 @@ import app.galaxyvitals.R
 import app.galaxyvitals.data.wear.WearLinkStatus
 import app.galaxyvitals.ui.EcgScaleCalibration
 import app.galaxyvitals.ui.theme.EcgType
-import app.galaxyvitals.ui.theme.Mint
+import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
 import kotlin.math.roundToInt
 
 @Composable
@@ -43,14 +44,14 @@ fun SettingsScreen(
         modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(horizontal = Spacing.page, vertical = Spacing.item),
     ) {
         Text(
-            stringResource(R.string.settings_title),
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.SemiBold,
+            stringResource(R.string.settings_title).uppercase(),
+            style = labelStyle(),
+            color = MaterialTheme.colorScheme.onBackground,
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Spacing.tight))
 
         Section(stringResource(R.string.settings_watch_link), wear.note)
         if (wear.nodes.isNotEmpty()) {
@@ -112,7 +113,7 @@ private fun RulerCalibration(calibration: EcgScaleCalibration) {
             .width(barWidth)
             .height(10.dp)
             .clip(RoundedCornerShape(3.dp))
-            .background(Mint),
+            .background(MaterialTheme.colorScheme.onBackground),
     )
     Text(
         text = stringResource(R.string.calibrate_bar_label),
@@ -140,8 +141,8 @@ private fun RulerCalibration(calibration: EcgScaleCalibration) {
 private fun Section(title: String, body: String) {
     Text(
         title,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(top = 16.dp, bottom = 6.dp),
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(top = Spacing.card, bottom = Spacing.hair),
     )
     Text(
         body,

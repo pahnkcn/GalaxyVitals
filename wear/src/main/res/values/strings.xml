@@ -3,4 +3,101 @@
     <string name="app_name">GalaxyVitals</string>
     <string name="measure_channel">ECG measurement</string>
     <string name="measure_notification">Recording ECG</string>
+
+    <!-- Home -->
+    <string name="wear_start">Start ECG</string>
+    <string name="wear_history">History</string>
+    <string name="wear_settings">Settings</string>
+    <string name="wear_last_reading">Last reading · %1$s</string>
+    <string name="wear_no_reading">No recording yet</string>
+    <string name="wear_record_prompt">Record a 30 s trace</string>
+    <string name="wear_phone_checking">Checking phone…</string>
+    <string name="wear_phone_not_linked">Phone not linked. Keep GalaxyVitals open nearby.</string>
+    <string name="wear_phone_linked">Phone: %1$s</string>
+    <string name="wear_saved_count">%1$d saved</string>
+
+    <!-- Measure -->
+    <string name="wear_recording">Recording</string>
+    <string name="wear_seconds_left">%1$d s left</string>
+    <string name="wear_hold_title">Hold your finger on</string>
+    <string name="wear_hold_target">the side button</string>
+    <string name="wear_hold_hint">Rest your arm on a table</string>
+    <string name="wear_contact_here">here</string>
+    <string name="wear_keep_still">Keep still while the optical sensor settles.</string>
+    <string name="wear_permission_body">ECG recording needs body sensor access.</string>
+    <string name="wear_allow_sensors">Allow sensors</string>
+    <string name="wear_samsung_setup">Samsung Health needs setup.</string>
+    <string name="wear_open_samsung_health">Open Samsung Health</string>
+    <string name="wear_saving_body">Keeping this recording safe</string>
+    <string name="wear_done">Done</string>
+    <string name="wear_record_again">Record again</string>
+    <string name="wear_unavailable">Unavailable</string>
+    <string name="wear_unit_bpm">bpm</string>
+    <string name="wear_hr_preflight">Heart rate before ECG</string>
+    <string name="wear_hr_samsung">Samsung processed heart rate</string>
+    <string name="wear_hr_live">Live ECG-derived BPM</string>
+    <string name="wear_touch_top_button">Touch the top button on the right</string>
+
+    <!-- Measure status, resolved from the state machine's own status tokens -->
+    <string name="wear_status_connecting">Connecting sensor…</string>
+    <string name="wear_status_samsung_setup">Samsung Health setup needed</string>
+    <string name="wear_status_preparing_hr">Preparing heart rate…</string>
+    <string name="wear_status_touch_sensor">Touch the sensor to begin</string>
+    <string name="wear_status_stabilizing">Stabilizing ECG…</string>
+    <string name="wear_status_countdown">Starting in</string>
+    <string name="wear_status_confirming_contact">Confirming sensor contact…</string>
+    <string name="wear_status_recording">Recording</string>
+    <string name="wear_status_saving">Saving…</string>
+    <string name="wear_status_queued">Sent to your phone</string>
+    <string name="wear_status_acknowledged">Confirmed by your phone</string>
+    <string name="wear_status_saved_on_watch">Saved on watch</string>
+    <string name="wear_status_save_failed">Save failed</string>
+    <string name="wear_status_recording_failed">Recording failed</string>
+    <string name="wear_status_recording_cancelled">Recording cancelled</string>
+    <string name="wear_status_permissions">Sensor permissions needed</string>
+    <string name="wear_status_sensor_unavailable">ECG sensor not available</string>
+    <string name="wear_status_hr_not_ready">Heart rate not ready</string>
+    <string name="wear_status_contact_not_detected">Sensor contact not detected</string>
+
+    <!-- Messages the app writes itself. Samsung's own text is shown unchanged. -->
+    <string name="wear_msg_phone_not_linked_sync">Phone not linked. Keep GalaxyVitals open nearby, then Sync.</string>
+    <string name="wear_msg_no_connected_phone">No connected phone. Keep the GalaxyVitals phone app nearby and try Sync.</string>
+    <string name="wear_msg_save_failed">Could not save this recording. Please try again.</string>
+    <string name="wear_msg_start_again">Start again when ready.</string>
+    <string name="wear_msg_contact_lost">ECG contact was lost.</string>
+    <string name="wear_msg_not_worn">Watch not worn properly.</string>
+    <string name="wear_msg_keep_snug">Keep the watch snug and stay still, then try again.</string>
+    <string name="wear_msg_wear_and_hold">Wear the watch and keep a finger on the top sensor, then try again.</string>
+    <string name="wear_msg_hr_required">A stable heart-rate value is required before ECG recording.</string>
+    <string name="wear_msg_invalid_batch">Samsung returned an invalid ECG batch.</string>
+    <string name="wear_msg_invalid_signal">Invalid ECG signal.</string>
+    <string name="wear_msg_incomplete">The ECG recording did not complete. Please try again.</string>
+    <string name="wear_msg_unexpected">Unexpected capture error.</string>
+    <string name="wear_msg_stream_stalled">ECG sensor stopped sending data.</string>
+    <string name="wear_msg_connect_timeout">Samsung ECG connection timed out.</string>
+    <string name="wear_msg_service_start">Samsung ECG service could not start.</string>
+    <string name="wear_msg_hr_start">Samsung heart-rate tracker could not start.</string>
+    <string name="wear_msg_not_available_pkg">Samsung ECG is not available for this package.</string>
+
+    <!-- History -->
+    <string name="wear_history_empty">Imported and recorded traces land here.</string>
+    <string name="wear_history_row">%1$d s · %2$s</string>
+
+    <!-- Settings -->
+    <string name="wear_wrist">Wrist</string>
+    <string name="wear_wrist_left">Left</string>
+    <string name="wear_wrist_right">Right</string>
+    <string name="wear_sensor">Sensor</string>
+    <string name="wear_sensor_checking">Checking sensor…</string>
+    <string name="wear_sensor_ready">Samsung ECG tracker ready</string>
+    <string name="wear_disclaimer">Not a medical device. Seek care if you feel unwell.</string>
+    <string name="ecg_title_short">ECG</string>
+    <string name="wear_bpm_value">%1$s bpm</string>
+
+    <!-- Short forms for the bezel arcs; the long forms stay as content descriptions -->
+    <string name="wear_arc_seconds_left">%1$d s</string>
+    <string name="wear_arc_touch_button">Top button</string>
+    <string name="wear_phone_arc_offline">No phone</string>
+    <string name="wear_phone_status_linked">Linked</string>
+    <string name="wear_phone_status_checking">Checking…</string>
 </resources>

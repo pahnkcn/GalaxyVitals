@@ -36,9 +36,11 @@ import app.galaxyvitals.export.ExportFormat
 import app.galaxyvitals.ui.EcgScaleCalibration
 import app.galaxyvitals.ui.components.ScreenTopBar
 import app.galaxyvitals.ui.pxPerMm
-import app.galaxyvitals.ui.theme.Amber
 import app.galaxyvitals.ui.theme.EcgType
+import app.galaxyvitals.ui.theme.LocalVerdictColors
 import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
+import app.galaxyvitals.ui.theme.rememberSweep
 
 /** Sheet is the whole recording at a glance; true scale is the one you measure. */
 enum class StripMode { SHEET, TRUE_SCALE }
@@ -164,6 +166,8 @@ private fun DetailBody(
     val srHz = report.header.effectiveSrHz.takeIf { it > 0.0 }
         ?: report.header.nominalSrHz.toDouble()
     val physicalPxPerMm = pxPerMm(calibration)
+    // Redrawing at a new bandwidth is a new print, so the sweep runs again.
+    val sweep = rememberSweep(report.header.sessionId to bandwidth)
 
     Column(
         Modifier
@@ -180,7 +184,7 @@ private fun DetailBody(
             Text(
                 text = stringResource(R.string.ecg_stale_analysis),
                 style = MaterialTheme.typography.bodySmall,
-                color = Amber,
+                color = LocalVerdictColors.current.unclear,
             )
         }
 
@@ -207,6 +211,7 @@ private fun DetailBody(
                 spec = spec,
                 rPeaksMs = report.beats.rPeaksMs,
                 modifier = Modifier.fillMaxWidth(),
+                sweep = sweep,
             )
         } else {
             EcgTrueScaleStrip(
@@ -217,6 +222,7 @@ private fun DetailBody(
                 rPeaksMs = report.beats.rPeaksMs,
                 pxPerMm = physicalPxPerMm,
                 modifier = Modifier.fillMaxWidth(),
+                sweep = sweep,
             )
         }
 
@@ -239,8 +245,8 @@ private fun DetailBody(
 
         Spacer(Modifier.height(Spacing.tight))
         Text(
-            text = stringResource(R.string.section_measurements),
-            style = MaterialTheme.typography.labelLarge,
+            text = stringResource(R.string.section_measurements).uppercase(),
+            style = labelStyle(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         MeasurementTable(report)

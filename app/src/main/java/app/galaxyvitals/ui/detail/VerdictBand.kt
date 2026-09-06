@@ -1,44 +1,46 @@
 package app.galaxyvitals.ui.detail
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import app.galaxyvitals.R
-import app.galaxyvitals.data.protocol.NaoLabel
-import app.galaxyvitals.domain.AnalysisStatus
 import app.galaxyvitals.export.AndroidReportText
 import app.galaxyvitals.export.EcgReportModel
 import app.galaxyvitals.export.MeasurementKey
 import app.galaxyvitals.export.ReportFormat
-import app.galaxyvitals.ui.theme.Amber
-import app.galaxyvitals.ui.theme.Danger
 import app.galaxyvitals.ui.theme.EcgType
-import app.galaxyvitals.ui.theme.Mint
 import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
+import app.galaxyvitals.ui.theme.WASH_MS
+import app.galaxyvitals.ui.theme.mm
+import app.galaxyvitals.ui.theme.verdictColor
 
 /**
  * The answer, first, in words the reader already has.
  *
- * A coloured rule down the left carries the severity so the headline itself can
- * stay plain: a red word next to a red bar shouts twice.
+ * A coloured rule down the left carries the severity so the headline can stay
+ * plain — and it is the only colour on the screen, which is what makes it worth
+ * reading. The rule washes in rather than appearing, because the result arrives
+ * after the recording does.
  */
 @Composable
 fun VerdictBand(
@@ -47,25 +49,28 @@ fun VerdictBand(
     modifier: Modifier = Modifier,
 ) {
     val verdict = report.verdict
-    val tint = verdictTint(report)
+    val target = verdictColor(verdict.analysisStatus, verdict.naoLabel)
+    val tint by animateColorAsState(
+        targetValue = target,
+        animationSpec = tween(WASH_MS),
+        label = "verdict",
+    )
     val rateText = report.measurement(MeasurementKey.HEART_RATE)?.let { ReportFormat.value(it) }
 
     Row(
         modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surface),
+            .height(IntrinsicSize.Min),
     ) {
         Box(
             Modifier
-                .width(4.dp)
+                .width(0.35f.mm)
                 .fillMaxHeight()
                 .background(tint),
         )
         Column(
-            Modifier.padding(Spacing.card),
-            verticalArrangement = Arrangement.spacedBy(Spacing.tight),
+            Modifier.padding(start = Spacing.item, end = Spacing.page, bottom = Spacing.item),
+            verticalArrangement = Arrangement.spacedBy(Spacing.hair),
         ) {
             Text(
                 text = stringResource(AndroidReportText.verdictTitleRes(verdict)),
@@ -75,14 +80,15 @@ fun VerdictBand(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = rateText ?: "—",
-                    style = EcgType.dataHero,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = EcgType.dataDisplay,
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
+                Spacer(Modifier.size(Spacing.tight))
                 Text(
-                    text = " " + stringResource(R.string.unit_bpm),
-                    style = MaterialTheme.typography.titleMedium,
+                    text = stringResource(R.string.unit_bpm).uppercase(),
+                    style = labelStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 10.dp),
+                    modifier = Modifier.padding(bottom = Spacing.tight),
                 )
             }
             Text(
@@ -90,6 +96,7 @@ fun VerdictBand(
                 style = EcgType.dataSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.size(Spacing.hair))
             Text(
                 text = stringResource(AndroidReportText.verdictBodyRes(verdict)),
                 style = MaterialTheme.typography.bodyMedium,
@@ -101,17 +108,10 @@ fun VerdictBand(
                         R.string.verdict_model_score,
                         "${(score * 100).toInt()}%",
                     ),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = EcgType.dataSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
-}
-
-private fun verdictTint(report: EcgReportModel): Color = when {
-    report.verdict.analysisStatus != AnalysisStatus.OK -> Amber
-    report.verdict.naoLabel == NaoLabel.N -> Mint
-    report.verdict.naoLabel == NaoLabel.A -> Danger
-    else -> Amber
 }

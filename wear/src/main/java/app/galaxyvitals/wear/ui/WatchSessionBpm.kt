@@ -21,6 +21,16 @@ object WatchSessionBpm {
         return EcgBeatAnalyzer.analyze(parsed).bpmMedian?.roundToInt()
     }
 
+    /**
+     * The rate on its own, for screens that print the unit themselves.
+     *
+     * [historyLabel] and [homeLabel] keep the unit baked in because they are
+     * also the watch's log wording; anything a person reads should pair this
+     * with a translated unit instead.
+     */
+    fun displayBpmText(parsed: ParsedEcgFile?): String =
+        parsed?.let { displayBpm(it) }?.toString() ?: "—"
+
     fun historyLabel(parsed: ParsedEcgFile): String =
         displayBpm(parsed)?.let { "$it bpm" } ?: "— bpm"
 

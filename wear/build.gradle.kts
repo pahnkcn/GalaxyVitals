@@ -87,6 +87,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.wear.compose.ui.tooling)
+    // WearDevices, for the round-screen previews. Already in the version catalog.
+    debugImplementation(libs.androidx.wear.tooling.preview)
     testImplementation(libs.junit)
     testImplementation(libs.truth)
     testImplementation(project(":samsung-health-api"))

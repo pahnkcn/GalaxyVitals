@@ -16,39 +16,51 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.MonitorHeart
-import androidx.compose.material.icons.outlined.Watch
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import app.galaxyvitals.R
 import app.galaxyvitals.data.wear.WearLinkStatus
 import app.galaxyvitals.domain.EcgSession
 import app.galaxyvitals.domain.EcgSource
 import app.galaxyvitals.domain.Wrist
 import app.galaxyvitals.ui.HomeUiState
-import app.galaxyvitals.R
+import app.galaxyvitals.ui.components.EcgPreviewStrip
+import app.galaxyvitals.ui.dayLabel
+import app.galaxyvitals.ui.displayBpm
 import app.galaxyvitals.ui.durationLabel
 import app.galaxyvitals.ui.hrLabel
+import app.galaxyvitals.ui.naoLabelOrNull
 import app.galaxyvitals.ui.naoTitleRes
-import app.galaxyvitals.ui.stampLabel
+import app.galaxyvitals.ui.theme.EcgType
 import app.galaxyvitals.ui.theme.HealthTrackTheme
-import app.galaxyvitals.ui.theme.InkHigh
-import app.galaxyvitals.ui.theme.Mint
+import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
+import app.galaxyvitals.ui.theme.mm
+import app.galaxyvitals.ui.theme.rememberBeatPulse
+import app.galaxyvitals.ui.theme.rememberSweep
+import app.galaxyvitals.ui.theme.verdictColor
+import app.galaxyvitals.ui.timeLabel
+import kotlin.math.roundToInt
 
+/**
+ * One screen, one answer.
+ *
+ * The verdict, the rate and the shape of the last few beats sit above the fold
+ * and everything else is a hairline row, because the question a person opens
+ * this app with has exactly one answer and it should not have to be found.
+ */
 @Composable
 fun HomeScreen(
     state: HomeUiState,
@@ -62,175 +74,227 @@ fun HomeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
-        Text(stringResource(R.string.home_title), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
-        Text(
-            stringResource(R.string.home_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        WatchChip(state.wear, onSync)
-
-        EcgHeroCard(
+        AppHead(state.wear, state.latest?.displayBpm(), onSync)
+        Answer(
             session = state.latest,
-            count = state.count,
+            preview = state.preview,
             onOpen = { state.latest?.let { onOpenEcg(it.sessionId) } },
-            onHistory = onOpenHistory,
         )
 
-        Button(
+        Spacer(Modifier.height(Spacing.page))
+        OutlinedButton(
             onClick = onImport,
             enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(Spacing.item),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.page)
+                .height(Spacing.box + Spacing.item),
         ) {
             Text(
-                stringResource(
-                    if (state.busy) R.string.home_working else R.string.action_import,
-                ),
+                stringResource(if (state.busy) R.string.home_working else R.string.action_import),
+                style = MaterialTheme.typography.titleMedium,
             )
         }
-        BloodPressureStub(onOpen = onOpenBp)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.item))
+
+        QuietRow(
+            text = stringResource(R.string.home_recordings, state.count),
+            trailing = stringResource(R.string.action_history),
+            onClick = onOpenHistory,
+        )
+        QuietRow(
+            text = stringResource(R.string.home_bp_line),
+            trailing = stringResource(R.string.home_bp_soon),
+            onClick = onOpenBp,
+        )
+        Spacer(Modifier.height(Spacing.section))
     }
 }
 
+/** The wordmark, and whether the watch is there. Nothing else earns the row. */
 @Composable
-private fun WatchChip(status: WearLinkStatus, onSync: () -> Unit) {
+private fun AppHead(status: WearLinkStatus, bpm: Double?, onSync: () -> Unit) {
+    val pulse by rememberBeatPulse(bpm.takeIf { status.available })
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(14.dp),
+            .clickable(onClick = onSync)
+            .padding(horizontal = Spacing.page, vertical = Spacing.item),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Text(
+            stringResource(R.string.app_name).uppercase(),
+            style = labelStyle(),
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.weight(1f))
         Box(
-            modifier = Modifier
-                .size(40.dp)
+            Modifier
+                .size(1.1f.mm)
+                .scale(pulse)
                 .clip(CircleShape)
-                .background(if (status.available) Mint.copy(alpha = 0.2f) else InkHigh),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Outlined.Watch, contentDescription = null, tint = if (status.available) Mint else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                stringResource(
+                .background(
                     if (status.available) {
-                        R.string.home_watch_linked
+                        MaterialTheme.colorScheme.onBackground
                     } else {
-                        R.string.home_watch_not_linked
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 ),
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                status.note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        OutlinedButton(onClick = onSync, shape = RoundedCornerShape(12.dp)) {
-            Text(stringResource(R.string.home_sync))
-        }
+        )
+        Spacer(Modifier.size(Spacing.tight))
+        Text(
+            stringResource(
+                if (status.available) R.string.home_watch_linked else R.string.home_watch_not_linked,
+            ).uppercase(),
+            style = labelStyle(),
+        )
     }
 }
 
 @Composable
-private fun EcgHeroCard(
-    session: EcgSession?,
-    count: Int,
-    onOpen: () -> Unit,
-    onHistory: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .clickable(enabled = session != null, onClick = onOpen)
-            .padding(20.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Outlined.MonitorHeart, contentDescription = null, tint = Mint)
-            Text(stringResource(R.string.home_ecg_card), fontWeight = FontWeight.Medium)
-        }
-        Spacer(Modifier.height(18.dp))
-        if (session == null) {
+private fun Answer(session: EcgSession?, preview: List<Float>, onOpen: () -> Unit) {
+    if (session == null) {
+        Column(
+            Modifier.padding(horizontal = Spacing.page, vertical = Spacing.item),
+            verticalArrangement = Arrangement.spacedBy(Spacing.tight),
+        ) {
             Text(
                 stringResource(R.string.home_no_recordings),
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.headlineSmall,
             )
             Text(
                 stringResource(R.string.home_no_recordings_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        } else {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(session.hrLabel(), fontSize = 64.sp, fontWeight = FontWeight.Light, color = Mint, lineHeight = 64.sp)
-                Text(
-                    "  " + stringResource(R.string.unit_bpm),
-                    modifier = Modifier.padding(bottom = 10.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
+        return
+    }
+
+    val tint = verdictColor(session.analysisStatus, session.naoLabelOrNull())
+    val open = stringResource(R.string.home_open_latest)
+    val sweep = rememberSweep(session.sessionId)
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .semantics { contentDescription = open },
+    ) {
+        Column(Modifier.padding(horizontal = Spacing.page)) {
             Text(
-                stringResource(
+                text = stringResource(
                     R.string.history_row_summary,
-                    stringResource(session.naoTitleRes()),
-                    session.stampLabel(),
+                    session.dayLabel(),
+                    session.timeLabel(),
                     session.durationLabel(),
                 ),
-                style = MaterialTheme.typography.bodySmall,
+                style = EcgType.dataSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        Spacer(Modifier.height(16.dp))
-        OutlinedButton(onClick = onHistory, shape = RoundedCornerShape(12.dp)) {
+            Spacer(Modifier.height(Spacing.item))
             Text(
-                if (count == 0) {
-                    stringResource(R.string.action_history)
-                } else {
-                    stringResource(R.string.home_history_count, count)
-                },
+                text = stringResource(session.naoTitleRes()),
+                style = MaterialTheme.typography.headlineSmall,
+                color = tint,
             )
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(session.hrLabel(), style = EcgType.dataHero)
+                Spacer(Modifier.size(Spacing.tight))
+                Text(
+                    stringResource(R.string.unit_bpm).uppercase(),
+                    style = labelStyle(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = Spacing.item),
+                )
+            }
         }
+        Spacer(Modifier.height(Spacing.item))
+        EcgPreviewStrip(values = preview, sweep = sweep)
+        Text(
+            stringResource(R.string.home_strip_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.page, vertical = Spacing.tight),
+        )
+        Spacer(Modifier.height(Spacing.tight))
+        Facts(session)
+    }
+}
+
+/** What this recording measured, in the order a reader asks for it. */
+@Composable
+private fun Facts(session: EcgSession) {
+    val range = if (session.hrMin != null && session.hrMax != null) {
+        "${session.hrMin}–${session.hrMax}"
+    } else {
+        null
+    }
+    Column {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Fact(stringResource(R.string.measure_heart_rate_range), range, R.string.unit_bpm)
+        Fact(
+            stringResource(R.string.report_field_clean_coverage),
+            session.usablePct.takeIf { it.isFinite() }?.roundToInt()?.toString(),
+            R.string.unit_percent,
+        )
+        Fact(
+            stringResource(R.string.report_field_duration),
+            session.durationSec.takeIf { it.isFinite() }?.roundToInt()?.toString(),
+            R.string.unit_seconds,
+        )
     }
 }
 
 @Composable
-private fun BloodPressureStub(onOpen: () -> Unit) {
+private fun Fact(label: String, value: String?, unitRes: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onOpen)
-            .padding(18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = Spacing.page, vertical = Spacing.tight + Spacing.hair),
+        verticalAlignment = Alignment.Bottom,
     ) {
-        Icon(Icons.Outlined.FavoriteBorder, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-        Column(Modifier.weight(1f)) {
-            Text(stringResource(R.string.home_bp_title), fontWeight = FontWeight.Medium)
-            Text(
-                stringResource(R.string.home_bp_body),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(stringResource(R.string.home_bp_soon), color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Medium)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(value ?: "—", style = EcgType.dataMedium)
+        Spacer(Modifier.size(Spacing.hair))
+        Text(
+            stringResource(unitRes).uppercase(),
+            style = labelStyle(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 }
 
-@Preview(showBackground = true, backgroundColor = 0xFF071016)
+@Composable
+private fun QuietRow(text: String, trailing: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.page, vertical = Spacing.item),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(trailing.uppercase(), style = EcgType.annotation)
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF141110)
 @Composable
 private fun HomeScreenPreview() {
     HealthTrackTheme(darkTheme = true) {
@@ -256,8 +320,8 @@ private fun HomeScreenPreview() {
                     source = EcgSource.IMPORT,
                     createdAtMs = System.currentTimeMillis(),
                 ),
-                count = 3,
-                wear = WearLinkStatus(false, emptyList(), "No Wear OS node for this package."),
+                count = 12,
+                wear = WearLinkStatus(true, emptyList(), ""),
             ),
             onOpenEcg = {},
             onOpenHistory = {},

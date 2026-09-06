@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="measure_channel">การวัดคลื่นไฟฟ้าหัวใจ</string>
+    <string name="measure_notification">กำลังบันทึกคลื่นไฟฟ้าหัวใจ</string>
+
+    <!-- Home -->
+    <string name="wear_start">เริ่มวัด</string>
+    <string name="wear_history">ประวัติ</string>
+    <string name="wear_settings">ตั้งค่า</string>
+    <string name="wear_last_reading">ผลล่าสุด · %1$s</string>
+    <string name="wear_no_reading">ยังไม่มีผลการวัด</string>
+    <string name="wear_record_prompt">วัดคลื่นหัวใจ 30 วินาที</string>
+    <string name="wear_phone_checking">กำลังตรวจสอบโทรศัพท์…</string>
+    <string name="wear_phone_not_linked">ยังไม่ได้เชื่อมโทรศัพท์ เปิดแอป GalaxyVitals ไว้ใกล้ ๆ</string>
+    <string name="wear_phone_linked">โทรศัพท์: %1$s</string>
+    <string name="wear_saved_count">บันทึกไว้ %1$d รายการ</string>
+
+    <!-- Measure -->
+    <string name="wear_recording">กำลังบันทึก</string>
+    <string name="wear_seconds_left">เหลือ %1$d วินาที</string>
+    <string name="wear_hold_title">แตะนิ้วค้างไว้ที่</string>
+    <string name="wear_hold_target">ปุ่มด้านข้าง</string>
+    <string name="wear_hold_hint">วางแขนบนโต๊ะให้นิ่ง</string>
+    <string name="wear_contact_here">ตรงนี้</string>
+    <string name="wear_keep_still">อยู่นิ่ง ๆ ระหว่างที่เซ็นเซอร์แสงกำลังจับสัญญาณ</string>
+    <string name="wear_permission_body">การวัดคลื่นหัวใจต้องขอสิทธิ์เข้าถึงเซ็นเซอร์ร่างกาย</string>
+    <string name="wear_allow_sensors">อนุญาต</string>
+    <string name="wear_samsung_setup">ต้องตั้งค่า Samsung Health ก่อน</string>
+    <string name="wear_open_samsung_health">เปิด Samsung Health</string>
+    <string name="wear_saving_body">กำลังเก็บผลการวัดนี้</string>
+    <string name="wear_done">เสร็จสิ้น</string>
+    <string name="wear_record_again">วัดอีกครั้ง</string>
+    <string name="wear_unavailable">ใช้งานไม่ได้</string>
+    <string name="wear_unit_bpm">ครั้ง/นาที</string>
+    <string name="wear_hr_preflight">อัตราการเต้นก่อนเริ่มวัด</string>
+    <string name="wear_hr_samsung">อัตราการเต้นจาก Samsung</string>
+    <string name="wear_hr_live">อัตราการเต้นจากคลื่นหัวใจสด</string>
+    <string name="wear_touch_top_button">แตะปุ่มบนด้านขวา</string>
+
+    <!-- Measure status -->
+    <string name="wear_status_connecting">กำลังเชื่อมต่อเซ็นเซอร์…</string>
+    <string name="wear_status_samsung_setup">ต้องตั้งค่า Samsung Health</string>
+    <string name="wear_status_preparing_hr">กำลังเตรียมวัดอัตราการเต้น…</string>
+    <string name="wear_status_touch_sensor">แตะเซ็นเซอร์เพื่อเริ่ม</string>
+    <string name="wear_status_stabilizing">กำลังปรับสัญญาณให้นิ่ง…</string>
+    <string name="wear_status_countdown">เริ่มในอีก</string>
+    <string name="wear_status_confirming_contact">กำลังตรวจสอบการสัมผัส…</string>
+    <string name="wear_status_recording">กำลังบันทึก</string>
+    <string name="wear_status_saving">กำลังบันทึกไฟล์…</string>
+    <string name="wear_status_queued">ส่งไปยังโทรศัพท์แล้ว</string>
+    <string name="wear_status_acknowledged">โทรศัพท์ยืนยันรับแล้ว</string>
+    <string name="wear_status_saved_on_watch">บันทึกไว้ในนาฬิกา</string>
+    <string name="wear_status_save_failed">บันทึกไม่สำเร็จ</string>
+    <string name="wear_status_recording_failed">วัดไม่สำเร็จ</string>
+    <string name="wear_status_recording_cancelled">ยกเลิกการวัดแล้ว</string>
+    <string name="wear_status_permissions">ต้องขอสิทธิ์เซ็นเซอร์</string>
+    <string name="wear_status_sensor_unavailable">ใช้เซ็นเซอร์วัดคลื่นหัวใจไม่ได้</string>
+    <string name="wear_status_hr_not_ready">ยังวัดอัตราการเต้นไม่ได้</string>
+    <string name="wear_status_contact_not_detected">ไม่พบการสัมผัสเซ็นเซอร์</string>
+
+    <!-- Messages -->
+    <string name="wear_msg_phone_not_linked_sync">ยังไม่ได้เชื่อมโทรศัพท์ เปิดแอป GalaxyVitals ไว้ใกล้ ๆ แล้วกดซิงก์</string>
+    <string name="wear_msg_no_connected_phone">ไม่พบโทรศัพท์ที่เชื่อมอยู่ นำโทรศัพท์ที่มีแอป GalaxyVitals มาไว้ใกล้ ๆ แล้วกดซิงก์</string>
+    <string name="wear_msg_save_failed">บันทึกผลการวัดนี้ไม่ได้ ลองอีกครั้ง</string>
+    <string name="wear_msg_start_again">เริ่มใหม่ได้เมื่อพร้อม</string>
+    <string name="wear_msg_contact_lost">นิ้วหลุดจากเซ็นเซอร์ระหว่างวัด</string>
+    <string name="wear_msg_not_worn">สวมนาฬิกาไม่ถูกต้อง</string>
+    <string name="wear_msg_keep_snug">รัดสายนาฬิกาให้กระชับ อยู่นิ่ง ๆ แล้วลองใหม่</string>
+    <string name="wear_msg_wear_and_hold">สวมนาฬิกาแล้วแตะนิ้วค้างไว้ที่เซ็นเซอร์ด้านบน จากนั้นลองใหม่</string>
+    <string name="wear_msg_hr_required">ต้องวัดอัตราการเต้นให้นิ่งก่อนจึงจะเริ่มวัดคลื่นหัวใจได้</string>
+    <string name="wear_msg_invalid_batch">ข้อมูลคลื่นหัวใจจาก Samsung ไม่ถูกต้อง</string>
+    <string name="wear_msg_invalid_signal">สัญญาณคลื่นหัวใจไม่ถูกต้อง</string>
+    <string name="wear_msg_incomplete">การวัดยังไม่เสร็จสมบูรณ์ ลองอีกครั้ง</string>
+    <string name="wear_msg_unexpected">เกิดข้อผิดพลาดที่ไม่คาดคิดระหว่างวัด</string>
+    <string name="wear_msg_stream_stalled">เซ็นเซอร์หยุดส่งข้อมูล</string>
+    <string name="wear_msg_connect_timeout">เชื่อมต่อเซ็นเซอร์ Samsung ไม่ทันเวลา</string>
+    <string name="wear_msg_service_start">เริ่มบริการวัดคลื่นหัวใจของ Samsung ไม่ได้</string>
+    <string name="wear_msg_hr_start">เริ่มตัววัดอัตราการเต้นของ Samsung ไม่ได้</string>
+    <string name="wear_msg_not_available_pkg">แอปนี้ยังไม่ได้รับสิทธิ์ใช้เซ็นเซอร์คลื่นหัวใจของ Samsung</string>
+
+    <!-- History -->
+    <string name="wear_history_empty">ผลการวัดที่บันทึกไว้จะแสดงที่นี่</string>
+    <string name="wear_history_row">%1$d วินาที · %2$s</string>
+
+    <!-- Settings -->
+    <string name="wear_wrist">ข้อมือ</string>
+    <string name="wear_wrist_left">ซ้าย</string>
+    <string name="wear_wrist_right">ขวา</string>
+    <string name="wear_sensor">เซ็นเซอร์</string>
+    <string name="wear_sensor_checking">กำลังตรวจสอบเซ็นเซอร์…</string>
+    <string name="wear_sensor_ready">เซ็นเซอร์คลื่นหัวใจ Samsung พร้อมใช้งาน</string>
+    <string name="wear_disclaimer">ไม่ใช่เครื่องมือแพทย์ หากรู้สึกไม่สบายให้พบแพทย์</string>
+    <string name="ecg_title_short">คลื่นหัวใจ</string>
+    <string name="wear_bpm_value">%1$s ครั้ง/นาที</string>
+
+    <!-- Short forms for the bezel arcs; the long forms stay as content descriptions -->
+    <string name="wear_arc_seconds_left">%1$d วิ</string>
+    <string name="wear_arc_touch_button">ปุ่มบน</string>
+    <string name="wear_phone_arc_offline">ไม่พบโทรศัพท์</string>
+    <string name="wear_phone_status_linked">เชื่อมต่อแล้ว</string>
+    <string name="wear_phone_status_checking">กำลังตรวจสอบ…</string>
+</resources>

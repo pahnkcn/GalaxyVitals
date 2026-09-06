@@ -44,6 +44,13 @@ private fun EcgSession.primaryHrMedian(): Double? =
 
 fun EcgSession.hrLabel(): String = primaryHrMedian()?.let { "${it.roundToInt()}" } ?: "—"
 
+/** The rate the screen is showing, for anything that has to keep time with it. */
+fun EcgSession.displayBpm(): Double? = primaryHrMedian()?.takeIf { it.isFinite() }
+
+/** The stored rhythm label, or null when it is absent or unrecognised. */
+fun EcgSession.naoLabelOrNull(): NaoLabel? =
+    naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }
+
 /**
  * The same rhythm vocabulary the detail screen and the exported report use.
  * A recording is described identically wherever it appears.
@@ -54,7 +61,7 @@ fun EcgSession.naoTitleRes(): Int {
     if (analysisStatus == AnalysisStatus.PENDING) return R.string.verdict_pending
     if (analysisStatus == AnalysisStatus.INDETERMINATE) return R.string.verdict_indeterminate
     if (analysisStatus != AnalysisStatus.OK) return R.string.verdict_not_analysed
-    return when (naoLabel?.let { runCatching { NaoLabel.valueOf(it) }.getOrNull() }) {
+    return when (naoLabelOrNull()) {
         NaoLabel.N -> R.string.verdict_regular
         NaoLabel.A -> R.string.verdict_irregular
         NaoLabel.O -> R.string.verdict_inconclusive

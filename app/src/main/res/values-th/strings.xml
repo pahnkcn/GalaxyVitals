@@ -252,4 +252,11 @@
     <string name="wear_no_node">ไม่พบนาฬิกาที่ติดตั้ง GalaxyVitals ติดตั้งแอปบนนาฬิกาและวางนาฬิกาไว้ใกล้ ๆ</string>
     <string name="wear_connected">เชื่อมต่อกับนาฬิกา %1$d เครื่องที่ใช้แอปเดียวกัน</string>
     <string name="wear_api_unavailable">โทรศัพท์เครื่องนี้ไม่มีบริการ Wear OS</string>
+
+    <!-- Home, redesign -->
+    <string name="home_strip_hint">5 วินาทีสุดท้าย แตะเพื่อดูกราฟเต็ม</string>
+    <string name="home_bp_line">ความดันโลหิต — เตรียมไว้สำหรับแหล่งข้อมูลในอนาคต</string>
+    <string name="home_recordings">%1$d รายการ</string>
+    <string name="home_open_latest">เปิดผลการวัดล่าสุด</string>
+    <string name="strip_sweep_description">กราฟลีด I กำลังวาด</string>
 </resources>

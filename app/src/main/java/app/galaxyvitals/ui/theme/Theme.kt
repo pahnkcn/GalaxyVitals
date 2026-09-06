@@ -9,30 +9,47 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import app.galaxyvitals.data.protocol.NaoLabel
+import app.galaxyvitals.domain.AnalysisStatus
 
-val Ink = Color(0xFF071016)
-val InkLift = Color(0xFF10181E)
-val InkHigh = Color(0xFF172229)
-val Mint = Color(0xFF2EE6C8)
-val MintDim = Color(0xFF1A8F7C)
-val Foam = Color(0xFFF3F7F6)
-val Mist = Color(0xFF8AA0A8)
-val Amber = Color(0xFFF5C16C)
-val Pulse = Color(0xFF3CF0D2)
-val GridLine = Color(0xFF1C3338)
-val Danger = Color(0xFFFF7A7A)
+/**
+ * Colour is the verdict.
+ *
+ * Every control, every label and the trace itself are drawn in one neutral, so
+ * the only chroma on screen is the rhythm result. A reader who sees colour at
+ * all has already been told the answer, before a single word is read. That rule
+ * is the whole palette: adding a tinted accent anywhere else would make the
+ * green in the corner one signal among several instead of the only one.
+ *
+ * The ground is a warm near-black rather than a device black, because the strip
+ * it surrounds is a sheet of ECG paper and the two should look like one object.
+ */
 
-// ECG paper. The strip is not a chart drawn in the app's palette: it is a sheet
-// of ECG paper, with the red-orange grid a clinician's eye already knows. On a
-// dark screen the paper is ink and the grid glows; in light it is real paper.
-val PaperDark = Color(0xFF0C1418)
-val GridMinorDark = Color(0xFF2A1B1F)
-val GridMajorDark = Color(0xFF4E262C)
-val PaperLight = Color(0xFFFFF7F5)
-val GridMinorLight = Color(0xFFF4CDC6)
-val GridMajorLight = Color(0xFFE29488)
-val TraceLight = Color(0xFF14181B)
-val BeatMarker = Color(0xFF7FA8B8)
+// Ground → surface → raised → rule. Dark.
+val Paper0 = Color(0xFF141110)
+val Paper1 = Color(0xFF1D1918)
+val Paper2 = Color(0xFF282221)
+val Rule = Color(0xFF332B29)
+
+// The one neutral pair. Text, controls and the trace are all Bone.
+val Bone = Color(0xFFF2EDE9)
+val Ash = Color(0xFF948A85)
+
+// The only chroma in the app.
+val Regular = Color(0xFF5FCFA4)
+val Irregular = Color(0xFFFF6F5E)
+val Unclear = Color(0xFFE3B058)
+
+// Light: real paper, real clinical grid.
+val Paper0Light = Color(0xFFFBF8F5)
+val Paper1Light = Color(0xFFFFFFFF)
+val Paper2Light = Color(0xFFEFE7E2)
+val RuleLight = Color(0xFFE2D7D0)
+val BoneLight = Color(0xFF17110E)
+val AshLight = Color(0xFF6E635E)
+val RegularLight = Color(0xFF0E9B6C)
+val IrregularLight = Color(0xFFD6402F)
+val UnclearLight = Color(0xFF9A6B12)
 
 /** The strip's own palette, kept out of the Material scheme because nothing else uses it. */
 @Immutable
@@ -46,55 +63,91 @@ data class EcgPaper(
 )
 
 private val DarkPaper = EcgPaper(
-    paper = PaperDark,
-    gridMinor = GridMinorDark,
-    gridMajor = GridMajorDark,
-    trace = Pulse,
-    marker = BeatMarker,
-    annotation = Mist,
+    paper = Paper1,
+    gridMinor = Color(0xFF33221E),
+    gridMajor = Color(0xFF56302B),
+    trace = Bone,
+    marker = Ash,
+    annotation = Ash,
 )
 
 private val LightPaper = EcgPaper(
-    paper = PaperLight,
-    gridMinor = GridMinorLight,
-    gridMajor = GridMajorLight,
-    trace = TraceLight,
-    marker = Color(0xFF3E6E82),
-    annotation = Color(0xFF7A5B55),
+    paper = Paper1Light,
+    gridMinor = Color(0xFFF4D2C9),
+    gridMajor = Color(0xFFE4A093),
+    trace = BoneLight,
+    marker = AshLight,
+    annotation = AshLight,
 )
 
+/**
+ * The three result colours, resolved for the current theme.
+ *
+ * They live in their own local rather than in the Material scheme so that no
+ * component can pick one up by accident: a verdict colour is only ever applied
+ * by asking for it.
+ */
+@Immutable
+data class VerdictColors(
+    val regular: Color,
+    val irregular: Color,
+    val unclear: Color,
+)
+
+private val DarkVerdicts = VerdictColors(Regular, Irregular, Unclear)
+private val LightVerdicts = VerdictColors(RegularLight, IrregularLight, UnclearLight)
+
 val LocalEcgPaper = staticCompositionLocalOf { DarkPaper }
+val LocalVerdictColors = staticCompositionLocalOf { DarkVerdicts }
+
+/** The single mapping from a result to its colour, shared by every screen. */
+@Composable
+fun verdictColor(status: AnalysisStatus, label: NaoLabel?): Color {
+    val colors = LocalVerdictColors.current
+    if (status != AnalysisStatus.OK) return colors.unclear
+    return when (label) {
+        NaoLabel.N -> colors.regular
+        NaoLabel.A -> colors.irregular
+        else -> colors.unclear
+    }
+}
 
 private val DarkColors = darkColorScheme(
-    primary = Mint,
-    onPrimary = Color(0xFF00382F),
-    primaryContainer = MintDim,
-    onPrimaryContainer = Foam,
-    secondary = Amber,
-    onSecondary = Color(0xFF2B2100),
-    background = Ink,
-    onBackground = Foam,
-    surface = InkLift,
-    onSurface = Foam,
-    surfaceVariant = InkHigh,
-    onSurfaceVariant = Mist,
-    outline = Color(0xFF2A3D44),
-    error = Danger,
+    primary = Bone,
+    onPrimary = Paper0,
+    primaryContainer = Paper2,
+    onPrimaryContainer = Bone,
+    secondary = Ash,
+    onSecondary = Paper0,
+    background = Paper0,
+    onBackground = Bone,
+    surface = Paper1,
+    onSurface = Bone,
+    surfaceVariant = Paper2,
+    onSurfaceVariant = Ash,
+    outline = Rule,
+    outlineVariant = Rule,
+    error = Irregular,
+    onError = Paper0,
 )
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF0B7A6B),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFC8F6ED),
-    onPrimaryContainer = Color(0xFF00382F),
-    secondary = Color(0xFF8A6400),
-    background = Color(0xFFF4F8F7),
-    onBackground = Color(0xFF102026),
-    surface = Color.White,
-    onSurface = Color(0xFF102026),
-    surfaceVariant = Color(0xFFE6EEEF),
-    onSurfaceVariant = Color(0xFF4A6068),
-    outline = Color(0xFFC5D3D6),
+    primary = BoneLight,
+    onPrimary = Paper0Light,
+    primaryContainer = Paper2Light,
+    onPrimaryContainer = BoneLight,
+    secondary = AshLight,
+    onSecondary = Paper0Light,
+    background = Paper0Light,
+    onBackground = BoneLight,
+    surface = Paper1Light,
+    onSurface = BoneLight,
+    surfaceVariant = Paper2Light,
+    onSurfaceVariant = AshLight,
+    outline = RuleLight,
+    outlineVariant = RuleLight,
+    error = IrregularLight,
+    onError = Paper0Light,
 )
 
 @Composable
@@ -102,7 +155,10 @@ fun HealthTrackTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(LocalEcgPaper provides if (darkTheme) DarkPaper else LightPaper) {
+    CompositionLocalProvider(
+        LocalEcgPaper provides if (darkTheme) DarkPaper else LightPaper,
+        LocalVerdictColors provides if (darkTheme) DarkVerdicts else LightVerdicts,
+    ) {
         MaterialTheme(
             colorScheme = if (darkTheme) DarkColors else LightColors,
             typography = AppTypography,

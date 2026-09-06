@@ -22,7 +22,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.MaterialTheme
-import app.galaxyvitals.wear.ui.theme.Mist
+import androidx.compose.ui.res.stringResource
+import app.galaxyvitals.wear.R
+import app.galaxyvitals.wear.ui.theme.Ash
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -85,8 +87,9 @@ fun HomeKeyHint(modifier: Modifier = Modifier) {
         label = "pulse",
     )
     val accent = MaterialTheme.colorScheme.primary
+    val hint = stringResource(R.string.wear_touch_top_button)
     Canvas(
-        modifier.semantics { contentDescription = "Touch the top button on the right" },
+        modifier.semantics { contentDescription = hint },
     ) {
         val layout = HomeKeyHintLayout.forCanvas(size.width, size.height)
         drawWatchButton(
@@ -94,7 +97,7 @@ fun HomeKeyHint(modifier: Modifier = Modifier) {
             cy = layout.lowerCenterY,
             width = layout.buttonWidth,
             height = layout.buttonHeight,
-            color = Mist.copy(alpha = 0.5f),
+            color = Ash.copy(alpha = 0.5f),
             filled = false,
         )
         drawCircle(

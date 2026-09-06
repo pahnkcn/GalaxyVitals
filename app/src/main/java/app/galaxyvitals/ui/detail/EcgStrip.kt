@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +38,7 @@ import app.galaxyvitals.data.protocol.StripGrid
 import app.galaxyvitals.data.protocol.StripRow
 import app.galaxyvitals.data.protocol.StripSpec
 import app.galaxyvitals.domain.EcgSample
+import app.galaxyvitals.ui.components.drawTrace
 import app.galaxyvitals.ui.components.reduceWaveform
 import app.galaxyvitals.ui.theme.EcgType
 import app.galaxyvitals.ui.theme.LocalEcgPaper
@@ -73,6 +75,7 @@ fun EcgSheetStrip(
     spec: StripSpec,
     rPeaksMs: List<Double>,
     modifier: Modifier = Modifier,
+    sweep: State<Float>? = null,
 ) {
     BoxWithConstraints(modifier) {
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
@@ -85,6 +88,7 @@ fun EcgSheetStrip(
             rPeaksMs = rPeaksMs,
             pxPerMm = fit,
             modifier = Modifier.fillMaxWidth(),
+            sweep = sweep,
         )
     }
 }
@@ -98,6 +102,7 @@ fun EcgTrueScaleStrip(
     rPeaksMs: List<Double>,
     pxPerMm: Float,
     modifier: Modifier = Modifier,
+    sweep: State<Float>? = null,
 ) {
     val scroll = rememberScrollState()
     val widthDp: Dp = with(LocalDensity.current) {
@@ -112,6 +117,7 @@ fun EcgTrueScaleStrip(
             rPeaksMs = rPeaksMs,
             pxPerMm = pxPerMm,
             modifier = Modifier.width(widthDp),
+            sweep = sweep,
         )
     }
 }
@@ -125,6 +131,7 @@ private fun StripCanvas(
     rPeaksMs: List<Double>,
     pxPerMm: Float,
     modifier: Modifier = Modifier,
+    sweep: State<Float>? = null,
 ) {
     val paper = LocalEcgPaper.current
     val description = stringResource(
@@ -148,16 +155,39 @@ private fun StripCanvas(
     ) {
         if (render.pxPerMm <= 0f) return@Canvas
         drawGrid(render, paper.gridMinor, paper.gridMajor)
-        val stroke = Stroke(
-            width = (0.4f * render.pxPerMm).coerceIn(1.6f, 5f),
-            cap = StrokeCap.Round,
-        )
-        render.calibrationPaths.forEach { drawPath(it, paper.trace, style = stroke) }
-        render.tracePaths.forEach { drawPath(it, paper.trace, style = stroke) }
-        drawBeatMarkers(render, paper.marker)
-        drawAnnotations(render, measurer, annotationStyle)
+        val strokeWidth = (0.4f * render.pxPerMm).coerceIn(1.6f, 5f)
+        val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+
+        // The sheet prints row by row, the way a machine feeds paper: the sweep
+        // crosses one lane before the next one starts, rather than every lane
+        // growing at once.
+        val progress = sweep?.value ?: 1f
+        val lanes = render.tracePaths.size.coerceAtLeast(1)
+        render.calibrationPaths.forEachIndexed { index, path ->
+            val lane = (progress * lanes - index).coerceIn(0f, 1f)
+            if (lane > 0f) drawPath(path, paper.trace, style = stroke)
+        }
+        render.tracePaths.forEachIndexed { index, path ->
+            val lane = (progress * lanes - index).coerceIn(0f, 1f)
+            if (lane > 0f) drawTrace(path, paper.trace, strokeWidth, lane)
+        }
+        // Marks and lane labels ink in once the trace they annotate is down.
+        val inked = ((progress - INK_FROM) / (1f - INK_FROM)).coerceIn(0f, 1f)
+        if (inked > 0f) {
+            drawBeatMarkers(render, paper.marker.copy(alpha = paper.marker.alpha * inked))
+            drawAnnotations(
+                render = render,
+                measurer = measurer,
+                style = annotationStyle.copy(
+                    color = annotationStyle.color.copy(alpha = inked),
+                ),
+            )
+        }
     }
 }
+
+/** The trace is down for this share of the sweep before anything else appears. */
+private const val INK_FROM = 0.82f
 
 private fun DrawScope.drawGrid(render: StripRender, minor: Color, major: Color) {
     val f = render.pxPerMm

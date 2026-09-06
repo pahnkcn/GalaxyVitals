@@ -17,6 +17,7 @@ import app.galaxyvitals.export.EcgReportBuilder
 import app.galaxyvitals.export.EcgReportModel
 import app.galaxyvitals.export.EcgReportText
 import app.galaxyvitals.export.ExportFormat
+import app.galaxyvitals.ui.components.previewEnvelope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,11 @@ data class HomeUiState(
     val wear: WearLinkStatus = WearLinkStatus(false, emptyList(), ""),
     val message: String? = null,
     val busy: Boolean = false,
+    /**
+     * The tail of the latest recording, reduced to columns for the home strip.
+     * Millivolts, evenly spaced across [HOME_PREVIEW_SECONDS].
+     */
+    val preview: List<Float> = emptyList(),
 )
 
 /**
@@ -79,7 +85,20 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
     private val _export = MutableStateFlow(ExportUiState())
     val export: StateFlow<ExportUiState> = _export.asStateFlow()
 
+    /**
+     * One reduced trace per history row, filled in as rows scroll into view.
+     *
+     * A row carries the shape of its own recording, which is the only way a run
+     * of readings can be scanned for anything but rate. Recordings are parsed
+     * once each and kept, so scrolling back up costs nothing.
+     */
+    private val _previews = MutableStateFlow<Map<String, List<Float>>>(emptyMap())
+    val previews: StateFlow<Map<String, List<Float>>> = _previews.asStateFlow()
+
     private var sampleLoadJob: Job? = null
+    private var homePreviewJob: Job? = null
+    private var homePreviewFor: String? = null
+    private val historyPreviewJobs = mutableMapOf<String, Job>()
     private var wearRefreshJob: Job? = null
     private var exportJob: Job? = null
 
@@ -89,10 +108,17 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
         // stayed empty while History already showed imported / Wear sessions.
         viewModelScope.launch {
             sessions.collect { list ->
+                val latest = list.firstOrNull()
                 _home.value = _home.value.copy(
-                    latest = list.firstOrNull(),
+                    latest = latest,
                     count = list.size,
+                    preview = if (latest?.sessionId == homePreviewFor) {
+                        _home.value.preview
+                    } else {
+                        emptyList()
+                    },
                 )
+                loadHomePreview(latest)
             }
         }
         _home.value = _home.value.copy(
@@ -265,6 +291,12 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
             sampleLoadJob = null
             _detail.value = DetailUiState()
         }
+        historyPreviewJobs.remove(sessionId)?.cancel()
+        _previews.value = _previews.value - sessionId
+        if (homePreviewFor == sessionId) {
+            homePreviewJob?.cancel()
+            homePreviewFor = null
+        }
         viewModelScope.launch {
             val remaining = sessions.value.filterNot { it.sessionId == sessionId }
             repo.delete(sessionId)
@@ -292,12 +324,66 @@ class HealthTrackViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /**
+     * Fills [HomeUiState.preview] for the recording now on the home screen.
+     *
+     * Only the tail is drawn: the home strip is a glance at the shape of the
+     * last few seconds, and the whole recording is one tap away.
+     */
+    private fun loadHomePreview(session: EcgSession?) {
+        if (session == null) {
+            homePreviewJob?.cancel()
+            homePreviewFor = null
+            return
+        }
+        if (homePreviewFor == session.sessionId) return
+        homePreviewJob?.cancel()
+        homePreviewFor = session.sessionId
+        homePreviewJob = viewModelScope.launch {
+            val samples = repo.loadSamples(session)
+            if (homePreviewFor != session.sessionId) return@launch
+            val srHz = session.srHz.takeIf { it > 0 } ?: 500
+            val window = (HOME_PREVIEW_SECONDS * srHz).toInt().coerceAtLeast(1)
+            val tail = if (samples.size > window) samples.takeLast(window) else samples
+            _home.value = _home.value.copy(
+                preview = previewEnvelope(tail, HOME_PREVIEW_COLUMNS),
+            )
+        }
+    }
+
+    /** Asks for one history row's trace. Safe to call on every recomposition. */
+    fun requestPreview(sessionId: String) {
+        if (_previews.value.containsKey(sessionId)) return
+        if (historyPreviewJobs.containsKey(sessionId)) return
+        historyPreviewJobs[sessionId] = viewModelScope.launch {
+            try {
+                val session = repo.get(sessionId) ?: return@launch
+                val reduced = previewEnvelope(repo.loadSamples(session), ROW_PREVIEW_COLUMNS)
+                if (reduced.isNotEmpty()) {
+                    _previews.value = _previews.value + (sessionId to reduced)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A row without a trace simply shows its numbers.
+            } finally {
+                historyPreviewJobs.remove(sessionId)
+            }
+        }
+    }
+
     fun consumeMessage() {
         _home.value = _home.value.copy(message = null)
     }
 
     private fun string(resId: Int, vararg args: Any): String =
         getApplication<Application>().getString(resId, *args)
+
+    private companion object {
+        const val HOME_PREVIEW_SECONDS = 5
+        const val HOME_PREVIEW_COLUMNS = 170
+        const val ROW_PREVIEW_COLUMNS = 90
+    }
 
     private fun beginBusy(): Boolean = synchronized(_home) {
         if (_home.value.busy) {

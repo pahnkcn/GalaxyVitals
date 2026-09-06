@@ -254,4 +254,11 @@
     <string name="wear_no_node">No GalaxyVitals watch found. Install the watch app and keep the watch nearby.</string>
     <string name="wear_connected">Connected to %1$d watch with the same app.</string>
     <string name="wear_api_unavailable">The Wear OS service is not available on this phone.</string>
+
+    <!-- Home, redesign -->
+    <string name="home_strip_hint">The last 5 seconds. Tap for the full strip.</string>
+    <string name="home_bp_line">Blood pressure — reserved for a later source</string>
+    <string name="home_recordings">%1$d recordings</string>
+    <string name="home_open_latest">Open the latest recording</string>
+    <string name="strip_sweep_description">Lead I trace, drawing</string>
 </resources>

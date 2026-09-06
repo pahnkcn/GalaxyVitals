@@ -20,11 +20,10 @@ import app.galaxyvitals.R
 import app.galaxyvitals.data.protocol.QualityFlag
 import app.galaxyvitals.export.EcgReportModel
 import app.galaxyvitals.export.ReportFormat
-import app.galaxyvitals.ui.theme.Amber
-import app.galaxyvitals.ui.theme.Danger
 import app.galaxyvitals.ui.theme.EcgType
-import app.galaxyvitals.ui.theme.Mint
+import app.galaxyvitals.ui.theme.LocalVerdictColors
 import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
 
 /**
  * How much of the recording was worth reading, and what got in the way.
@@ -40,10 +39,13 @@ fun SignalQualityCard(
 ) {
     val quality = report.quality
     val coverage = quality.cleanCoveragePct.coerceIn(0.0, 100.0)
+    // Quality is on the same scale as the verdict because it decides whether
+    // there is one: a strip that cannot be read cannot be called regular.
+    val verdicts = LocalVerdictColors.current
     val tint = when {
-        coverage >= 80.0 -> Mint
-        coverage >= 50.0 -> Amber
-        else -> Danger
+        coverage >= 80.0 -> verdicts.regular
+        coverage >= 50.0 -> verdicts.unclear
+        else -> verdicts.irregular
     }
 
     Column(
@@ -55,8 +57,8 @@ fun SignalQualityCard(
         verticalArrangement = Arrangement.spacedBy(Spacing.item),
     ) {
         Text(
-            text = stringResource(R.string.section_signal_quality),
-            style = MaterialTheme.typography.labelLarge,
+            text = stringResource(R.string.section_signal_quality).uppercase(),
+            style = labelStyle(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {

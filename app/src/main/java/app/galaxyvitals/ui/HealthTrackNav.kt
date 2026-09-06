@@ -1,16 +1,21 @@
 package app.galaxyvitals.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Timeline
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
@@ -21,10 +26,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
@@ -35,6 +42,10 @@ import app.galaxyvitals.ui.detail.EcgDetailScreen
 import app.galaxyvitals.ui.history.HistoryScreen
 import app.galaxyvitals.ui.home.HomeScreen
 import app.galaxyvitals.ui.settings.SettingsScreen
+import app.galaxyvitals.ui.theme.EcgType
+import app.galaxyvitals.ui.theme.Spacing
+import app.galaxyvitals.ui.theme.labelStyle
+import app.galaxyvitals.ui.theme.mm
 
 internal fun ownsPhoneTopBar(route: Route): Boolean =
     route is Route.EcgDetail || route is Route.BloodPressure
@@ -47,13 +58,69 @@ sealed interface Route {
     data object BloodPressure : Route
 }
 
-private data class Tab(val route: Route, val label: Int, val icon: ImageVector)
+private data class Tab(val route: Route, val label: Int)
 
 private val tabs = listOf(
-    Tab(Route.Home, R.string.tab_home, Icons.Outlined.Home),
-    Tab(Route.History, R.string.tab_history, Icons.Outlined.Timeline),
-    Tab(Route.Settings, R.string.tab_settings, Icons.Outlined.Settings),
+    Tab(Route.Home, R.string.tab_home),
+    Tab(Route.History, R.string.tab_history),
+    Tab(Route.Settings, R.string.tab_settings),
 )
+
+/**
+ * Three words and a tick.
+ *
+ * The bar carries no icons: with three destinations named by nouns a person
+ * already uses, a glyph beside each word would be a second, weaker label. The
+ * mark for the current tab is a rule sitting on the layout grid, in the same
+ * neutral as the rest of the chrome, because a coloured indicator here would
+ * be colour that does not mean a verdict.
+ */
+@Composable
+private fun TabBar(current: Route, onSelect: (Route) -> Unit) {
+    Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Row(Modifier.fillMaxWidth().navigationBarsPadding()) {
+            tabs.forEach { tab ->
+                val selected = current == tab.route
+                val label = stringResource(tab.label)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            onClick = { onSelect(tab.route) },
+                        )
+                        .padding(bottom = Spacing.item),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 3f.mm, height = 0.35f.mm)
+                            .background(
+                                if (selected) {
+                                    MaterialTheme.colorScheme.onBackground
+                                } else {
+                                    MaterialTheme.colorScheme.background
+                                },
+                            ),
+                    )
+                    Spacer(Modifier.height(Spacing.item))
+                    Text(
+                        text = label.uppercase(),
+                        style = labelStyle(),
+                        textAlign = TextAlign.Center,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onBackground
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun HealthTrackRoot(
@@ -69,6 +136,7 @@ fun HealthTrackRoot(
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
     val export by viewModel.export.collectAsStateWithLifecycle()
+    val previews by viewModel.previews.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val calibration = remember(context) {
@@ -107,22 +175,11 @@ fun HealthTrackRoot(
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             if (showBar) {
-                NavigationBar {
-                    tabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = current == tab.route,
-                            onClick = {
-                                backStack.clear()
-                                backStack.add(Route.Home)
-                                if (tab.route !is Route.Home) backStack.add(tab.route)
-                                if (tab.route is Route.Home) viewModel.refreshWear()
-                            },
-                            icon = {
-                                Icon(tab.icon, contentDescription = stringResource(tab.label))
-                            },
-                            label = { Text(stringResource(tab.label)) },
-                        )
-                    }
+                TabBar(current) { route ->
+                    backStack.clear()
+                    backStack.add(Route.Home)
+                    if (route !is Route.Home) backStack.add(route)
+                    if (route is Route.Home) viewModel.refreshWear()
                 }
             }
         },
@@ -137,10 +194,7 @@ fun HealthTrackRoot(
                 when (key) {
                     Route.Home -> NavEntry(key) {
                         HomeScreen(
-                            state = home.copy(
-                                latest = sessions.firstOrNull(),
-                                count = sessions.size,
-                            ),
+                            state = home,
                             onOpenEcg = { id -> backStack.add(Route.EcgDetail(id)) },
                             onOpenHistory = {
                                 backStack.clear()
@@ -156,6 +210,8 @@ fun HealthTrackRoot(
                         HistoryScreen(
                             sessions = sessions,
                             onOpen = { id -> backStack.add(Route.EcgDetail(id)) },
+                            previews = previews,
+                            onRequestPreview = viewModel::requestPreview,
                             watchLinked = home.wear.available,
                             onClearWatchHistory = viewModel::clearWatchHistory,
                         )

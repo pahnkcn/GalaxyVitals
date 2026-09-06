@@ -8,6 +8,7 @@ import app.galaxyvitals.data.protocol.ParsedEcgFile
 import app.galaxyvitals.data.protocol.WaveformPoint
 import app.galaxyvitals.data.protocol.WaveformScale
 import app.galaxyvitals.domain.Wrist
+import app.galaxyvitals.wear.R
 import app.galaxyvitals.wear.WearApplication
 import app.galaxyvitals.wear.sensors.OffBodyMonitor
 import app.galaxyvitals.wear.sensors.SensorAvailability
@@ -23,8 +24,10 @@ import kotlinx.coroutines.withContext
 data class HomeUiState(
     val latest: ParsedEcgFile?,
     val count: Int,
-    val phoneNote: String,
+    /** Names of the phones running this app. Empty means nothing is linked. */
+    val phones: List<String>,
     val wrist: Wrist,
+    val checkingPhone: Boolean = true,
 )
 
 enum class MeasurePhase {
@@ -71,7 +74,14 @@ data class MeasureUiState(
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as WearApplication
-    private val _state = MutableStateFlow(HomeUiState(null, 0, "Checking phone…", app.container.prefs.wrist))
+    private val _state = MutableStateFlow(
+        HomeUiState(
+            latest = null,
+            count = 0,
+            phones = emptyList(),
+            wrist = app.container.prefs.wrist,
+        ),
+    )
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
     init {
@@ -89,12 +99,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _state.value = HomeUiState(
                 latest = parsed.firstOrNull(),
                 count = parsed.size,
-                phoneNote = if (phones.isEmpty()) {
-                    "Phone not linked. Keep GalaxyVitals open nearby."
-                } else {
-                    "Phone: ${phones.joinToString()}"
-                },
+                phones = phones,
                 wrist = app.container.prefs.wrist,
+                checkingPhone = false,
             )
         }
     }
@@ -124,19 +131,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val app = application as WearApplication
     private val _wrist = MutableStateFlow(app.container.prefs.wrist)
     val wrist: StateFlow<Wrist> = _wrist.asStateFlow()
-    private val _sensorNote = MutableStateFlow("Checking sensor…")
+    private val _sensorNote = MutableStateFlow(string(R.string.wear_sensor_checking))
     val sensorNote: StateFlow<String> = _sensorNote.asStateFlow()
 
     fun probeSensor() {
         app.container.ecgSensor.connect { avail: SensorAvailability ->
-            _sensorNote.value = if (avail.ready) {
-                avail.reason ?: "Samsung ECG tracker ready"
-            } else {
-                avail.reason ?: "Samsung ECG is not available for this package."
-            }
+            // Samsung's own reason is shown as it arrives; only the fallbacks
+            // are the app's words, and those are translated.
+            _sensorNote.value = avail.reason ?: string(
+                if (avail.ready) R.string.wear_sensor_ready else R.string.wear_msg_not_available_pkg,
+            )
             app.container.ecgSensor.disconnect()
         }
     }
+
+    private fun string(resId: Int): String = getApplication<Application>().getString(resId)
 
     fun setWrist(value: Wrist) {
         app.container.prefs.wrist = value
