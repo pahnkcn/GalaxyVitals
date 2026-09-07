@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">GalaxyVitals</string>
+    <string name="app_name" translatable="false">GalaxyVitals</string>
     <string name="measure_channel">ECG measurement</string>
     <string name="measure_notification">Recording ECG</string>
 
@@ -23,7 +23,6 @@
     <string name="wear_hold_target">the side button</string>
     <string name="wear_hold_hint">Rest your arm on a table</string>
     <string name="wear_contact_here">here</string>
-    <string name="wear_keep_still">Keep still while the optical sensor settles.</string>
     <string name="wear_permission_body">ECG recording needs body sensor access.</string>
     <string name="wear_allow_sensors">Allow sensors</string>
     <string name="wear_samsung_setup">Samsung Health needs setup.</string>
@@ -92,12 +91,24 @@
     <string name="wear_sensor_ready">Samsung ECG tracker ready</string>
     <string name="wear_disclaimer">Not a medical device. Seek care if you feel unwell.</string>
     <string name="ecg_title_short">ECG</string>
-    <string name="wear_bpm_value">%1$s bpm</string>
 
-    <!-- Short forms for the bezel arcs; the long forms stay as content descriptions -->
-    <string name="wear_arc_seconds_left">%1$d s</string>
-    <string name="wear_arc_touch_button">Top button</string>
-    <string name="wear_phone_arc_offline">No phone</string>
     <string name="wear_phone_status_linked">Linked</string>
     <string name="wear_phone_status_checking">Checking…</string>
+
+    <!-- The plate grid's own labels: short machine names, straight, never curved -->
+    <string name="wear_status_pair">%1$s · %2$s</string>
+    <string name="wear_label_last">Last</string>
+    <string name="wear_value_none">None</string>
+    <string name="wear_label_result">Result</string>
+    <string name="wear_label_captured">Captured</string>
+    <string name="wear_label_stopped_at">Stopped at</string>
+    <string name="wear_of_seconds">of %1$d s</string>
+    <string name="wear_unit_seconds">seconds</string>
+    <string name="wear_seconds_short">%1$d s</string>
+    <string name="wear_rail_zero">0 s</string>
+    <string name="wear_rail_arming">Arming</string>
+    <string name="wear_rail_complete">Complete</string>
+    <string name="wear_rail_saving">Keeping this safe</string>
+    <string name="wear_history_count">History · %1$d</string>
+    <string name="wear_phone_status_offline">No phone</string>
 </resources>

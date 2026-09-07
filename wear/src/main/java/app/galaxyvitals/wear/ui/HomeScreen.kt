@@ -1,18 +1,13 @@
 package app.galaxyvitals.wear.ui
 
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.scrollable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberOverscrollEffect
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -24,30 +19,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.ButtonGroup
-import androidx.wear.compose.material3.EdgeButton
-import androidx.wear.compose.material3.EdgeButtonSize
-import androidx.wear.compose.material3.ListHeaderDefaults
-import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
-import androidx.wear.compose.material3.TimeText
-import androidx.wear.compose.material3.curvedText
-import androidx.wear.compose.material3.timeTextCurvedText
-import androidx.wear.compose.material3.timeTextSeparator
-import androidx.wear.compose.material3.lazy.rememberTransformationSpec
-import androidx.wear.compose.material3.lazy.transformedHeight
 import app.galaxyvitals.data.protocol.ParsedEcgFile
 import app.galaxyvitals.wear.R
-import app.galaxyvitals.wear.ui.theme.canCurve
-import app.galaxyvitals.wear.ui.theme.listSideMargin
-import app.galaxyvitals.wear.ui.theme.screenWidthFraction
+import app.galaxyvitals.wear.ui.components.ActionPlate
+import app.galaxyvitals.wear.ui.components.DestinationPair
+import app.galaxyvitals.wear.ui.components.PlateCaption
+import app.galaxyvitals.wear.ui.components.StatusBand
+import app.galaxyvitals.wear.ui.components.TOUCH_TARGET
+import app.galaxyvitals.wear.ui.components.plate
+import app.galaxyvitals.wear.ui.components.rememberWatchClock
+import app.galaxyvitals.wear.ui.theme.Plate
+import app.galaxyvitals.wear.ui.theme.safeVerticalInset
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,17 +40,28 @@ import java.util.Locale
 /**
  * Whether the phone is there, the last answer, then the one thing to do.
  *
- * The link line comes first because it qualifies everything under it: a reading
- * on a watch that cannot reach its phone is a reading that has not arrived
- * anywhere yet.
+ * Four plates and a bar. The link line comes first because it qualifies
+ * everything under it: a reading on a watch that cannot reach its phone is a
+ * reading that has not arrived anywhere yet. It shares the status band with the
+ * clock, because between them they are the two facts that are true of the
+ * screen rather than of the recording.
  *
- * The rate sits in the middle of the disc where the screen is widest, stacked
- * over its unit rather than beside it — a row of number-then-unit spends that
- * chord on a word that never changes and pushes the number off centre. Starting
- * a recording is the only verb here, so it takes the bottom of the circle as an
- * EdgeButton, a shape cut from the screen instead of a pill laid on it. History
- * and Settings sit side by side in the middle band, where all four of their
- * corners stay clear of the bezel.
+ * The rate is set flush left against the plate's own edge with its timestamp
+ * flush right, so the row states one measured fact and names it — the rule the
+ * whole layout is built on. Centring it would put the number in the middle of a
+ * disc, which is the round idea this replaces.
+ *
+ * There is no rule under the status band, unlike the other screens. Home is the
+ * one stack that runs the full height of the face — status, rate, two
+ * destinations and a pinned bar, all at 48 dp targets and 10 dp apart — and the
+ * arithmetic does not leave room for a hairline that the 10 dp of ground is
+ * already doing the work of. `PlateGeometryTest` is what says so.
+ *
+ * Starting a recording is the only verb here, so it takes the bottom of the
+ * screen as a pinned bar: always in the same place, never scrolled away, and a
+ * full 48 dp target. History and Settings sit above it as two plates with
+ * ground between them, because they are two different places rather than one
+ * either/or.
  */
 @Composable
 fun HomeScreen(
@@ -76,221 +72,133 @@ fun HomeScreen(
     onRefresh: () -> Unit,
 ) {
     LaunchedEffect(Unit) { onRefresh() }
-    // The list rests with its anchor item centred, and the library anchors on
-    // index 1 by default — here the menu row, which pushes the rate above it up
-    // under the status arc. The reading is what should sit in the middle.
-    val columnState = rememberTransformingLazyColumnState(initialAnchorItemIndex = 0)
-    val transformationSpec = rememberTransformationSpec()
-    val overscroll = rememberOverscrollEffect()
+    val inset = safeVerticalInset()
+    val scrollState = rememberScrollState()
 
-    ScreenScaffold(
-        scrollState = columnState,
-        timeText = { PhoneLinkTimeText(state) },
-        edgeButton = {
-            EdgeButton(
-                onClick = onStart,
-                buttonSize = EdgeButtonSize.Small,
-                // A drag that starts on the button still scrolls the list.
-                modifier = Modifier.scrollable(
-                    columnState,
-                    orientation = Orientation.Vertical,
-                    reverseDirection = true,
-                    overscrollEffect = overscroll,
-                ),
+    ScreenScaffold(scrollInfoProvider = null) {
+        Box(Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    // The pinned bar's own room is reserved here rather than
+                    // drawn over: the column stops where the bar starts.
+                    .padding(top = inset, bottom = inset + TOUCH_TARGET + PLATE_GAP)
+                    .verticalScroll(scrollState),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(PLATE_GAP),
             ) {
-                Text(
-                    stringResource(R.string.wear_start),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                StatusBand(phoneStatusText(state))
+                LatestReading(state.latest)
+                DestinationPair(
+                    firstLabel = stringResource(R.string.wear_history),
+                    onFirst = onHistory,
+                    secondLabel = stringResource(R.string.wear_settings),
+                    onSecond = onSettings,
                 )
             }
-        },
-    ) { contentPadding ->
-        // No extra bottom padding: the scaffold already reserves the button's
-        // wedge, and adding more would count it twice.
-        TransformingLazyColumn(
-            state = columnState,
-            contentPadding = contentPadding,
-            modifier = Modifier.fillMaxSize().padding(horizontal = listSideMargin()),
-        ) {
-            val latest = state.latest
-            if (latest == null) {
-                // With nothing to report the first item is a heading, so it uses
-                // the component that already knows how to sit under the arc.
-                item {
-                    ListHeader(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .transformedHeight(this, transformationSpec)
-                            .minimumVerticalContentPadding(
-                                ListHeaderDefaults.minimumTopListContentPadding,
-                            ),
-                        transformation = SurfaceTransformation(transformationSpec),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.wear_no_reading),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
-            } else {
-                item {
-                    // Deliberately no SurfaceTransformation: that paints a rounded
-                    // container, and a filled rectangle behind the hero across the
-                    // widest band is the exact artefact this redesign removes.
-                    LatestReading(
-                        latest = latest,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .transformedHeight(this, transformationSpec),
-                    )
-                }
-            }
-            item {
-                val historySource = remember { MutableInteractionSource() }
-                val settingsSource = remember { MutableInteractionSource() }
-                ButtonGroup(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .transformedHeight(this, transformationSpec)
-                        .minimumVerticalContentPadding(
-                            ButtonDefaults.minimumVerticalListContentPadding,
-                        ),
-                    transformation = SurfaceTransformation(transformationSpec),
-                ) {
-                    Button(
-                        onClick = onHistory,
-                        modifier = Modifier.height(MENU_BUTTON_HEIGHT).animateWidth(historySource),
-                        interactionSource = historySource,
-                        contentPadding = MENU_BUTTON_PADDING,
-                    ) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text(
-                                stringResource(R.string.wear_history),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    Button(
-                        onClick = onSettings,
-                        modifier = Modifier.height(MENU_BUTTON_HEIGHT).animateWidth(settingsSource),
-                        interactionSource = settingsSource,
-                        contentPadding = MENU_BUTTON_PADDING,
-                    ) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text(
-                                stringResource(R.string.wear_settings),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
-            }
+            ActionPlate(
+                label = stringResource(R.string.wear_start),
+                onClick = onStart,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = inset),
+            )
         }
     }
 }
 
 /**
- * Whether the phone is there, on the band above everything else.
+ * The link and the time, in one line.
  *
- * The link belongs outside the scrolling list. Inside it, it is the first thing
- * to leave the screen and the wearer reads a rate without knowing whether it
- * has gone anywhere; on the arc it is always the top line, and it costs the
- * disc no height at all.
- *
- * It is stated in both directions rather than only on failure: "is it connected"
- * is a question people ask of a watch, and an indicator that is only ever absent
- * cannot be checked. The words are short because they share the arc with the
- * clock, and they carry no colour — a red arc would spend the one hue that
- * means "irregular rhythm" on a Bluetooth link.
+ * Stated in both directions rather than only on failure: "is it connected" is a
+ * question people ask of a watch, and an indicator that is only ever absent
+ * cannot be checked. A watch that cannot reach its phone owns the band alone —
+ * the time of day is not the news at that moment.
  */
 @Composable
-private fun PhoneLinkTimeText(state: HomeUiState) {
-    val label = when {
-        state.checkingPhone -> stringResource(R.string.wear_phone_status_checking)
-        state.phones.isNotEmpty() -> stringResource(R.string.wear_phone_status_linked)
-        else -> stringResource(R.string.wear_phone_arc_offline)
-    }
-    if (!canCurve()) {
-        // Straight fallback: the clock keeps the band, and the status sits with
-        // the content instead of being dropped.
-        TimeText()
-        return
-    }
-    val style = MaterialTheme.typography.arcMedium
-    val color = MaterialTheme.colorScheme.onSurfaceVariant
-    if (state.phones.isEmpty() && !state.checkingPhone) {
-        // A missing phone owns the band alone. Keeping the clock beside it
-        // stretches the sweep down both sides of the screen until it crowds the
-        // rate underneath — and the time of day is not the news here.
-        TimeText { curvedText(label, color = color, style = style) }
-        return
-    }
-    TimeText { time ->
-        curvedText(label, color = color, style = style)
-        timeTextSeparator()
-        timeTextCurvedText(time)
-    }
+private fun phoneStatusText(state: HomeUiState): String = when {
+    state.checkingPhone -> stringResource(R.string.wear_phone_status_checking)
+    state.phones.isEmpty() -> stringResource(R.string.wear_phone_status_offline)
+    else -> stringResource(
+        R.string.wear_status_pair,
+        stringResource(R.string.wear_phone_status_linked),
+        rememberWatchClock(),
+    )
 }
-
-@Composable
-private fun LatestReading(latest: ParsedEcgFile, modifier: Modifier = Modifier) {
-    val format = rememberTimeFormat()
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        val stamp = format.format(Date(latest.tsStartMs))
-        val spoken = stringResource(R.string.wear_last_reading, stamp)
-        Text(
-            text = WatchSessionBpm.displayBpmText(latest),
-            // One step down from the largest numeral: extra-large reaches high
-            // enough to crowd the status arc, and the list fixes the item's
-            // height so neither padding nor content can push it clear.
-            style = MaterialTheme.typography.numeralLarge,
-            maxLines = 1,
-            modifier = Modifier
-                .widthIn(max = screenWidthFraction(HERO_FRACTION))
-                .semantics { contentDescription = spoken },
-        )
-        Text(
-            text = stringResource(R.string.wear_unit_bpm),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
-        // Time only. The date prefix was the wide line that ran into the bezel,
-        // and it sits below the number now rather than above it, where the
-        // circle is still wide.
-        Text(
-            text = stamp,
-            style = MaterialTheme.typography.bodyExtraSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = screenWidthFraction(STAMP_FRACTION)),
-        )
-    }
-}
-
-@Composable
-private fun rememberTimeFormat(): SimpleDateFormat =
-    remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-
-/** Wear's minimum touch target, and no more than that. */
-private val MENU_BUTTON_HEIGHT = 48.dp
 
 /**
- * Half the default side padding.
+ * The hero: value left, label right.
  *
- * Two buttons share one chord here, so the padding is subtracted twice from
- * whatever is left for the word. At the default, "ประวัติ" no longer fits and
- * ellipsises to "ประ…" — a menu item that cannot say its own name.
+ * The empty state keeps every position and swaps only the value, so nothing on
+ * the screen moves the moment a first reading lands.
  */
-private val MENU_BUTTON_PADDING = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+@Composable
+private fun LatestReading(latest: ParsedEcgFile?, modifier: Modifier = Modifier) {
+    val format = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val stamp = latest?.let { format.format(Date(it.tsStartMs)) }
+    val spoken = stamp
+        ?.let { stringResource(R.string.wear_last_reading, it) }
+        ?: stringResource(R.string.wear_no_reading)
 
-private const val HERO_FRACTION = 0.72f
-private const val STAMP_FRACTION = 0.62f
+    Row(
+        modifier = modifier
+            .plate(Plate.Core)
+            .semantics { contentDescription = spoken },
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = latest?.let { WatchSessionBpm.displayBpmText(it) } ?: EM_DASH,
+                // Two steps down from the largest numeral. On the real
+                // SM-L350 face — 225 dp, not the 240 a 480 px panel would
+                // imply — numeralLarge plus two 48 dp targets overruns the
+                // usable height and clips the menu row. See PlateGeometryTest.
+                // An em dash set at numeral weight draws as a solid bar and
+                // reads as a broken progress indicator, so the empty state
+                // keeps the slot but drops to the small numeral for it.
+                style = if (latest == null) {
+                    MaterialTheme.typography.numeralSmall
+                } else {
+                    MaterialTheme.typography.numeralMedium
+                },
+                color = if (latest == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1,
+            )
+            if (latest != null) {
+                Text(
+                    text = stringResource(R.string.wear_unit_bpm),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = UNIT_GAP, bottom = UNIT_BASELINE),
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            PlateCaption(stringResource(R.string.wear_label_last))
+            Text(
+                text = stamp ?: stringResource(R.string.wear_value_none),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** The one gap in the app. Everything on a screen is this far from its neighbour. */
+internal val PLATE_GAP = 10.dp
+
+private val UNIT_GAP = 4.dp
+
+/** Lifts the unit off the numeral's own descender line so the two share a baseline. */
+private val UNIT_BASELINE = 4.dp
+
+private const val EM_DASH = "—"

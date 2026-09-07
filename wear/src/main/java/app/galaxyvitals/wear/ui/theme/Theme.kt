@@ -1,7 +1,10 @@
 package app.galaxyvitals.wear.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.ColorScheme
 import androidx.wear.compose.material3.MaterialTheme
 
@@ -27,6 +30,17 @@ val Unclear = Color(0xFFE3B058)
 
 /** The strip's grid, at the one strength a 40 mm screen can resolve. */
 val GridLine = Color(0xFF33221E)
+
+/**
+ * The only radius in the app.
+ *
+ * Six dp on anything you press, nothing on anything you read. Wear's own button
+ * shape is a full pill, which turns every control into a lozenge and takes the
+ * rectangle back out of a layout built from rectangles; six dp softens the
+ * corner without pretending the plate is round. Rules, the tick rail and the
+ * trace stay hard-edged, because a radius on those reads as a card.
+ */
+val PlateShape: Shape = RoundedCornerShape(6.dp)
 
 @Composable
 fun HealthTrackWearTheme(content: @Composable () -> Unit) {

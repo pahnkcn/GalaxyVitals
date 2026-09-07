@@ -64,7 +64,10 @@ fun WearRoot() {
     LaunchedEffect(current) {
         if (current is WearRoute.Home) homeVm.refresh()
     }
-    AppScaffold {
+    // No time text. Wear's own clock is a curved label at 12 o'clock, and the
+    // status band already carries the time as straight text — leaving the
+    // default in place drew both, one above the other.
+    AppScaffold(timeText = {}) {
         NavDisplay(
             backStack = backStack,
             onBack = {

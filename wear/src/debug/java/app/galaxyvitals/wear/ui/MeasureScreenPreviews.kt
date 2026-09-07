@@ -7,6 +7,7 @@ import app.galaxyvitals.wear.ui.theme.HealthTrackWearTheme
 
 @WearPreviewDevices
 @WearPreviewFontScales
+@GalaxyWatchPreviews
 @Composable
 private fun MeasureScreenWaitingForContactPreview() {
     HealthTrackWearTheme {

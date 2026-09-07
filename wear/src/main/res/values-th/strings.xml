@@ -22,7 +22,6 @@
     <string name="wear_hold_target">ปุ่มด้านข้าง</string>
     <string name="wear_hold_hint">วางแขนบนโต๊ะให้นิ่ง</string>
     <string name="wear_contact_here">ตรงนี้</string>
-    <string name="wear_keep_still">อยู่นิ่ง ๆ ระหว่างที่เซ็นเซอร์แสงกำลังจับสัญญาณ</string>
     <string name="wear_permission_body">การวัดคลื่นหัวใจต้องขอสิทธิ์เข้าถึงเซ็นเซอร์ร่างกาย</string>
     <string name="wear_allow_sensors">อนุญาต</string>
     <string name="wear_samsung_setup">ต้องตั้งค่า Samsung Health ก่อน</string>
@@ -91,12 +90,24 @@
     <string name="wear_sensor_ready">เซ็นเซอร์คลื่นหัวใจ Samsung พร้อมใช้งาน</string>
     <string name="wear_disclaimer">ไม่ใช่เครื่องมือแพทย์ หากรู้สึกไม่สบายให้พบแพทย์</string>
     <string name="ecg_title_short">คลื่นหัวใจ</string>
-    <string name="wear_bpm_value">%1$s ครั้ง/นาที</string>
 
-    <!-- Short forms for the bezel arcs; the long forms stay as content descriptions -->
-    <string name="wear_arc_seconds_left">%1$d วิ</string>
-    <string name="wear_arc_touch_button">ปุ่มบน</string>
-    <string name="wear_phone_arc_offline">ไม่พบโทรศัพท์</string>
     <string name="wear_phone_status_linked">เชื่อมต่อแล้ว</string>
     <string name="wear_phone_status_checking">กำลังตรวจสอบ…</string>
+
+    <!-- ป้ายกำกับของ plate grid -->
+    <string name="wear_status_pair">%1$s · %2$s</string>
+    <string name="wear_label_last">ล่าสุด</string>
+    <string name="wear_value_none">ยังไม่มี</string>
+    <string name="wear_label_result">ผลการวัด</string>
+    <string name="wear_label_captured">บันทึกได้</string>
+    <string name="wear_label_stopped_at">หยุดที่</string>
+    <string name="wear_of_seconds">จาก %1$d วิ</string>
+    <string name="wear_unit_seconds">วินาที</string>
+    <string name="wear_seconds_short">%1$d วิ</string>
+    <string name="wear_rail_zero">0 วิ</string>
+    <string name="wear_rail_arming">กำลังเตรียม</string>
+    <string name="wear_rail_complete">ครบแล้ว</string>
+    <string name="wear_rail_saving">กำลังเก็บผล</string>
+    <string name="wear_history_count">ประวัติ · %1$d</string>
+    <string name="wear_phone_status_offline">ไม่พบโทรศัพท์</string>
 </resources>

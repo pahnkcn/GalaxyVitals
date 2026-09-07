@@ -1,19 +1,28 @@
 package app.galaxyvitals.wear.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
 import androidx.wear.compose.ui.tooling.preview.WearPreviewFontScales
 import androidx.wear.tooling.preview.devices.WearDevices
 import app.galaxyvitals.domain.Wrist
-import app.galaxyvitals.wear.ui.theme.BottomArc
 import app.galaxyvitals.wear.ui.theme.HealthTrackWearTheme
-import app.galaxyvitals.wear.ui.theme.TopArc
+
+/**
+ * The three faces this app actually ships to.
+ *
+ * The plate grid is expressed as fractions of the face, so the only way to know
+ * it holds is to render the same screen at every diameter it will meet. The
+ * base is the 44 mm Watch 9 — the device PROTOCOL.md validates against — with
+ * the 40 mm below it and the Ultra 2 above.
+ *
+ * Densities are the real ones: all three panels are xhdpi, so the pixel counts
+ * divide by two to give the dp faces named here.
+ */
+@Preview(name = "Watch 9 40 mm", device = "spec:width=219dp,height=219dp,dpi=320,isRound=true", showSystemUi = true, group = "faces")
+@Preview(name = "Watch 9 44 mm", device = "spec:width=240dp,height=240dp,dpi=320,isRound=true", showSystemUi = true, group = "faces")
+@Preview(name = "Watch Ultra 2", device = "spec:width=249dp,height=249dp,dpi=320,isRound=true", showSystemUi = true, group = "faces")
+annotation class GalaxyWatchPreviews
 
 /**
  * Round-screen previews.
@@ -21,7 +30,8 @@ import app.galaxyvitals.wear.ui.theme.TopArc
  * `@WearPreviewDevices` covers small and large round plus square, and
  * `@WearPreviewFontScales` covers the accessibility sizes — between them they
  * catch the clipping this redesign exists to fix. Neither carries a locale, so
- * [ThaiWearPreviews] adds the Thai pass separately.
+ * [ThaiWearPreviews] adds the Thai pass separately, and [GalaxyWatchPreviews]
+ * pins the three real faces.
  */
 @Preview(device = WearDevices.SMALL_ROUND, locale = "th", showSystemUi = true, group = "th")
 @Preview(device = WearDevices.LARGE_ROUND, locale = "th", showSystemUi = true, group = "th")
@@ -30,6 +40,7 @@ annotation class ThaiWearPreviews
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun HomeEmptyPreview() {
     HealthTrackWearTheme {
@@ -52,6 +63,7 @@ private fun HomeEmptyPreview() {
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun MeasureArmedCountdownPreview() {
     HealthTrackWearTheme {
@@ -71,6 +83,7 @@ private fun MeasureArmedCountdownPreview() {
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun MeasureRecordingPreview() {
     HealthTrackWearTheme {
@@ -87,10 +100,11 @@ private fun MeasureRecordingPreview() {
     }
 }
 
-/** The longest Thai message the app can show, against an EdgeButton. */
+/** The longest Thai message the app can show, against a pinned action plate. */
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun MeasureFailedPreview() {
     HealthTrackWearTheme {
@@ -107,10 +121,11 @@ private fun MeasureFailedPreview() {
     }
 }
 
-/** Closed rim, hero rate, and the longest sync status on the top arc. */
+/** Full rail, hero rate, and the longest sync status in the band. */
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun MeasureSuccessPreview() {
     HealthTrackWearTheme {
@@ -126,7 +141,7 @@ private fun MeasureSuccessPreview() {
     }
 }
 
-/** A Thai and Latin label in one EdgeButton. */
+/** A Thai and Latin label in one action plate. */
 @WearPreviewDevices
 @ThaiWearPreviews
 @Composable
@@ -148,6 +163,7 @@ private fun MeasurePermissionRequiredPreview() {
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun HistoryEmptyPreview() {
     HealthTrackWearTheme { HistoryScreen(sessions = emptyList(), onRefresh = {}) }
@@ -156,6 +172,7 @@ private fun HistoryEmptyPreview() {
 @WearPreviewDevices
 @WearPreviewFontScales
 @ThaiWearPreviews
+@GalaxyWatchPreviews
 @Composable
 private fun SettingsPreview() {
     HealthTrackWearTheme {
@@ -165,28 +182,5 @@ private fun SettingsPreview() {
             onWrist = {},
             onProbe = {},
         )
-    }
-}
-
-/**
- * The canary.
- *
- * Four Thai strings on the arcs, each stressing a different feature of the
- * script: mark stacking, the leading vowels that need visual reordering before
- * shaping, a two-level stack with a Latin break, and mixed Thai and Arabic
- * numerals. If any of these come out with marks clipped, leading vowels after
- * their consonant, or a base glyph split from its mark, set
- * `ArcText.CURVED_THAI = false` and every arc in the app falls back to straight
- * text without a screen being touched.
- */
-@ThaiWearPreviews
-@WearPreviewFontScales
-@Composable
-private fun ArcTextThaiPreview() {
-    HealthTrackWearTheme {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            TopArc("กำลังบันทึก · โทรศัพท์ยืนยันรับแล้ว", MaterialTheme.typography.arcMedium)
-            BottomArc("ครั้ง/นาที · เหลือ 12 วิ", MaterialTheme.typography.arcSmall)
-        }
     }
 }
